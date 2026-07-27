@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DSMT - Directory Service Management Tool</title>
+<link rel="stylesheet" href="/_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/styles.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!-- ===================== Sign in ===================== -->
+<section id="loginView" class="login" hidden>
+  <div class="login-hero">
+    <img class="lighten login-hero-img" src="/uploads/Gemini_Generated_Image_w5zx38w5zx38w5zx.png"
+         alt="DSMT - Directory Service Management Tool">
+    <p class="login-hero-copy">One console for directory operations - users, groups and membership,
+       across every domain controller you run.</p>
+  </div>
+
+  <div class="login-panel">
+    <form id="loginForm" class="login-form" autocomplete="on">
+      <div class="login-head">
+        <span class="kicker">DSMT</span>
+        <h1 class="login-title">Sign in</h1>
+        <p class="muted-sm">Use your domain account for <strong id="loginDomain">the domain</strong>.</p>
+      </div>
+
+      <div class="field">
+        <label for="loginUser">Username</label>
+        <input class="input" id="loginUser" name="username" autocomplete="username"
+               placeholder="DOMAIN\username" dir="ltr" required>
+      </div>
+
+      <div class="field">
+        <label for="loginPass">Password</label>
+        <input class="input" id="loginPass" name="password" type="password"
+               autocomplete="current-password" placeholder="Password" dir="ltr" required>
+      </div>
+
+      <p id="loginError" class="form-error" role="alert" hidden></p>
+
+      <button class="btn btn-primary btn-block" id="loginSubmit" type="submit">Sign in</button>
+
+      <hr class="hr">
+
+      <p class="login-foot">
+        <span class="dot-live" aria-hidden="true"></span>
+        <span>Directory Service Management Tool</span>
+        <!-- Version text is injected from /api/meta - never hardcoded here.
+             See CLAUDE.md "Versioning policy". -->
+        <span class="version-badge" id="loginVersion" title="Application version"></span>
+      </p>
+    </form>
+  </div>
+</section>
+
+<!-- ===================== Console ===================== -->
+<section id="appView" class="app" hidden>
+
+  <header class="app-head">
+    <button class="icon-btn" id="menuBtn" aria-label="Menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+
+    <span class="brand">DSMT</span>
+
+    <nav class="tabs" id="tabs" role="tablist">
+      <button class="tab" data-tab="users"  role="tab">Users</button>
+      <button class="tab" data-tab="groups" role="tab">Groups</button>
+      <button class="tab tab-audit" data-tab="audit" role="tab">Audit log</button>
+    </nav>
+
+    <div class="head-right">
+      <span class="domain-line" id="domainLine"></span>
+      <button class="btn btn-ghost btn-about" id="aboutBtn" type="button">About</button>
+      <span class="avatar" id="avatar" title="">AD</span>
+    </div>
+  </header>
+
+  <!-- Slide-out menu (also carries the tabs on small screens) -->
+  <div class="menu-backdrop" id="menuBackdrop" hidden></div>
+  <aside class="menu" id="menu" hidden>
+    <button class="menu-item" data-tab="users">Users</button>
+    <button class="menu-item" data-tab="groups">Groups</button>
+    <button class="menu-item" data-tab="audit">Audit log</button>
+    <div class="menu-sep"></div>
+    <button class="menu-item" id="menuAbout">About DSMT</button>
+    <button class="menu-item" id="menuRefresh">Refresh from directory</button>
+    <div class="menu-sep"></div>
+    <div class="menu-meta" id="menuSignedIn"></div>
+    <div class="menu-meta" id="menuDomain"></div>
+    <button class="menu-item menu-accent" id="menuLogoff">Log off</button>
+  </aside>
+
+  <!-- ---------- Directory (users / groups) ---------- -->
+  <div class="directory" id="directoryView">
+    <section class="list-pane">
+      <div class="toolbar">
+        <input class="input search" id="search" type="search" placeholder="Search" autocomplete="off">
+        <div class="toolbar-actions">
+          <button class="btn btn-ghost"     id="colsBtn"   type="button">Columns</button>
+          <button class="btn btn-secondary" id="importBtn" type="button">Import CSV</button>
+          <button class="btn btn-secondary" id="exportBtn" type="button">Export</button>
+          <button class="btn btn-primary"   id="createBtn" type="button">New</button>
+        </div>
+      </div>
+
+      <div class="col-picker" id="colPicker" hidden></div>
+
+      <div class="bulk-bar" id="bulkBar" hidden>
+        <span class="bulk-count" id="bulkCount"></span>
+        <div class="bulk-actions">
+          <button class="btn btn-ghost" data-bulk="group-add">Add to group</button>
+          <button class="btn btn-ghost" data-bulk="move-ou">Move OU</button>
+          <button class="btn btn-ghost" data-bulk="enable">Enable</button>
+          <button class="btn btn-ghost" data-bulk="disable">Disable</button>
+          <button class="btn btn-ghost bulk-danger" data-bulk="delete">Delete</button>
+        </div>
+      </div>
+
+      <div class="table-wrap" id="tableWrap">
+        <table class="table dsmt-table" id="table">
+          <thead id="thead"></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <p class="result-line" id="resultLine"></p>
+      </div>
+    </section>
+
+    <aside class="detail-pane" id="detailPane">
+      <button class="detail-close" id="detailClose" aria-label="Close details">&times;</button>
+      <div id="detailBody"></div>
+    </aside>
+    <div class="detail-backdrop" id="detailBackdrop" hidden></div>
+  </div>
+
+  <!-- ---------- Audit ---------- -->
+  <div class="audit" id="auditView" hidden>
+    <div class="audit-head">
+      <div>
+        <span class="kicker">Audit log</span>
+        <h1 class="audit-title">Directory changes</h1>
+      </div>
+      <div class="audit-controls">
+        <input class="input" id="auditSearch" type="search" placeholder="Search target, operator or reason" autocomplete="off">
+        <button class="btn btn-secondary" id="auditExport" type="button">Export</button>
+      </div>
+    </div>
+    <div class="chips" id="auditFilters"></div>
+    <div class="table-wrap">
+      <table class="table dsmt-table" id="auditTable">
+        <thead>
+          <tr>
+            <th>Time</th><th>Action</th><th>Target</th><th>Operator</th>
+            <th>Controller</th><th>Reason</th><th>Result</th>
+          </tr>
+        </thead>
+        <tbody id="auditBody"></tbody>
+      </table>
+      <p class="result-line" id="auditLine"></p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== Overlays ===================== -->
+<div class="dialog-backdrop" id="dialogBackdrop" hidden>
+  <div class="dialog elev-lg" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+    <h3 class="dialog-title" id="dialogTitle"></h3>
+    <div class="dialog-body" id="dialogBody"></div>
+    <p class="form-error" id="dialogError" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" id="dialogCancel" type="button">Cancel</button>
+      <button class="btn btn-primary"   id="dialogConfirm" type="button">Apply</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<div class="busy" id="busy" hidden><span class="busy-dot"></span></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

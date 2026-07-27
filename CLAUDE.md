@@ -1,62 +1,66 @@
 # DSMT-V3 — Project Rules for Claude
 
 ## What is this project
-**DSMT — Directory Service Management Tool.** A web console for Active Directory
-operations — users, groups, DNS and policy — across every domain controller in
-the domain (the prototype targets `corp.local`, 12 controllers). Operators sign
-in with a domain account, browse/filter directory objects, act on them (reset
-password, unlock, enable/disable, move OU, group membership, bulk CSV import),
-and every write is recorded in an audit log with the operator, the controller
-and a mandatory reason string.
+**DSMT — Directory Service Management Tool.** A web console for Active
+Directory operations — users, groups, membership, bulk import — across every
+domain controller in the domain. The lab domain is **`LAB.LOCAL`**. Operators
+sign in with their own domain account, browse and filter live directory
+objects, act on them, and every write is recorded in an audit log with the
+operator, the controller and a mandatory reason string.
 
-**What exists today is a front-end prototype only — there is no backend.** The
-repository holds a design-tool export, not a running application:
-
-- **Pages**: `DSMT Login.dc.html` and `DSMT Console.dc.html` — `.dc.html`
-  documents: an `<x-dc>` HTML template using `{{ binding }}` placeholders plus a
-  `<script type="text/x-dc">` block defining `class Component extends DCLogic`
-  with `state` and `renderVals()`.
-- **Runtime**: `support.js` — a generated `dc-runtime` bundle (marked *do not
-  edit*; it is rebuilt from a `dc-runtime/` source tree that is **not** in this
-  repo). It parses the `.dc.html` document and renders it with React.
+- **Server**: `server/Start-DSMT.ps1` — Windows PowerShell 5.1 running a
+  `System.Net.HttpListener`. Serves the front end and a JSON API. Split into
+  `server/lib/`:
+  - `DsmtCommon.ps1` — **the version constant**, paths, logging, formatting
+  - `DsmtDirectory.ps1` — every AD read/write; the one attribute mapping
+  - `DsmtSession.ps1` — sign-in, tokens, idle expiry
+  - `DsmtAudit.ps1` — audit records (SQL primary, JSONL always)
+  - `DsmtSql.ps1` — SQL Server connection, schema creation, snapshots
+  - `DsmtHttp.ps1` — static files, API routing, bulk-action semantics
+- **Front end**: `web/index.html`, `web/app.css`, `web/app.js` — vanilla
+  ES5-compatible JS, no framework, no build step, no external requests.
 - **Design system**: `_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/` —
-  the **Nocturne** dark design system. `styles.css` is the single stylesheet and
-  token sheet; `readme.md` is its authoritative usage guide; `_ds_bundle.js` is
-  currently an empty namespace stub (zero components).
-- **Assets**: `uploads/*.png` (hero images), `.thumbnail` (a WebP cover image
-  with no file extension — that is the design tool's convention, not a mistake).
-- **Data store**: none. See "No fake/placeholder data" below — this is the
-  single most important fact about the current state of the project.
-
-Navigation between the two pages is a plain `<a href>`; "Sign in" does not
-authenticate anything.
+  **Nocturne**. `styles.css` is the single stylesheet and token sheet;
+  `readme.md` is its authoritative usage guide.
+- **Data store**: SQL Server, database `DSMT` — `dbo.Operators`,
+  `dbo.Sessions`, `dbo.DirectoryUsers`, `dbo.DirectoryGroups`, `dbo.AuditLog`.
+  Created automatically on first start; `sql/schema.sql` is the same schema
+  standalone. Optional: without `-SqlServer` the audit log falls back to JSONL
+  under `data/`, and that fallback is announced at startup and in **About**.
+- **Directory access**: the RSAT `ActiveDirectory` module, called with the
+  signed-in operator's own credentials.
+- **`prototype/`**: the original design-tool mock-up. Everything in it is
+  fabricated and every button is inert. It is reference material only — see
+  `prototype/README.md`. Do not use it to check whether a feature works.
 
 ---
 
 ## Interface language / branding
-- All user-facing text is **English**, and the layout is explicitly `dir="ltr"`
-  (set on the login page's root and on both credential inputs). Keep new UI text
-  in English and LTR unless that decision is deliberately changed — do not mix
-  Hebrew strings into the interface just because a request arrives in Hebrew.
+- All user-facing text is **English**, and the layout is `dir="ltr"`. Keep new
+  UI text in English and LTR unless that decision is deliberately changed — do
+  not mix Hebrew strings into the interface just because a request arrives in
+  Hebrew.
 - Follow the **Nocturne** rules in
   `_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/readme.md`. The ones most
   often violated: take every color, font, spacing, radius and shadow from
   `var(--color-*)` / `var(--font-*)` / `var(--space-*)` / `var(--radius-*)` /
-  `var(--shadow-*)` — never hardcode a hex or a font name; primary buttons are an
-  accent **outline**, never a filled block; never flood an area with the accent;
-  no pure black or pure white; headings stay at weight 500.
-- **Offline / self-contained constraint — currently VIOLATED, decide
-  deliberately.** An AD management console normally runs on an internal network
-  with no internet route, but today the prototype cannot render without one:
-  - `support.js` fetches React 18.3.1, ReactDOM 18.3.1 and Babel standalone
-    7.29.0 from `unpkg.com` at runtime (`REACT_URL` / `REACT_DOM_URL` /
-    `BABEL_URL`, around `support.js:1143`).
-  - `_ds/.../styles.css:2` has `@import url('https://fonts.googleapis.com/css2?family=Inter…')`.
-
-  On an air-gapped or firewalled DC network both fail silently-ish: the page
-  renders unstyled or blank. Before this ships anywhere real, those three
-  scripts and the Inter font must be vendored locally. Do not add any new
-  external CDN reference in the meantime.
+  `var(--shadow-*)` — never hardcode a hex or a font name; primary buttons are
+  an accent **outline**, never a filled block; never flood an area with the
+  accent; no pure black or pure white; headings stay at weight 500.
+- **Offline / self-contained is now a satisfied constraint — keep it that
+  way.** The running application makes zero external requests: no CDN, no
+  webfont, no package install, no build step. The Google Fonts `@import` was
+  removed from `styles.css` (the font tokens fall back to `system-ui`).
+  **Do not add any external reference** — DSMT runs on isolated networks where
+  it would simply fail. If Inter is wanted, vendor the woff2 files into the
+  design-system folder and add an `@font-face`.
+  Note that `prototype/support.js` still loads React/Babel from `unpkg.com`;
+  that is one more reason the prototype is not shippable.
+- **Responsive is a requirement, not a nice-to-have.** The console must work
+  from a 360px phone to an ultrawide monitor. The breakpoints in `app.css` are
+  1180px (detail pane becomes a slide-over), 820px (header tabs move into the
+  menu) and 640px (tables reflow to stacked cards). When adding UI, check all
+  four sizes — and never solve a narrow viewport by hiding directory data.
 
 ---
 
@@ -79,28 +83,41 @@ impossible instead of relying on discipline to catch it every time.
 Check `CHANGELOG.md` (top entry) for the authoritative current version before
 picking the next number — don't trust a stale note elsewhere.
 
-**Current state: no version constant exists anywhere in the code, and no version
-is displayed in the UI.** The first time a version is shown on screen, define it
-once (a single `const DSMT_VERSION` in a shared file both pages read) and
-reference it — do not paste the literal into the login footer and the console
-header separately. That is exactly the failure this rule exists to prevent.
+**The one constant is `$script:DsmtVersion` in
+`server/lib/DsmtCommon.ps1`.** It is copied into `$script:DsmtConfig.Version`
+at startup and reaches every display spot from there:
+
+| Where it is shown | How it gets there |
+| --- | --- |
+| Sign-in screen footer badge | `GET /api/meta` → `applyVersion()` |
+| **About** dialog | `GET /api/meta` / `GET /api/session` → `applyVersion()` |
+| Server startup banner | `$cfg.Version` |
+| Log lines, audit records, `dbo.AuditLog.AppVersion`, `dbo.Sessions.AppVersion` | `$cfg.Version` |
+
+To release a version: edit `$script:DsmtVersion`, add a `CHANGELOG.md` entry.
+Nothing else. **Never** type a version literal into `index.html`, `app.js`,
+a `<title>`, a comment header or a commit-time string — if you find one, that
+is a bug to remove, not a spot to keep in sync.
 
 ---
 
 ## Language-specific compatibility rules
-The `.dc.html` component scripts run through Babel standalone in the browser, so
-modern JS syntax is fine there. Two real constraints:
-- **`support.js` is generated — do not edit it.** Its own header says so, and it
-  is rebuilt from a `dc-runtime/` source tree that is not part of this
-  repository. Any manual fix to it is lost on the next export. If behavior in it
-  needs to change, that is a conversation about the runtime, not a patch here.
-- **Stay inside the `.dc.html` contract.** Template bindings are `{{ name }}`;
-  control flow is `<sc-if value="{{ flag }}">` and
-  `<sc-for list="{{ items }}" as="item">`; every value and handler a template
-  references must be returned from `renderVals()`. The `hint-placeholder-val` /
-  `hint-placeholder-count` attributes are design-tool preview hints only — they
-  do not affect runtime behavior, but keep them accurate so the design tool's
-  preview stays honest.
+The server must run on **Windows PowerShell 5.1** — no `pwsh` on a lab DC.
+- No `??`, no ternary `?:`, no `&&`/`||` pipeline chains, no `??=`.
+- No `[System.Text.Json]` — use `ConvertTo-Json` / `ConvertFrom-Json`.
+- **ASCII only in `.ps1` and `.cmd` files** — no smart quotes, em-dashes or
+  arrows. Verify after every edit:
+  `python3 -c "c=open('f.ps1',encoding='utf-8').read(); print(set(ch for ch in c if ord(ch)>127))"`
+- Here-strings: the closing `'@` / `"@` must be the first two characters on
+  its own line. Several SQL statements in `DsmtSql.ps1` are here-strings.
+- `ConvertTo-Json` collapses a one-element array into a bare object. The front
+  end funnels every list through `asArray()` for exactly this reason — keep
+  using it for any new list-shaped response.
+- Output leakage: inside a function, any uncaptured output joins the return
+  value. Pipe side-effecting calls to `| Out-Null` (see
+  `Invoke-DsmtBulkAction`, where this was a real bug).
+- The front end is deliberately ES5-compatible vanilla JS with no build step.
+  Do not introduce a framework, a bundler or a transpiler.
 
 ---
 
@@ -108,23 +125,22 @@ modern JS syntax is fine there. Two real constraints:
 - Development happens on a feature branch (currently
   `claude/new-session-6q2ky9`) and merges to the default branch via pull
   request. Do not push to another branch without explicit permission.
-- **No build step exists.** The pages are opened directly; `support.js` compiles
-  the component script in the browser. There is nothing to compile, bundle or
-  restart — a change to any file is live on a hard refresh (Ctrl+F5; the CDN
-  scripts and `styles.css` cache aggressively).
-- **Relative paths are load-bearing.** `DSMT *.dc.html` reference `./support.js`,
-  `_ds/nocturne-…/styles.css`, `_ds/nocturne-…/_ds_bundle.js` and
-  `uploads/*.png` relatively, and the two pages link to each other by exact
-  filename **including the space** (`DSMT Console.dc.html`). Moving or renaming
-  any of these breaks the prototype silently. Keep the layout flat at the repo
-  root unless all references are updated together.
+- **No build step.** Deployment is copying files.
+  - `web/*`, `_ds/*` changed → hard refresh in the browser (Ctrl+F5).
+  - `server/**` changed → restart `Start-DSMT.ps1`. Restarting ends all
+    sessions by design (see Security model in `README.md`).
+  - `sql/schema.sql` changed → restart; missing tables are created
+    automatically by `Install-DsmtSqlSchema`.
+- **Relative paths are load-bearing.** `Start-DSMT.ps1` resolves the repo root
+  as its own parent directory and serves `web/`, `_ds/` and `uploads/` from
+  there. Moving `server/` or renaming `web/` breaks the server's paths.
 - **State exactly which file(s) changed and where they go**, every time a fix
   ships — the person deploying should be able to hot-swap individual files
   instead of reasoning it out themselves.
 
 ---
 
-## No fake/placeholder data presented as real (MANDATORY — this is the whole app right now)
+## No fake/placeholder data presented as real (MANDATORY)
 Any UI or output that can run against both fake data (demo/mock/offline mode)
 and a real backend has exactly one failure mode that will recur if not actively
 guarded against: a page quietly keeps showing the hardcoded demo data even when
@@ -134,53 +150,44 @@ a crash: a crash gets reported immediately, this gets reported as "the feature
 doesn't work" over and over across unrelated testing rounds because each report
 looks like a different bug.
 
-**In DSMT-V3 today, 100% of the directory content is fabricated and there is no
-real mode at all.** Everything on screen is invented and looks completely
-plausible — real-shaped Hebrew names, `@corp.local` UPNs, OU paths, ticket IDs,
-timestamps. Concretely, in `DSMT Console.dc.html`:
-- `USERS` (line ~229) — 12 fake accounts with names, samAccountNames, UPNs, OUs,
-  departments, titles, last-logon times, password expiry, manager.
-- `GROUPS` (line ~244) — 8 fake groups with scopes and member counts.
-- `AUDIT` (line ~255) — 15 fake audit entries with operators, controllers and
-  ticket numbers.
-- Also hardcoded and equally fake: `corp.local · 12 controllers` in the header,
-  `Signed in as CORP\mcohen` in the menu, `Managed by: M. Cohen` and
-  `Created: 12 Mar 2024` in the group detail pane, the `memberList` membership
-  arrays, and `retained 400 days` in the audit footer.
-- Every action button is inert: `noop`, and each dialog's confirm button just
-  calls `closeDialog` — nothing is written anywhere.
+**Current state: the running application has no demo mode and no sample data.**
+Users, groups, memberships, OUs, the domain name, the controller list and the
+signed-in operator are all read live from `LAB.LOCAL` through
+`server/lib/DsmtDirectory.ps1`. When AD cannot be reached, the API returns the
+error and the UI paints an error box in place of the table. There is no
+fallback array anywhere in `web/app.js`.
 
-**This is acceptable only while the project is explicitly a design prototype.**
-It is dangerous precisely because it is convincing: an audit log showing
-`Denied — Missing MFA confirmation` looks like evidence of a working system.
-Never describe this UI as functional, and never demo it to someone who might
-believe the rows are real directory objects.
+Two places still need active guarding:
 
-Before considering ANY change to a page/feature with both modes complete, audit
-it:
+1. **`prototype/`** — 100% fabricated and completely convincing. Never demo it,
+   never treat it as evidence a feature works. It has its own README saying so.
+2. **The SQL snapshot tables** (`dbo.DirectoryUsers`, `dbo.DirectoryGroups`) —
+   written *after* a live AD read, so they go stale the moment the directory
+   changes. They exist for reporting and history. **Rendering the console's
+   grids from them instead of from a live read would be exactly this bug.** If
+   a future change adds a "load from cache" path, it must be visibly labelled
+   as a snapshot with its `LastSyncUtc`, never presented as current state.
+
+Before considering ANY change to a page/feature with both modes complete,
+audit it:
 1. Is this hardcoded value real UI/config (labels, nav structure, static specs
    of the app's own fixed behavior)? — fine to leave hardcoded. In this repo:
-   column definitions (`USER_COLS`, `GROUP_COLS`), tab labels, audit filter
-   names, dialog copy.
-2. Is it presented as if it reflects a real external system (records, users,
-   jobs, logs, anything with real-world names/timestamps/IDs)? — it MUST have a
-   real-mode fetch that is actually called and actually used whenever the app is
-   in real/live mode, with the demo value only reachable in demo mode. If the
-   backend capability doesn't exist yet, build it — don't ship a page that
-   silently shows fake data instead. In this repo that is `USERS`, `GROUPS`,
-   `AUDIT`, the controller count, the signed-in operator, and the membership
-   lists.
-3. If a "real mode" fetch function already exists but the value on screen
-   doesn't call it (dead code, or the display logic still references the demo
-   constant unconditionally) — that is the exact bug pattern to search for.
-4. Check field-name/casing consistency between what the backend returns and what
-   the frontend reads. This one is a live landmine here: the frontend reads
-   lowercase keys (`sam`, `upn`, `ou`, `dept`, `pwd`, `logon`), while AD /
-   PowerShell / SQL will hand back `sAMAccountName`, `UserPrincipalName`,
-   `DistinguishedName`, `Department`, `LastLogonDate`. A mismatch shows blank or
-   `undefined` cells with no error and looks exactly like a "not wired up" bug
-   from the outside. Map explicitly at the boundary; don't spread raw
-   directory-attribute names through the templates.
+   `USER_COLS` / `GROUP_COLS`, tab labels, `AUDIT_FILTERS`, dialog copy.
+2. Is it presented as if it reflects a real external system? — it MUST have a
+   real-mode fetch that is actually called and actually used, with the demo
+   value only reachable in demo mode. If the backend capability doesn't exist
+   yet, build it — don't ship a page that silently shows fake data instead.
+3. If a "real mode" fetch exists but the value on screen doesn't call it (dead
+   code, or display logic still referencing a demo constant) — that is the
+   exact bug pattern to search for.
+4. Check field-name/casing consistency between what the backend returns and
+   what the frontend reads. **This is handled in exactly one place: the
+   `ConvertTo-DsmtUser` / `ConvertTo-DsmtGroup` functions in
+   `DsmtDirectory.ps1`.** AD hands back `sAMAccountName`, `UserPrincipalName`,
+   `DistinguishedName`, `Department`, `LastLogonDate`; the UI reads `sam`,
+   `upn`, `dn`, `dept`, `logon`. **Do not spread raw AD attribute names into
+   `app.js`, and do not add a second mapping site** — a mismatch renders blank
+   cells with no error and looks exactly like a "not wired up" bug.
 
 ---
 
@@ -190,33 +197,37 @@ even after being "fixed," write down what the ACTUAL root cause is, so a future
 fix attempt doesn't re-improve the same symptom without addressing the real
 cause. Three shapes:
 
-1. **A feature is a stub, not a bug.** Something LOOKS built (there's a UI for
-   it) but a core piece was never implemented. Every "fix" that touches adjacent
-   plumbing without building the actual missing piece looks like progress but
-   isn't. Write down explicitly: "do not consider this handled until X actually
-   exists."
-2. **The failure is environment/configuration-dependent, not code.** The code is
-   correct and the error is clear — but the action keeps failing until someone
-   completes a one-time external step (a permission grant, an installed
-   dependency, network reachability, a credential). On a repeat report the first
+1. **A feature is a stub, not a bug.** Something LOOKS built but a core piece
+   was never implemented. Write down explicitly: "do not consider this handled
+   until X actually exists."
+2. **The failure is environment/configuration-dependent, not code.** The code
+   is correct and the error is clear — but the action keeps failing until
+   someone completes a one-time external step. On a repeat report the first
    question is "was the external step actually completed?", not "what's wrong
    with the code."
 3. **A design pattern that keeps producing the same category of bug** (see the
-   fake-data section above) — write down the pattern itself, not just each
-   instance.
+   fake-data section) — write down the pattern itself, not just each instance.
 
 ### Known instances
-- **[Shape 1] Every write action in the console is a stub.** Sign-in, reset
-  password, unlock, enable/disable, move OU, group membership, create, delete,
-  bulk CSV import and both Export buttons all resolve to `noop` or
-  `closeDialog`. Do **not** consider any of these handled until a real backend
-  endpoint exists, is actually called from `renderVals()`, and its result is
-  reflected in the UI. Polishing the dialogs is not progress on this.
-- **[Shape 2] The prototype will not render on a network without internet
-  access** — React, ReactDOM, Babel and the Inter webfont all load from external
-  hosts (see the offline constraint above). If someone reports "the page is
-  blank/unstyled on the server," check network reachability to `unpkg.com` and
-  `fonts.googleapis.com` **before** touching any code.
+- **[Shape 2] "The server won't start."** The three preflight checks in
+  `Start-DSMT.ps1` each name their own fix: the RSAT `ActiveDirectory` module
+  is missing (`Install-WindowsFeature RSAT-AD-PowerShell`), the domain is
+  unreachable, or SQL is unreachable. Read the banner before touching code.
+- **[Shape 2] "Listening on all interfaces fails."** `-ListenAddress any`
+  needs an elevated shell or a one-time
+  `netsh http add urlacl url=http://+:8080/ user="LAB\svc-dsmt"`. Not a code
+  problem.
+- **[Shape 2] "It says access denied when I reset a password."** Directory
+  writes run as the signed-in operator, so AD is enforcing that operator's
+  rights. The audit record says `Denied`. The fix is a delegation change in
+  AD, not in DSMT — DSMT deliberately has no permission model of its own.
+- **[Shape 2] "Everyone got logged out."** Restarting the server ends all
+  sessions: the operator credentials it needs to call AD only ever exist in
+  process memory and are never persisted. A browser refresh (F5) does *not*
+  sign anyone out — that path is covered by the token in `localStorage`.
+- **[Shape 1] `prototype/` is not the product.** Every action there is `noop`.
+  A report of "it doesn't do anything" that turns out to be about those pages
+  is not a bug in DSMT.
 
 ---
 
@@ -230,7 +241,31 @@ an explicit instruction that a future session must check in before restarting
 the investigation from zero.
 
 ### Entries
-_None recorded yet._
+
+**1. Running the server as a service account with Kerberos delegation instead
+of holding operator credentials in memory.**
+Investigated while designing `DsmtSession.ps1`. Constrained delegation would
+let DSMT act as the operator without keeping their password, which is the
+cleaner security posture. Stopped because it needs SPN registration and
+delegation configuration on `LAB.LOCAL` that cannot be designed blind — it has
+to be set up and tested against the live domain. Decided instead: hold the
+`PSCredential` in process memory for the session lifetime, document the
+consequence in `README.md` ("Security model"), and never persist it. Revisit
+when someone can configure and test delegation in the lab. **A future session
+must not rip out the credential-in-memory design without checking in first.**
+
+**2. Verifying the PowerShell server by running it.**
+The development container is Linux with no PowerShell, no Windows and no
+domain, so `Start-DSMT.ps1` has never been executed. What was done instead:
+ASCII and brace/paren balance checks on every `.ps1`, `node --check` on
+`app.js`, and a line-by-line review that found and fixed five real defects
+(undefined `Get-DsmtOperatorIdentity`, `HostName` returned as a collection by
+`-Discover`, an invalid wildcard on a DN-syntax LDAP attribute, an inverted
+dummy-leaf DN in `Get-DsmtOus`, and output leaking from the bulk-action
+scriptblock into its return value). **Runtime verification against LAB.LOCAL
+is still outstanding — treat the first run as a test, not as a deployment**,
+and see "Notes for next session" in `PROGRESS.md` for the specific things to
+watch.
 
 ---
 

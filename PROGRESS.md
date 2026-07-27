@@ -5,48 +5,51 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`0.1.0` — matches the top entry of `CHANGELOG.md`.
+`1.0.0` — matches the top entry of `CHANGELOG.md` and
+`$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 ## What exists right now
-A front-end **design prototype only**, no backend, no build step. Two pages
-(`DSMT Login.dc.html`, `DSMT Console.dc.html`) rendered client-side by the
-generated `support.js` runtime, styled by the Nocturne design system in
-`_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/`. Open the login page in a
-browser; nothing to install or compile. See `CLAUDE.md` for the full picture.
+A working console, not a prototype. `server/Start-DSMT.ps1` (Windows
+PowerShell 5.1 + `HttpListener`) serves `web/` and a JSON API that reads and
+writes **live Active Directory** on `LAB.LOCAL` using the signed-in operator's
+own credentials. Optional SQL Server database `DSMT` stores operators,
+sessions, a directory snapshot and the audit log. No build step, no external
+requests, responsive from 360px up.
+
+The original mock-up now lives in `prototype/` and is reference only — all of
+its data is fabricated and every button is inert.
 
 ---
 
 ## Open tasks
-1. **Nothing in the console actually does anything.** Every action — sign-in,
-   reset password, unlock, enable/disable, move OU, group membership, create,
-   delete, CSV import, both Export buttons — is `noop` or `closeDialog`. A real
-   backend must exist and be called before any of these counts as done.
-2. **Replace the fabricated data with real fetches.** `USERS`, `GROUPS`,
-   `AUDIT`, the `corp.local · 12 controllers` header, `Signed in as CORP\mcohen`,
-   the membership lists, `Managed by / Created` in the group pane, and
-   `retained 400 days`. Until then, do not demo this as a working tool — the
-   fake rows are convincing enough to be mistaken for real directory objects.
-   When wiring the backend, map attribute names at the boundary: the frontend
-   reads `sam`/`upn`/`ou`/`dept`/`pwd`/`logon`, AD returns `sAMAccountName`/
-   `UserPrincipalName`/`DistinguishedName`/`Department`/`LastLogonDate`.
-   A casing mismatch renders blank cells with no error.
-3. **Vendor the external dependencies locally.** React 18.3.1, ReactDOM 18.3.1
-   and Babel standalone 7.29.0 (from `unpkg.com`, `support.js:~1143`) and the
-   Inter webfont (`_ds/.../styles.css:2`, Google Fonts). An AD console usually
-   runs where none of those hosts are reachable. Note that `support.js` is
-   generated and must not be hand-edited — this needs the `dc-runtime/` source
-   tree, which is not in this repo.
-4. **Decide the real architecture.** There is no backend, no auth, no data
-   store, and no decision recorded about what they will be (PowerShell/AD
-   module behind an API? .NET service? something else?). Record the decision in
-   `CLAUDE.md` under "What is this project" once it's made.
-5. **Define the version single source of truth** the first time a version string
-   is shown in the UI: one `const DSMT_VERSION` both pages read, never a pasted
-   literal in two places.
-6. **Decide whether `.dc.html` is the delivery format or just the design stage.**
-   These files are a design-tool export. If the product ships as a real app, the
-   templates get ported; if the export stays authoritative, note that any change
-   made by hand here may be overwritten by the next export from the design tool.
+1. **Run it against LAB.LOCAL.** It has never been executed: the dev container
+   is Linux with no PowerShell and no domain. Treat the first run as a test.
+   Watch specifically:
+   - `Get-ADDomainController -Discover` returning `HostName` as a collection
+     (handled in `Get-DsmtServer`, but verify the DC name in the audit rows
+     looks like one host, not two).
+   - The `anr` LDAP search on a real directory — confirm searching by
+     department/title/UPN behaves as expected and is fast enough.
+   - `Set-ADAccountPassword` over the default Negotiate+sealing channel
+     (no LDAPS). If it fails with a constraint error, the usual causes are
+     password policy or the operator lacking Reset Password delegation.
+   - Whether `-ResultSetSize` 500 is the right page size for the lab.
+2. **Serve it over HTTPS before anyone uses it over the network.** The
+   `netsh http add sslcert` recipe is in `README.md`; the prefix in
+   `Start-DSMT.ps1` also has to change from `http://` to `https://`.
+3. **Decide the SQL retention story.** `dbo.AuditLog` grows forever and
+   nothing prunes `dbo.Sessions` or the snapshot tables. Pick a retention
+   window and add a job.
+4. **Vendor Inter, or accept `system-ui`.** The Google Fonts `@import` was
+   removed from `styles.css` for the offline constraint, so the console
+   currently renders in the system font stack. If Inter is wanted, drop the
+   woff2 files into the design-system folder and add an `@font-face` — do not
+   re-add a CDN reference.
+5. **Consider Kerberos constrained delegation** so operator passwords need not
+   be held in memory — see "Attempted and deliberately NOT pursued" below and
+   check in before restarting that investigation.
+6. **Decide the fate of `prototype/`.** It is kept for reference; delete it
+   once nobody needs the original design pass.
 
 ---
 
@@ -62,46 +65,72 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
-- **[Shape 1] Every console write action is a stub** (see Open task 1). Polishing
-  the dialogs is not progress on this.
-- **[Shape 2] Blank/unstyled page on a network without internet access** —
-  React/ReactDOM/Babel come from `unpkg.com` and Inter from
-  `fonts.googleapis.com`. Check reachability to those hosts before touching code.
+- **[Shape 2] "The server won't start."** Three preflight checks in
+  `Start-DSMT.ps1` each name their own fix: RSAT `ActiveDirectory` module
+  missing (`Install-WindowsFeature RSAT-AD-PowerShell`), domain unreachable,
+  or SQL unreachable. Read the startup banner before touching code.
+- **[Shape 2] "Listening on all interfaces fails."** `-ListenAddress any`
+  needs an elevated shell or a one-time
+  `netsh http add urlacl url=http://+:8080/ user="LAB\svc-dsmt"`.
+- **[Shape 2] "Access denied when I reset a password."** Writes run as the
+  signed-in operator; AD is enforcing that operator's rights and the audit row
+  says `Denied`. The fix is AD delegation, not DSMT code.
+- **[Shape 2] "Everyone got logged out."** Restarting the server ends all
+  sessions by design — the credentials it needs exist only in process memory.
+  A browser refresh (F5) does *not* sign anyone out.
+- **[Shape 1] `prototype/` is not the product.** Every action there is `noop`;
+  "it doesn't do anything" about those pages is not a DSMT bug.
+- **[Shape 3] Snapshot-vs-live.** `dbo.DirectoryUsers` / `dbo.DirectoryGroups`
+  are written after a live read and go stale immediately. Rendering the grids
+  from them would silently show wrong data with no error — the exact pattern
+  the fake-data rule exists to prevent.
 
 ---
 
 ## Attempted and deliberately NOT pursued
-Durable copy of the section in `CLAUDE.md`. For each entry record: what was
-investigated, exactly where it stopped and the real blocker, what was decided
-instead, and under what condition to revisit. A future session must check in
-with the project owner before restarting any of these from zero.
+Durable copy of the section in `CLAUDE.md`.
 
-### Entries
-_None yet._
+**1. Kerberos constrained delegation instead of credentials in memory.**
+Investigated while designing `DsmtSession.ps1`. Cleaner posture, but it needs
+SPN and delegation configuration on `LAB.LOCAL` that cannot be designed
+blind — it has to be set up and tested against the live domain. Decided
+instead: hold the `PSCredential` in process memory for the session lifetime,
+document the consequence in `README.md`, never persist it. Revisit when
+someone can configure and test delegation in the lab. **Do not rip out the
+current design without checking in first.**
+
+**2. Verifying the PowerShell server by running it.**
+Dev container is Linux, no PowerShell, no domain. Done instead: ASCII and
+brace/paren balance checks on every `.ps1`, `node --check` on `app.js`, and a
+line-by-line review that found and fixed five real defects. Runtime
+verification against LAB.LOCAL is still outstanding — see Open task 1.
 
 ---
 
 ## Notes for next session
-- **`support.js` is generated — do not edit it.** Its own first line says so; it
-  is rebuilt from a `dc-runtime/` tree that is not in this repository.
-- **`.dc.html` format**: an `<x-dc>` template with `{{ binding }}` placeholders,
-  `<sc-if value="{{ flag }}">` and `<sc-for list="{{ items }}" as="item">` for
-  control flow, plus a `<script type="text/x-dc">` block with
-  `class Component extends DCLogic` exposing `state` and `renderVals()`. Every
-  value or handler a template references must be returned from `renderVals()`.
-  `hint-placeholder-val` / `hint-placeholder-count` are design-tool preview
-  hints only — no runtime effect, but keep them accurate.
-- **Relative paths and the filename space are load-bearing.** The pages link to
-  each other as `DSMT Console.dc.html` / `DSMT Login.dc.html` (with the space)
-  and reference `./support.js`, `_ds/nocturne-…/`, `uploads/` relatively.
-  Renaming or moving anything breaks the prototype silently.
-- **`.thumbnail`** is a WebP image with no file extension — the design tool's
-  convention, not a broken file.
-- **`_ds/.../_ds_bundle.js`** is an empty namespace stub (zero components); all
-  styling comes from `styles.css`. Read `_ds/.../readme.md` before any UI work —
-  it is the authoritative Nocturne guide (tokens only, outlined primary buttons,
-  no accent floods, no pure black/white, headings at weight 500).
-- **Hard refresh (Ctrl+F5)** after edits — there is no build step, but the CDN
-  scripts and `styles.css` cache aggressively.
-- The prototype's UI is English and `dir="ltr"` by deliberate choice; requests
-  arriving in Hebrew are not a reason to put Hebrew strings into the interface.
+- **The version lives in exactly one place**: `$script:DsmtVersion` in
+  `server/lib/DsmtCommon.ps1`. It reaches the sign-in footer and the About
+  dialog through `GET /api/meta`. Never type a version literal anywhere else.
+- **The AD attribute mapping lives in exactly one place**:
+  `ConvertTo-DsmtUser` / `ConvertTo-DsmtGroup` in `DsmtDirectory.ps1`. AD's
+  `sAMAccountName`/`UserPrincipalName`/`LastLogonDate` become `sam`/`upn`/
+  `logon` there and nowhere else. Never put raw AD attribute names in `app.js`.
+- **PowerShell 5.1 only** — no `??`, no ternary, no `&&`, ASCII-only in
+  `.ps1`/`.cmd`. Re-run the ASCII and brace-balance checks after every edit
+  (commands are in `CLAUDE.md`).
+- **`ConvertTo-Json` collapses single-element arrays.** The front end wraps
+  every list in `asArray()` because of this — keep doing that for new lists.
+- **Uncaptured output inside a PowerShell function joins its return value.**
+  This was a real bug in `Invoke-DsmtBulkAction`; side-effecting calls are
+  piped to `| Out-Null`.
+- **Sessions**: token in `localStorage`, revalidated on every page load, so F5
+  does not prompt for credentials. Idle lifetime 8 hours, configurable with
+  `-SessionHours`.
+- **Responsive breakpoints** in `app.css`: 1180px (detail pane becomes a
+  slide-over), 820px (tabs move into the menu), 640px (tables reflow to
+  stacked cards). Check all four widths when adding UI, and never solve a
+  narrow viewport by hiding directory data.
+- **Zero external requests** is a hard rule — no CDN, no webfont, no bundler.
+  `prototype/support.js` still pulls React from unpkg, which is one of the
+  reasons the prototype is not shippable.
+- Work is being developed on branch `claude/new-session-6q2ky9`.

@@ -1,5 +1,10 @@
 /* Nocturne — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* The Google Fonts @import that used to sit here was removed: DSMT runs on
+   internal networks with no route to fonts.googleapis.com, where the import
+   simply fails and the page renders in a default serif. The --font-heading /
+   --font-body tokens below already fall back to system-ui, which is what the
+   console now uses. To restore Inter, vendor the woff2 files into this
+   folder and add an @font-face here - do not re-add a CDN reference. */
 
 :root {
   --color-bg: #161826;
