@@ -37,7 +37,53 @@ a 360px phone to an ultrawide monitor.
 
 ---
 
+## Installing it
+
+`Install-DSMT.ps1` does the prerequisite work for you. It is safe to re-run —
+every step checks the current state first.
+
+```powershell
+# The full lab setup
+.\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
+                          -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask
+
+# Minimal: finds a local SQL instance if there is one
+.\server\Install-DSMT.ps1
+
+# No database at all
+.\server\Install-DSMT.ps1 -SkipSql
+```
+
+Or edit the settings at the top of `Install-DSMT.cmd` and run it — the script
+asks for elevation itself.
+
+It installs the RSAT ActiveDirectory module (`Install-WindowsFeature` on
+Server, `Add-WindowsCapability` on client Windows), creates `data\` and
+`config\` and grants the run account write access, finds or prepares SQL and
+creates the database and its tables, reserves the HTTP URL, opens the firewall
+port, optionally registers a boot-time scheduled task, and writes
+`config\dsmt.config.json` so the console can then be started with no
+parameters. Each step prints `[ok]` / `[skip]` / `[FAIL]`, and the summary
+lists anything still outstanding with the fix for it.
+
+Three things it deliberately does not do:
+
+| Not automated | Why | What to do |
+| --- | --- | --- |
+| Download RSAT on an offline Windows 10/11 client | `Add-WindowsCapability` fetches from Windows Update | Pass `-FeatureSource <FOD media or \sources\sxs>` |
+| Download SQL Server Express | DSMT hosts usually have no internet route, and a silent download would contradict that | Pass `-SqlExpressSetup <path to setup>` for an unattended install, or `-SkipSql` |
+| Delegate AD rights to operators | A security decision that depends on your OU structure | Delegate per OU — see the deployment guide, step 4 |
+
 ## Running it
+
+After the installer has run, no parameters are needed — settings come from
+`config\dsmt.config.json`, and an explicit parameter overrides the file:
+
+```powershell
+.\server\Start-DSMT.ps1
+```
+
+To run it without installing first, or to override the saved settings:
 
 ```powershell
 # Simplest: localhost only, audit to files
@@ -70,6 +116,7 @@ just fail later in a way that looks like a code bug.
 
 | Path | What it is |
 | --- | --- |
+| `server/Install-DSMT.ps1` | Installs prerequisites and prepares the machine |
 | `server/Start-DSMT.ps1` | Entry point: preflight checks, HTTP listener, request loop |
 | `server/lib/DsmtCommon.ps1` | **The version constant**, paths, logging, formatting helpers |
 | `server/lib/DsmtDirectory.ps1` | Every AD read and write, and the one attribute mapping |
@@ -80,6 +127,8 @@ just fail later in a way that looks like a code bug.
 | `web/index.html`, `web/app.css`, `web/app.js` | The front end |
 | `_ds/nocturne-.../` | The Nocturne design system (tokens + component CSS) |
 | `sql/schema.sql` | The database schema as a standalone script |
+| `config/dsmt.config.json` | Settings the installer saved; read at startup |
+| `docs/deployment-guide.html` | Step-by-step install and first-connection guide |
 | `prototype/` | The original mock-up. **All of its data is fake** - see its README |
 
 ---

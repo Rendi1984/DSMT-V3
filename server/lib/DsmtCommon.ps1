@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.1.0'
+$script:DsmtVersion = '1.2.0'
 
 # Filled in by Start-DSMT.ps1 at startup.
 $script:DsmtConfig = @{
@@ -80,6 +80,33 @@ function Initialize-DsmtConfig {
 
 function Get-DsmtConfig {
     return $script:DsmtConfig
+}
+
+function Get-DsmtSavedSettings {
+    <#
+    .SYNOPSIS
+        Reads config\dsmt.config.json - the settings Install-DSMT.ps1 chose -
+        so the console can be started with no parameters at all.
+    .DESCRIPTION
+        Returns $null when the file is absent (a perfectly normal state: the
+        installer was never run, or the operator passes everything on the
+        command line). A malformed file is reported rather than ignored,
+        because silently falling back to defaults is how a machine ends up
+        pointing at the wrong domain without anyone noticing.
+    #>
+    param([Parameter(Mandatory = $true)][string] $RootPath)
+
+    $path = Join-Path (Join-Path $RootPath 'config') 'dsmt.config.json'
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+
+    try {
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        return (ConvertFrom-Json -InputObject $raw -ErrorAction Stop)
+    } catch {
+        Write-Host ('  [warn] ' + $path + ' could not be read (' + $_.Exception.Message + '); using defaults and command-line parameters only.') -ForegroundColor Yellow
+        return $null
+    }
 }
 
 function Write-DsmtLog {

@@ -13,6 +13,46 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.2.0 — 2026-07-27
+Automated installer. Preparing a machine is now one command instead of a
+checklist.
+
+**New** — deploy to `server\` and the repo root:
+- `server/Install-DSMT.ps1` — installs every prerequisite and prepares the
+  host. Self-elevates; checks PowerShell version, domain membership and
+  machine role; installs the RSAT ActiveDirectory module (`Install-WindowsFeature`
+  on Server, `Add-WindowsCapability` on client Windows, `-FeatureSource` for
+  offline hosts); verifies the domain answers; creates `data\` and `config\`
+  and grants the run account modify rights; finds a local SQL instance or
+  installs SQL Express unattended from supplied media (`-SqlExpressSetup` —
+  nothing is downloaded), then creates the database and tables by calling the
+  server's own schema code so the two cannot drift; reserves the HTTP URL;
+  opens the firewall port; optionally registers a boot-time scheduled task
+  (`-InstallScheduledTask`); writes `config\dsmt.config.json`; and prints a
+  summary listing anything still outstanding with its fix. Safe to re-run.
+- `Install-DSMT.cmd` — one-click launcher with settings at the top.
+
+**Changed**:
+- `server/lib/DsmtCommon.ps1` — added `Get-DsmtSavedSettings`, which reads
+  `config\dsmt.config.json`. A malformed file is reported, not silently
+  ignored.
+- `server/Start-DSMT.ps1` — applies the saved settings for any parameter not
+  passed explicitly, so it can now be started with no parameters at all. An
+  explicit parameter always wins. The banner says when settings came from the
+  file.
+- `docs/deployment-guide.html` — new section "המסלול המהיר - סקריפט ההתקנה
+  האוטומטי": how to run it, what each of its 12 steps does mapped to the
+  manual step it replaces, the saved config file, expected output, and the
+  three things it deliberately does not automate (offline RSAT source, SQL
+  Express download, AD delegation) with what to do instead. Manual steps 2, 5,
+  6 and 11 now note that the installer covers them; appendix A documents the
+  installer's parameters.
+- `README.md` — new "Installing it" section.
+
+Deploy: copy `server\Install-DSMT.ps1` and `Install-DSMT.cmd`, then run the
+installer. Existing installations keep working unchanged — the saved-settings
+file is optional.
+
 ## 1.1.0 — 2026-07-27
 Deployment documentation.
 

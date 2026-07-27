@@ -8,6 +8,12 @@ sign in with their own domain account, browse and filter live directory
 objects, act on them, and every write is recorded in an audit log with the
 operator, the controller and a mandatory reason string.
 
+- **Installer**: `server/Install-DSMT.ps1` (+ `Install-DSMT.cmd`) — installs
+  RSAT, prepares `data/` and `config/`, creates the SQL database via the
+  server's own schema code, reserves the URL, opens the firewall, optionally
+  registers a boot task, and writes `config/dsmt.config.json`. Idempotent.
+  It deliberately does **not** download RSAT sources or SQL media, and does
+  **not** touch AD delegation — see `README.md` for why.
 - **Server**: `server/Start-DSMT.ps1` — Windows PowerShell 5.1 running a
   `System.Net.HttpListener`. Serves the front end and a JSON API. Split into
   `server/lib/`:
@@ -91,7 +97,7 @@ at startup and reaches every display spot from there:
 | --- | --- |
 | Sign-in screen footer badge | `GET /api/meta` → `applyVersion()` |
 | **About** dialog | `GET /api/meta` / `GET /api/session` → `applyVersion()` |
-| Server startup banner | `$cfg.Version` |
+| Server startup banner, installer banner, `config/dsmt.config.json` | `$script:DsmtVersion` / `$cfg.Version` |
 | Log lines, audit records, `dbo.AuditLog.AppVersion`, `dbo.Sessions.AppVersion` | `$cfg.Version` |
 
 To release a version: edit `$script:DsmtVersion`, add a `CHANGELOG.md` entry.

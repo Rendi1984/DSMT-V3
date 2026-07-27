@@ -5,8 +5,13 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.1.0` — matches the top entry of `CHANGELOG.md` and
+`1.2.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
+
+Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
+installs RSAT, prepares folders, creates the SQL database, reserves the port,
+opens the firewall, optionally registers a boot task, and saves
+`config/dsmt.config.json` — after which `Start-DSMT.ps1` needs no parameters.
 
 Deployment guide for operators: `docs/deployment-guide.html` (open in a
 browser). It is the step-by-step install/first-connection document; keep it in
@@ -26,9 +31,21 @@ its data is fabricated and every button is inert.
 ---
 
 ## Open tasks
-1. **Run it against LAB.LOCAL.** It has never been executed: the dev container
-   is Linux with no PowerShell and no domain. Treat the first run as a test.
-   Watch specifically:
+1. **Run it against LAB.LOCAL.** Neither `Install-DSMT.ps1` nor
+   `Start-DSMT.ps1` has ever been executed: the dev container is Linux with no
+   PowerShell and no domain. Treat the first run as a test. On the installer,
+   watch specifically:
+   - Self-elevation: it rebuilds the original argument list for the elevated
+     relaunch — check nothing you typed was dropped.
+   - `Get-WindowsCapability -Name 'Rsat.ActiveDirectory.DS-LDS.Tools*'` on a
+     client OS, and whether an offline host needs `-FeatureSource`.
+   - `Register-ScheduledTask -User <domain account>` without a stored
+     password: it may need "Log on as a batch job" or an interactive password
+     prompt. The installer warns about this but cannot verify it.
+   - That `config/dsmt.config.json` is written where the run account can read
+     it, and that `Start-DSMT.ps1` then starts with no parameters.
+
+   And on the server itself:
    - `Get-ADDomainController -Discover` returning `HostName` as a collection
      (handled in `Get-DsmtServer`, but verify the DC name in the audit rows
      looks like one host, not two).

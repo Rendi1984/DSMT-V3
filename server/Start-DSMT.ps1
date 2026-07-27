@@ -74,6 +74,22 @@ $repoRoot  = Split-Path -Parent $scriptDir
 . (Join-Path $scriptDir 'lib\DsmtDirectory.ps1')
 . (Join-Path $scriptDir 'lib\DsmtHttp.ps1')
 
+# Settings chosen by Install-DSMT.ps1 fill in for anything not passed on the
+# command line. An explicit parameter always wins over the saved file.
+$saved = Get-DsmtSavedSettings -RootPath $repoRoot
+if ($null -ne $saved) {
+    foreach ($name in @('Domain', 'Server', 'Port', 'ListenAddress', 'SessionHours', 'PageSize', 'SqlServer', 'SqlDatabase')) {
+        if ($PSBoundParameters.ContainsKey($name)) { continue }
+
+        $prop = $saved.PSObject.Properties[$name]
+        if ($null -eq $prop) { continue }
+        if ($null -eq $prop.Value) { continue }
+        if ($prop.Value -is [string] -and [string]::IsNullOrWhiteSpace($prop.Value)) { continue }
+
+        Set-Variable -Name $name -Value $prop.Value -Scope 0
+    }
+}
+
 Initialize-DsmtConfig -RootPath $repoRoot -Domain $Domain -Server $Server -Port $Port `
                       -ListenAddress $ListenAddress -SessionHours $SessionHours -PageSize $PageSize
 
@@ -82,6 +98,9 @@ $cfg = Get-DsmtConfig
 Write-Host ''
 Write-Host '  DSMT - Directory Service Management Tool' -ForegroundColor White
 Write-Host ('  Version ' + $cfg.Version) -ForegroundColor DarkGray
+if ($null -ne $saved) {
+    Write-Host ('  Settings from config\dsmt.config.json (installed ' + $saved.InstalledOn + ')') -ForegroundColor DarkGray
+}
 Write-Host ''
 
 # --- Preflight -------------------------------------------------------------

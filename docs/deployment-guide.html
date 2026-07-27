@@ -142,6 +142,13 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
   <p class="toc-title">מדריך התקנה והטמעה</p>
   <ol>
     <li><a href="#intro">לפני שמתחילים: האם יש תהליך התקנה?</a></li>
+    <li><a href="#auto">המסלול המהיר - סקריפט ההתקנה האוטומטי</a>
+      <ul class="sub">
+        <li><a href="#auto-run">איך מריצים</a></li>
+        <li><a href="#auto-does">מה הוא עושה, שלב אחר שלב</a></li>
+        <li><a href="#auto-limits">מה הוא לא יכול לעשות לבד</a></li>
+      </ul>
+    </li>
     <li><a href="#s1">שלב 1 - דרישות מוקדמות</a></li>
     <li><a href="#s2">שלב 2 - הכנת המכונה</a></li>
     <li><a href="#s3">שלב 3 - העתקת הקבצים</a></li>
@@ -189,16 +196,21 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 <h2 id="intro">לפני שמתחילים: האם יש תהליך התקנה?</h2>
 
 <p>
-  <strong>אין installer, אין MSI ואין setup.exe.</strong> DSMT אינו נארז כחבילת התקנה -
-  הוא אוסף קבצי טקסט שמורצים במקום. "התקנה" כאן היא ארבעה דברים בלבד:
+  <strong>אין MSI ואין setup.exe</strong> - DSMT אינו נארז כחבילת התקנה של Windows.
+  <strong>אבל יש סקריפט התקנה שעושה את הכל אוטומטית:</strong>
+  <code>Install-DSMT.ps1</code> (או <code>Install-DSMT.cmd</code> בדאבל-קליק).
+  הוא מתקין את מודול RSAT, מכין את התיקיות, יוצר את מסד הנתונים, מזמין את הפורט,
+  פותח את חומת האש ושומר את ההגדרות. ראה
+  <a href="#auto">המסלול המהיר</a>.
 </p>
+<p>מה שמתרחש בפועל ב"התקנה" הוא ארבעה דברים:</p>
 
 <table>
-  <tr><th>#</th><th>מה עושים</th><th>כמה פעמים</th></tr>
-  <tr><td>1</td><td>מתקינים את מודול RSAT <code>ActiveDirectory</code> על המכונה</td><td>חד-פעמי</td></tr>
-  <tr><td>2</td><td>מעתיקים את תיקיית הפרויקט למכונה</td><td>בכל עדכון גרסה</td></tr>
-  <tr><td>3</td><td>מוודאים הרשאות: האצלה ב-AD, גישה ל-SQL, הרשאת האזנה לפורט</td><td>חד-פעמי</td></tr>
-  <tr><td>4</td><td>מריצים <code>Start-DSMT.ps1</code></td><td>בכל הפעלה</td></tr>
+  <tr><th>#</th><th>מה עושים</th><th>כמה פעמים</th><th>אוטומטי?</th></tr>
+  <tr><td>1</td><td>מעתיקים את תיקיית הפרויקט למכונה</td><td>בכל עדכון גרסה</td><td>ידני</td></tr>
+  <tr><td>2</td><td>מריצים את <code>Install-DSMT.ps1</code>: RSAT, תיקיות, מסד נתונים, פורט, חומת אש</td><td>חד-פעמי</td><td><strong>אוטומטי</strong></td></tr>
+  <tr><td>3</td><td>מאצילים הרשאות למפעילים ב-AD</td><td>חד-פעמי</td><td>ידני - <a href="#s4">שלב 4</a></td></tr>
+  <tr><td>4</td><td>מריצים <code>Start-DSMT.ps1</code></td><td>בכל הפעלה</td><td>או כמשימה מתוזמנת</td></tr>
 </table>
 
 <p>מה ש<strong>לא</strong> צריך לעשות, ושכדאי לדעת מראש כדי לא לחפש:</p>
@@ -218,6 +230,127 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
     ועבור על <a href="#s9">שלב 9 - בדיקת קבלה</a> במלואו.
   </p>
 </div>
+
+<!-- ==================================================================== -->
+<h2 id="auto">המסלול המהיר - סקריפט ההתקנה האוטומטי</h2>
+
+<p class="lead">
+  <code>Install-DSMT.ps1</code> מבצע בעצמו את כל שלבי ההכנה שמתוארים בהמשך המדריך.
+  זה המסלול המומלץ. השלבים הידניים 1-11 נשארים כאן כתיעוד של מה שקורה מתחת
+  למכסה המנוע, ולמקרים שבהם צריך לבצע משהו בנפרד.
+</p>
+
+<h3 id="auto-run">איך מריצים</h3>
+
+<p><strong>אפשרות א' - דאבל-קליק:</strong></p>
+<ol>
+  <li>ערוך את המשתנים בראש <code>Install-DSMT.cmd</code> (דומיין, פורט, חשבון שירות, שרת SQL).</li>
+  <li>הרץ את הקובץ. הסקריפט מבקש הרשאות מנהל בעצמו ופותח חלון מורם.</li>
+</ol>
+
+<p><strong>אפשרות ב' - שורת פקודה:</strong></p>
+<pre><code><span class="c"># התקנה מלאה למעבדה, כולל הפעלה אוטומטית באתחול</span>
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps1 `
+    -Domain LAB.LOCAL -SqlServer SQL01 -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask
+
+<span class="c"># מינימלי - יאתר לבד מופע SQL מקומי אם יש</span>
+.\server\Install-DSMT.ps1
+
+<span class="c"># בלי מסד נתונים בכלל</span>
+.\server\Install-DSMT.ps1 -SkipSql</code></pre>
+
+<div class="note">
+  <span class="box-title">בטוח להרצה חוזרת</span>
+  <p>
+    כל שלב בודק קודם את המצב הקיים ולא עושה כלום אם המכונה כבר תקינה. אם משהו
+    נכשל - תקן אותו והרץ שוב את אותה פקודה.
+  </p>
+</div>
+
+<h3 id="auto-does">מה הוא עושה, שלב אחר שלב</h3>
+
+<table>
+  <tr><th>#</th><th>מה הסקריפט מבצע</th><th>מקביל לשלב הידני</th></tr>
+  <tr><td>1</td><td>בודק הרשאות מנהל, ומפעיל את עצמו מחדש מורם במידת הצורך</td><td>-</td></tr>
+  <tr><td>2</td><td>בודק גרסת PowerShell</td><td><a href="#s1">1</a></td></tr>
+  <tr><td>3</td><td>בודק חברות בדומיין ואת סוג המכונה</td><td><a href="#s1">1</a></td></tr>
+  <tr><td>4</td><td><strong>מתקין את מודול RSAT ActiveDirectory</strong> - <code>Install-WindowsFeature</code> על שרת, <code>Add-WindowsCapability</code> על תחנה</td><td><a href="#s2">2</a></td></tr>
+  <tr><td>5</td><td>מוודא שהדומיין עונה ומדווח כמה DC-ים נראים</td><td><a href="#s2">2.2</a></td></tr>
+  <tr><td>6</td><td>יוצר <code>data\</code> ו-<code>config\</code>, ונותן לחשבון השירות הרשאת כתיבה</td><td><a href="#s3">3.1</a></td></tr>
+  <tr><td>7</td><td>מאתר מופע SQL מקומי (או משתמש במה שנתת), <strong>יוצר את המסד ואת כל הטבלאות</strong> ומאמת שהן קיימות</td><td><a href="#s5">5</a></td></tr>
+  <tr><td>8</td><td>מבצע <code>netsh http add urlacl</code> כדי שהכלי יוכל להאזין בלי הרשאות מוגברות</td><td><a href="#s6">6.2</a></td></tr>
+  <tr><td>9</td><td>פותח כלל בחומת אש לפורט (פרופיל Domain)</td><td><a href="#s6">6.3</a></td></tr>
+  <tr><td>10</td><td>עם <code>-InstallScheduledTask</code>: רושם משימה מתוזמנת שמפעילה את DSMT באתחול</td><td><a href="#s11">11</a></td></tr>
+  <tr><td>11</td><td>שומר <code>config\dsmt.config.json</code> עם כל ההגדרות</td><td>-</td></tr>
+  <tr><td>12</td><td>מדפיס סיכום, ורשימה ממוספרת של מה שנשאר פתוח</td><td>-</td></tr>
+</table>
+
+<h4>קובץ ההגדרות שנשמר</h4>
+<p>
+  אחרי ההתקנה, <code>Start-DSMT.ps1</code> קורא את
+  <code>config\dsmt.config.json</code> ומשתמש בערכים שנשמרו. כלומר <strong>אפשר
+  להפעיל את הכלי בלי אף פרמטר</strong>:
+</p>
+<pre><code>.\server\Start-DSMT.ps1</code></pre>
+<p>
+  פרמטר שמועבר במפורש בשורת הפקודה תמיד גובר על הקובץ השמור, כך שאפשר לחרוג
+  נקודתית בלי לערוך אותו. מסך הפתיחה מציין שההגדרות נטענו מהקובץ ומתי הותקן.
+</p>
+
+<h4>הפלט שמצפים לו</h4>
+<pre><code>  1. Administrator rights
+       [ok]   Running elevated
+  2. Windows PowerShell version
+       [ok]   PowerShell 5.1.17763.5576
+  3. Domain membership
+       [ok]   Joined to lab.local
+  4. RSAT ActiveDirectory PowerShell module
+       [ok]   Installed RSAT-AD-PowerShell
+  ...
+  ---------------------------------------------------------------
+  Installation complete. Nothing outstanding.</code></pre>
+
+<p>
+  אם משהו נכשל, הסיכום בסוף מונה בדיוק מה נשאר ומה לעשות - במקום להשאיר אותך
+  לגלות את זה בהפעלה הראשונה.
+</p>
+
+<h3 id="auto-limits">מה הוא לא יכול לעשות לבד</h3>
+
+<p>שלושה דברים שהסקריפט <strong>לא</strong> מבצע, ולמה:</p>
+
+<table>
+  <tr><th>מה</th><th>למה לא</th><th>מה כן לעשות</th></tr>
+  <tr>
+    <td>הורדת RSAT מהאינטרנט על תחנת Windows 10/11 מנותקת</td>
+    <td><code>Add-WindowsCapability</code> מושך את הרכיב מ-Windows Update; ברשת מנותקת אין מאיפה</td>
+    <td>להריץ עם <code>-FeatureSource</code> ולהצביע על מדיית FOD או <code>\sources\sxs</code> מתוך ISO</td>
+  </tr>
+  <tr>
+    <td>הורדת SQL Server Express מהאינטרנט</td>
+    <td>שרתי DSMT יושבים בדרך כלל ברשת ללא יציאה לאינטרנט; הורדה שקטה מהרשת סותרת את עקרון הניתוק של הכלי</td>
+    <td>אם אין מופע SQL: להוריד את המדיה מראש ולהריץ עם <code>-SqlExpressSetup &lt;path&gt;</code> - ההתקנה עצמה תרוץ אוטומטית ושקטה. או פשוט <code>-SkipSql</code></td>
+  </tr>
+  <tr>
+    <td>האצלת הרשאות למפעילים ב-AD</td>
+    <td>זו החלטת אבטחה שתלויה במבנה ה-OU ובמדיניות הארגון - לא משהו שסקריפט התקנה אמור להכריע</td>
+    <td><a href="#s4">שלב 4.2</a> - להאציל ידנית מה שנדרש, ברמת ה-OU</td>
+  </tr>
+</table>
+
+<div class="warn">
+  <span class="box-title">ההאצלה ב-AD היא עדיין עבודה ידנית</span>
+  <p>
+    הסקריפט מכין את המכונה, לא את הדומיין. גם אחרי התקנה מושלמת, מפעיל בלי
+    האצלת Reset Password פשוט יקבל <code>Denied</code> - וזה תקין. עבור על
+    <a href="#s4">שלב 4</a>.
+  </p>
+</div>
+
+<p>
+  <strong>אחרי שהסקריפט הסתיים בהצלחה, אפשר לדלג ישר ל<a href="#s7">שלב 7 - הרצה ראשונה</a>.</strong>
+  אם אתה מעדיף להבין או לבצע כל שלב בעצמך, המשך לקרוא לפי הסדר.
+</p>
 
 <!-- ==================================================================== -->
 <h2 id="s1">שלב 1 - דרישות מוקדמות</h2>
@@ -252,6 +385,14 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 <!-- ==================================================================== -->
 <h2 id="s2">שלב 2 - הכנת המכונה</h2>
 <span class="step-badge">שלב 2 מתוך 11</span>
+
+<div class="ok">
+  <span class="box-title">סקריפט ההתקנה עושה את כל השלב הזה</span>
+  <p>
+    <code>Install-DSMT.ps1</code> מזהה לבד אם זה שרת או תחנה, מתקין את הרכיב
+    המתאים ומאמת שהדומיין עונה. הפירוט כאן הוא לביצוע ידני או להבנה.
+  </p>
+</div>
 
 <h3>2.1 התקנת מודול RSAT ActiveDirectory</h3>
 <p>זו ההתקנה היחידה שהכלי דורש. פתח PowerShell <strong>כמנהל</strong>:</p>
@@ -376,6 +517,15 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 <h2 id="s5">שלב 5 - הכנת SQL Server</h2>
 <span class="step-badge">שלב 5 מתוך 11</span>
 
+<div class="ok">
+  <span class="box-title">סקריפט ההתקנה עושה את יצירת המסד</span>
+  <p>
+    <code>Install-DSMT.ps1</code> מאתר מופע SQL מקומי, יוצר את המסד ואת כל
+    הטבלאות ומאמת שהן קיימות. מה שנשאר ידני הוא רק מתן ההרשאות ב-SQL (5.3),
+    ורק אם חשבון ההרצה עוד לא מורשה.
+  </p>
+</div>
+
 <p>אפשר לדלג על השלב הזה ולהריץ בלי SQL - ראה <a href="#s1">1.2</a>. אם כן משתמשים:</p>
 
 <h3>5.1 מה נשמר במסד</h3>
@@ -434,6 +584,11 @@ ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];</code></pre>
 <!-- ==================================================================== -->
 <h2 id="s6">שלב 6 - רשת, פורט והרשאת האזנה</h2>
 <span class="step-badge">שלב 6 מתוך 11</span>
+
+<div class="ok">
+  <span class="box-title">סקריפט ההתקנה עושה את כל השלב הזה</span>
+  <p>הזמנת ה-URL וכלל חומת האש מבוצעים אוטומטית כש-<code>-ListenAddress any</code>.</p>
+</div>
 
 <h3>6.1 שתי מצבי האזנה</h3>
 <table>
@@ -643,6 +798,15 @@ jdoe</code></pre>
 <h2 id="s11">שלב 11 - הרצה קבועה כשירות</h2>
 <span class="step-badge">שלב 11 מתוך 11</span>
 
+<div class="ok">
+  <span class="box-title">סקריפט ההתקנה יכול לעשות את זה</span>
+  <p>
+    הרץ את <code>Install-DSMT.ps1</code> עם <code>-InstallScheduledTask</code>
+    (או <code>set DSMT_AUTOSTART=1</code> ב-<code>Install-DSMT.cmd</code>).
+    הפירוט כאן הוא לרישום ידני.
+  </p>
+</div>
+
 <p>
   השרת רץ בחלון PowerShell פתוח. להרצה מתמדת, ההמלצה הפשוטה היא Scheduled Task
   שרץ תחת חשבון השירות, מופעל באתחול המכונה:
@@ -757,7 +921,27 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 <!-- ==================================================================== -->
 <h2 id="ref">נספחים</h2>
 
-<h3>א. פרמטרים של Start-DSMT.ps1</h3>
+<h3>א. פרמטרים של Install-DSMT.ps1</h3>
+<table>
+  <tr><th>פרמטר</th><th>ברירת מחדל</th><th>תיאור</th></tr>
+  <tr><td><code>-Domain</code></td><td><code>LAB.LOCAL</code></td><td>הדומיין המנוהל</td></tr>
+  <tr><td><code>-Port</code></td><td><code>8080</code></td><td>הפורט שיוזמן ויפתח בחומת האש</td></tr>
+  <tr><td><code>-ListenAddress</code></td><td><code>any</code></td><td><code>localhost</code> מדלג על ההזמנה ועל חומת האש</td></tr>
+  <tr><td><code>-ServiceAccount</code></td><td>המשתמש הנוכחי</td><td>החשבון שירוץ; מקבל את הזמנת ה-URL, הרשאות על <code>data\</code> והמשימה המתוזמנת</td></tr>
+  <tr><td><code>-SqlServer</code></td><td>איתור אוטומטי</td><td>מופע SQL לשימוש</td></tr>
+  <tr><td><code>-SqlDatabase</code></td><td><code>DSMT</code></td><td>שם המסד שייווצר</td></tr>
+  <tr><td><code>-SkipSql</code></td><td>כבוי</td><td>להתקין בלי מסד נתונים כלל</td></tr>
+  <tr><td><code>-SqlExpressSetup</code></td><td>(ריק)</td><td>נתיב למדיית SQL Express להתקנה שקטה. לא מוריד מהאינטרנט</td></tr>
+  <tr><td><code>-FeatureSource</code></td><td>(ריק)</td><td>מקור FOD להתקנת RSAT ברשת מנותקת</td></tr>
+  <tr><td><code>-InstallScheduledTask</code></td><td>כבוי</td><td>רישום משימה שמפעילה את DSMT באתחול</td></tr>
+  <tr><td><code>-NoElevate</code></td><td>כבוי</td><td>לא לנסות להתרומם להרשאות מנהל</td></tr>
+</table>
+
+<h3>ב. פרמטרים של Start-DSMT.ps1</h3>
+<p>
+  אחרי הרצת סקריפט ההתקנה כל אלה כבר שמורים ב-<code>config\dsmt.config.json</code>,
+  ואין צורך להעביר אף אחד מהם. פרמטר מפורש גובר על הקובץ.
+</p>
 <table>
   <tr><th>פרמטר</th><th>ברירת מחדל</th><th>תיאור</th></tr>
   <tr><td><code>-Domain</code></td><td><code>LAB.LOCAL</code></td><td>הדומיין המנוהל</td></tr>
@@ -771,7 +955,7 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td><code>-SqlUsername</code> / <code>-SqlPassword</code></td><td>(ריק)</td><td>SQL Auth. ריק = Windows Auth</td></tr>
 </table>
 
-<h3>ב. פורמט קובץ ה-CSV לייבוא מרובה</h3>
+<h3>ג. פורמט קובץ ה-CSV לייבוא מרובה</h3>
 <p>שורת כותרות חובה. העמודה היחידה שחובה למלא היא <code>SamAccountName</code>:</p>
 <pre><code>SamAccountName,DisplayName,GivenName,Surname,Department,Title,Password,OU
 jdoe,John Doe,John,Doe,IT,Helpdesk,,
@@ -783,7 +967,7 @@ asmith,Anna Smith,Anna,Smith,Finance,Analyst,,OU=Finance,DC=lab,DC=local</code><
   <li>כל שורה נרשמת ב-audit בנפרד.</li>
 </ul>
 
-<h3>ג. מודל האבטחה - תקציר</h3>
+<h3>ד. מודל האבטחה - תקציר</h3>
 <ul>
   <li>אין מסד משתמשים בכלי. אימות מול הדומיין בלבד.</li>
   <li>כל פעולה רצה בהרשאות המפעיל; AD אוכף, ו-AD מתעד.</li>
@@ -806,8 +990,10 @@ asmith,Anna Smith,Anna,Smith,Finance,Analyst,,OU=Finance,DC=lab,DC=local</code><
   </p>
 </div>
 
-<h3>ד. קבצים רלוונטיים</h3>
+<h3>ה. קבצים רלוונטיים</h3>
 <table>
+  <tr><td><code>Install-DSMT.cmd</code> / <code>server\Install-DSMT.ps1</code></td><td><strong>סקריפט ההתקנה האוטומטי</strong></td></tr>
+  <tr><td><code>config\dsmt.config.json</code></td><td>ההגדרות שנשמרו בהתקנה</td></tr>
   <tr><td><code>README.md</code></td><td>סקירה טכנית של הפרויקט</td></tr>
   <tr><td><code>CLAUDE.md</code></td><td>כללי העבודה על הפרויקט</td></tr>
   <tr><td><code>PROGRESS.md</code></td><td>מצב נוכחי, משימות פתוחות והערות להמשך</td></tr>
