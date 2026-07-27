@@ -5,8 +5,12 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.0.0` — matches the top entry of `CHANGELOG.md` and
+`1.1.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
+
+Deployment guide for operators: `docs/deployment-guide.html` (open in a
+browser). It is the step-by-step install/first-connection document; keep it in
+step with any change to startup parameters, prerequisites or the sign-in flow.
 
 ## What exists right now
 A working console, not a prototype. `server/Start-DSMT.ps1` (Windows

@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSMT - מדריך התקנה והטמעה</title>
+<style>
+/* ==========================================================================
+   מסמך עצמאי לחלוטין: כל ה-CSS כאן, אפס בקשות חיצוניות. אפשר להעתיק את
+   הקובץ לכל מקום ולפתוח אותו - גם ברשת מנותקת.
+   הצבעים הועתקו מתוך ערכת Nocturne (_ds/nocturne-.../styles.css) כדי
+   שהמדריך ייראה כמו הכלי עצמו.
+   ========================================================================== */
+:root {
+  --bg: #161826;
+  --surface: #232532;
+  --text: #e9e9ed;
+  --accent: #9184d9;
+  --accent-200: #e7e5fe;
+  --accent-300: #d2cefd;
+  --accent-700: #5d5294;
+  --accent-900: #2b2741;
+  --n-200: #e4e7f5;
+  --n-300: #cfd3e5;
+  --n-400: #b2b6ca;
+  --n-500: #9397ab;
+  --n-700: #595d6c;
+  --n-800: #3f424d;
+  --n-900: #292b31;
+  --radius: 8px;
+  --font: system-ui, "Segoe UI", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+* , *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font); font-size: 16px; line-height: 1.7;
+}
+.wrap { display: grid; grid-template-columns: 280px 1fr; gap: 0; min-height: 100vh; }
+
+/* ---- תוכן עניינים ---- */
+.toc {
+  position: sticky; top: 0; align-self: start; max-height: 100vh; overflow: auto;
+  padding: 28px 22px; border-inline-start: 1px solid var(--n-800); background: var(--surface);
+}
+.toc-brand { font-size: 13px; letter-spacing: .12em; color: var(--accent-300); margin-bottom: 4px; }
+.toc-title { font-size: 19px; font-weight: 500; margin: 0 0 18px; }
+.toc ol { margin: 0; padding-inline-start: 20px; font-size: 14px; }
+.toc li { margin-bottom: 7px; }
+.toc a { color: var(--n-300); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.toc .sub { list-style: none; padding-inline-start: 10px; margin-top: 5px; font-size: 13px; }
+.toc .sub a { color: var(--n-500); }
+
+main { padding: 40px 48px 90px; max-width: 980px; }
+
+h1 { font-size: 34px; font-weight: 500; line-height: 1.2; margin: 0 0 10px; }
+h2 {
+  font-size: 25px; font-weight: 500; margin: 54px 0 14px; padding-top: 20px;
+  border-top: 1px solid var(--n-800);
+}
+h3 { font-size: 18px; font-weight: 500; margin: 30px 0 10px; color: var(--n-200); }
+h4 { font-size: 15px; font-weight: 500; margin: 22px 0 8px; color: var(--n-300); }
+p, li { color: var(--n-300); }
+strong { color: var(--text); font-weight: 500; }
+a { color: var(--accent-300); }
+
+.lead { font-size: 18px; color: var(--n-200); }
+.step-badge {
+  display: inline-block; font-size: 12px; letter-spacing: .1em;
+  color: var(--accent-300); border: 1px solid var(--accent-700);
+  background: var(--accent-900); border-radius: 99px; padding: 3px 12px; margin-bottom: 10px;
+}
+
+/* ---- קוד ---- */
+code {
+  font-family: var(--mono); font-size: 14px; direction: ltr; unicode-bidi: embed;
+  background: var(--n-900); border: 1px solid var(--n-800);
+  border-radius: 4px; padding: 1px 6px; color: var(--accent-200);
+}
+pre {
+  direction: ltr; text-align: left; overflow-x: auto;
+  background: var(--n-900); border: 1px solid var(--n-800);
+  border-radius: var(--radius); padding: 16px 18px; margin: 14px 0;
+}
+pre code { background: none; border: 0; padding: 0; color: var(--n-200); font-size: 13.5px; line-height: 1.65; }
+pre .c { color: var(--n-500); }
+
+/* ---- קופסאות ---- */
+.note, .warn, .ok {
+  border-radius: var(--radius); padding: 14px 18px; margin: 18px 0;
+  border-inline-start: 3px solid var(--n-700); background: var(--surface); font-size: 15px;
+}
+.note { border-inline-start-color: var(--accent); }
+.warn { border-inline-start-color: var(--accent-300); background: var(--accent-900); }
+.ok   { border-inline-start-color: var(--n-500); }
+.note p:last-child, .warn p:last-child, .ok p:last-child { margin-bottom: 0; }
+.note p:first-child, .warn p:first-child, .ok p:first-child { margin-top: 0; }
+.box-title { display: block; color: var(--text); font-weight: 500; margin-bottom: 5px; }
+
+/* ---- טבלאות ---- */
+table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14.5px; }
+th, td { text-align: start; padding: 9px 12px; border-bottom: 1px solid var(--n-800); vertical-align: top; }
+th { color: var(--n-500); font-weight: 500; font-size: 12.5px; letter-spacing: .05em; }
+td { color: var(--n-300); }
+td code { font-size: 13px; }
+
+/* ---- צ'קליסט ---- */
+.check { list-style: none; padding: 0; margin: 14px 0; }
+.check li {
+  padding: 9px 0 9px 0; padding-inline-start: 30px; position: relative;
+  border-bottom: 1px solid var(--n-900);
+}
+.check li::before {
+  content: ""; position: absolute; inset-inline-start: 0; top: 15px;
+  width: 13px; height: 13px; border: 1px solid var(--n-700); border-radius: 3px;
+}
+
+hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
+.foot { margin-top: 60px; font-size: 13px; color: var(--n-500); }
+
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: 1fr; }
+  .toc { position: static; max-height: none; border-inline-start: 0; border-bottom: 1px solid var(--n-800); }
+  main { padding: 26px 20px 60px; }
+  h1 { font-size: 27px; }
+  h2 { font-size: 21px; }
+}
+@media print {
+  .toc { display: none; }
+  body { background: #fff; color: #000; }
+  main { max-width: none; padding: 0; }
+  p, li, td { color: #222; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc">
+  <div class="toc-brand">DSMT</div>
+  <p class="toc-title">מדריך התקנה והטמעה</p>
+  <ol>
+    <li><a href="#intro">לפני שמתחילים: האם יש תהליך התקנה?</a></li>
+    <li><a href="#s1">שלב 1 - דרישות מוקדמות</a></li>
+    <li><a href="#s2">שלב 2 - הכנת המכונה</a></li>
+    <li><a href="#s3">שלב 3 - העתקת הקבצים</a></li>
+    <li><a href="#s4">שלב 4 - חשבון ההרצה והרשאות ב-AD</a></li>
+    <li><a href="#s5">שלב 5 - הכנת SQL Server</a></li>
+    <li><a href="#s6">שלב 6 - רשת, פורט והרשאת האזנה</a></li>
+    <li><a href="#s7">שלב 7 - הרצה ראשונה</a>
+      <ul class="sub">
+        <li><a href="#s7-banner">קריאת מסך הבדיקות</a></li>
+      </ul>
+    </li>
+    <li><a href="#s8">שלב 8 - החיבור הראשוני</a>
+      <ul class="sub">
+        <li><a href="#s8-how">איך מתחברים</a></li>
+        <li><a href="#s8-behind">מה קורה מאחורי הקלעים</a></li>
+      </ul>
+    </li>
+    <li><a href="#s9">שלב 9 - בדיקת קבלה</a></li>
+    <li><a href="#s10">שלב 10 - HTTPS לפני ייצור</a></li>
+    <li><a href="#s11">שלב 11 - הרצה קבועה כשירות</a></li>
+    <li><a href="#s12">עדכון גרסה והטמעת שינוי</a></li>
+    <li><a href="#trouble">פתרון תקלות</a></li>
+    <li><a href="#ref">נספחים</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<h1>DSMT - מדריך התקנה והטמעה</h1>
+<p class="lead">
+  Directory Service Management Tool - קונסולת ווב לניהול Active Directory.
+  המדריך מסודר לפי הסדר שבו מבצעים את הפעולות בפועל, מהמכונה הריקה ועד
+  ההתחברות הראשונה ובדיקת הקבלה.
+</p>
+
+<div class="note">
+  <span class="box-title">הערת שפה</span>
+  <p>
+    המדריך בעברית כי הוא תיעוד תפעולי. <strong>ממשק הכלי עצמו נשאר אנגלית ו-LTR</strong> -
+    זו החלטה מכוונת שמתועדת ב-<code>CLAUDE.md</code>, ואין להכניס מחרוזות עברית לממשק.
+  </p>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="intro">לפני שמתחילים: האם יש תהליך התקנה?</h2>
+
+<p>
+  <strong>אין installer, אין MSI ואין setup.exe.</strong> DSMT אינו נארז כחבילת התקנה -
+  הוא אוסף קבצי טקסט שמורצים במקום. "התקנה" כאן היא ארבעה דברים בלבד:
+</p>
+
+<table>
+  <tr><th>#</th><th>מה עושים</th><th>כמה פעמים</th></tr>
+  <tr><td>1</td><td>מתקינים את מודול RSAT <code>ActiveDirectory</code> על המכונה</td><td>חד-פעמי</td></tr>
+  <tr><td>2</td><td>מעתיקים את תיקיית הפרויקט למכונה</td><td>בכל עדכון גרסה</td></tr>
+  <tr><td>3</td><td>מוודאים הרשאות: האצלה ב-AD, גישה ל-SQL, הרשאת האזנה לפורט</td><td>חד-פעמי</td></tr>
+  <tr><td>4</td><td>מריצים <code>Start-DSMT.ps1</code></td><td>בכל הפעלה</td></tr>
+</table>
+
+<p>מה ש<strong>לא</strong> צריך לעשות, ושכדאי לדעת מראש כדי לא לחפש:</p>
+<ul>
+  <li><strong>אין שלב build</strong> - אין קומפילציה, אין bundler, אין <code>npm install</code>. שינוי בקובץ הוא חי מיד.</li>
+  <li><strong>אין הורדות בזמן ריצה</strong> - אפס בקשות לאינטרנט. הכלי עובד ברשת מנותקת לחלוטין.</li>
+  <li><strong>אין יצירת מסד נתונים ידנית</strong> - אם נותנים <code>-SqlServer</code>, המסד והטבלאות נוצרים לבד בהפעלה הראשונה.</li>
+  <li><strong>אין הגדרת משתמשים בכלי</strong> - אין מסד משתמשים משלו. מתחברים עם חשבון דומיין, ו-AD קובע מי רשאי לעשות מה.</li>
+</ul>
+
+<div class="warn">
+  <span class="box-title">מצב נוכחי - חשוב</span>
+  <p>
+    הקוד <strong>טרם הורץ מול דומיין חי</strong>. הוא נכתב ונבדק סטטית (בדיקות תחביר,
+    איזון סוגריים, סקירת קוד שאיתרה ותיקנה חמישה באגים), אבל ההרצה הראשונה שלך
+    היא גם בדיקת הריצה הראשונה. תכנן אותה כבדיקה בסביבת המעבדה, לא כהטמעת ייצור,
+    ועבור על <a href="#s9">שלב 9 - בדיקת קבלה</a> במלואו.
+  </p>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="s1">שלב 1 - דרישות מוקדמות</h2>
+<span class="step-badge">שלב 1 מתוך 11</span>
+
+<h3>1.1 המכונה שתריץ את הכלי</h3>
+<p>
+  לא חייב להיות Domain Controller - ועדיף שלא. כל שרת או תחנה
+  <strong>שמחוברת לדומיין</strong> <code>LAB.LOCAL</code> מתאימה.
+</p>
+
+<table>
+  <tr><th>דרישה</th><th>פירוט</th></tr>
+  <tr><td>מערכת הפעלה</td><td>Windows Server 2016 ומעלה, או Windows 10/11</td></tr>
+  <tr><td>PowerShell</td><td>Windows PowerShell 5.1 (מובנה). <strong>לא</strong> נדרש PowerShell 7</td></tr>
+  <tr><td>חברות בדומיין</td><td>המכונה חייבת להיות joined ל-<code>LAB.LOCAL</code></td></tr>
+  <tr><td>מודול RSAT</td><td><code>ActiveDirectory</code> - מותקן בשלב 2</td></tr>
+  <tr><td>קישוריות</td><td>גישה ל-DC (פורטים 389/636/88), וגישה ל-SQL (1433) אם משתמשים בו</td></tr>
+</table>
+
+<h3>1.2 SQL Server - אופציונלי אבל מומלץ</h3>
+<p>
+  כל מופע נגיש: SQL Server Express, Standard או Enterprise. בלי SQL הכלי עובד
+  במלואו, אבל <strong>לוג ה-audit נשמר כקבצי JSONL מקומיים בלבד</strong>, ולא נשמרים
+  נתוני מפעילים, סשנים ותצלום הספרייה. המצב הזה מוצג במסך הפתיחה של השרת
+  ובחלון <strong>About</strong> - כדי שאף אחד לא יניח שיש מסד שמתעד, כשאין.
+</p>
+
+<h3>1.3 דפדפן</h3>
+<p>Chrome, Edge או Firefox בגרסה עדכנית. הממשק רספונסיבי ממסך טלפון 360px ועד מסך רחב.</p>
+
+<!-- ==================================================================== -->
+<h2 id="s2">שלב 2 - הכנת המכונה</h2>
+<span class="step-badge">שלב 2 מתוך 11</span>
+
+<h3>2.1 התקנת מודול RSAT ActiveDirectory</h3>
+<p>זו ההתקנה היחידה שהכלי דורש. פתח PowerShell <strong>כמנהל</strong>:</p>
+
+<pre><code><span class="c"># Windows Server</span>
+Install-WindowsFeature RSAT-AD-PowerShell
+
+<span class="c"># Windows 10 / 11</span>
+Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0</code></pre>
+
+<h3>2.2 אימות שההתקנה הצליחה</h3>
+<pre><code>Import-Module ActiveDirectory
+Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, DistinguishedName</code></pre>
+<p>
+  אם הפקודה מחזירה את פרטי הדומיין - סיימת את השלב. אם היא נכשלת, אין טעם
+  להמשיך: השרת יסרב לעלות בלי זה, ובכוונה.
+</p>
+
+<h3>2.3 מדיניות הרצה</h3>
+<p>
+  אם ההרצה נחסמת בגלל Execution Policy, ההפעלה שבמדריך כבר עוקפת את זה
+  נקודתית עם <code>-ExecutionPolicy Bypass</code>, בלי לשנות מדיניות גלובלית במכונה.
+</p>
+
+<!-- ==================================================================== -->
+<h2 id="s3">שלב 3 - העתקת הקבצים</h2>
+<span class="step-badge">שלב 3 מתוך 11</span>
+
+<p>העתק את תיקיית הפרויקט כמו שהיא, למשל ל-<code>C:\DSMT</code>. המבנה חייב להישמר:</p>
+
+<pre><code>C:\DSMT\
+├── Start-DSMT.cmd          <span class="c">← מפעיל נוח (לערוך ולעשות דאבל-קליק)</span>
+├── server\
+│   ├── Start-DSMT.ps1      <span class="c">← נקודת הכניסה</span>
+│   └── lib\                <span class="c">← 6 קבצי הספרייה</span>
+├── web\                    <span class="c">← הממשק (index.html, app.css, app.js)</span>
+├── _ds\nocturne-...\       <span class="c">← ערכת העיצוב</span>
+├── uploads\                <span class="c">← תמונות</span>
+├── sql\schema.sql          <span class="c">← הסכמה, לעיון או ליצירה ידנית</span>
+├── data\                   <span class="c">← נוצר לבד: לוגים ו-audit קבצי</span>
+└── docs\                   <span class="c">← המדריך הזה</span></code></pre>
+
+<div class="warn">
+  <span class="box-title">אל תפרק את המבנה</span>
+  <p>
+    <code>Start-DSMT.ps1</code> מחשב את שורש הפרויקט כתיקיית האב של עצמו, ומגיש
+    ממנה את <code>web\</code>, <code>_ds\</code> ו-<code>uploads\</code>. העברה של
+    <code>server\</code> או שינוי שם של <code>web\</code> שוברים את הנתיבים.
+  </p>
+</div>
+
+<h3>3.1 הרשאות על התיקייה</h3>
+<p>
+  חשבון ההרצה צריך הרשאת קריאה על כל העץ, והרשאת <strong>כתיבה על
+  <code>data\</code></strong> - שם נכתבים הלוג היומי וקבצי ה-audit.
+</p>
+
+<!-- ==================================================================== -->
+<h2 id="s4">שלב 4 - חשבון ההרצה והרשאות ב-AD</h2>
+<span class="step-badge">שלב 4 מתוך 11</span>
+
+<h3>4.1 שתי זהויות נפרדות - להבין את ההבחנה</h3>
+<p>זו הנקודה שהכי מבלבלת בהטמעה, אז כדאי לעצור עליה:</p>
+
+<table>
+  <tr><th>זהות</th><th>מי זה</th><th>למה משמשת</th></tr>
+  <tr>
+    <td><strong>חשבון ההרצה</strong></td>
+    <td>המשתמש שמריץ את <code>Start-DSMT.ps1</code></td>
+    <td>איתור DC, קריאה/כתיבה ל-SQL, כתיבה ל-<code>data\</code></td>
+  </tr>
+  <tr>
+    <td><strong>המפעיל</strong></td>
+    <td>מי שמתחבר בדפדפן</td>
+    <td><strong>כל</strong> פעולה על הספרייה מתבצעת בהרשאות שלו</td>
+  </tr>
+</table>
+
+<div class="note">
+  <span class="box-title">המשמעות המעשית</span>
+  <p>
+    לחשבון ההרצה <strong>לא</strong> צריכות להיות הרשאות ניהול ב-AD. הוא לא מבצע
+    את הפעולות. כל איפוס סיסמה, unlock, Move OU או מחיקה רץ עם הקרדנשלס של
+    המפעיל שהתחבר - כך שה-DC אוכף את ההרשאות שלו, והשינוי נרשם על שמו בדומיין.
+    ל-DSMT אין מודל הרשאות משלו שיכול לצאת מסנכרון עם המציאות.
+  </p>
+</div>
+
+<h3>4.2 האצלת הרשאות למפעילים</h3>
+<p>
+  אם מפעיל אמור לאפס סיסמאות - צריך להאציל לו את זה ב-AD, לא בכלי. השתמש ב-
+  Delegation of Control Wizard על ה-OU הרלוונטי, או ב-<code>dsacls</code>.
+  ההרשאות הנפוצות:
+</p>
+
+<table>
+  <tr><th>פעולה בכלי</th><th>ההרשאה הנדרשת ב-AD</th></tr>
+  <tr><td>Reset password</td><td>Reset Password + Write <code>pwdLastSet</code></td></tr>
+  <tr><td>Unlock</td><td>Write <code>lockoutTime</code></td></tr>
+  <tr><td>Enable / Disable</td><td>Write <code>userAccountControl</code></td></tr>
+  <tr><td>Move OU</td><td>Delete Child ב-OU המקור + Create Child ב-OU היעד</td></tr>
+  <tr><td>Add / Remove מקבוצה</td><td>Write <code>member</code> על הקבוצה</td></tr>
+  <tr><td>Create user / group</td><td>Create Child ב-OU היעד</td></tr>
+  <tr><td>Delete</td><td>Delete על האובייקט</td></tr>
+</table>
+
+<div class="warn">
+  <span class="box-title">"למה אני מקבל Access Denied?"</span>
+  <p>
+    כי AD דחה את המפעיל, לא כי יש באג. השורה ב-audit תירשם עם תוצאה
+    <code>Denied</code>. התיקון הוא האצלה ב-AD - לא שינוי קוד ב-DSMT.
+  </p>
+</div>
+
+<h3>4.3 עיקרון ההרשאה המזערית</h3>
+<p>
+  אל תיתן Domain Admins למפעילים כדי "שזה יעבוד". האצל בדיוק את מה שנדרש,
+  ברמת ה-OU. זו בדיוק הסיבה שהכלי בנוי לרוץ בהרשאות המפעיל.
+</p>
+
+<!-- ==================================================================== -->
+<h2 id="s5">שלב 5 - הכנת SQL Server</h2>
+<span class="step-badge">שלב 5 מתוך 11</span>
+
+<p>אפשר לדלג על השלב הזה ולהריץ בלי SQL - ראה <a href="#s1">1.2</a>. אם כן משתמשים:</p>
+
+<h3>5.1 מה נשמר במסד</h3>
+<table>
+  <tr><th>טבלה</th><th>תוכן</th></tr>
+  <tr><td><code>dbo.Operators</code></td><td>שורה לכל חשבון שהתחבר לכלי</td></tr>
+  <tr><td><code>dbo.Sessions</code></td><td>היסטוריית סשנים: hash של הטוקן, התחלה, סיום וסיבה</td></tr>
+  <tr><td><code>dbo.DirectoryUsers</code></td><td>תצלום של אובייקטי המשתמשים שנקראו מ-AD</td></tr>
+  <tr><td><code>dbo.DirectoryGroups</code></td><td>תצלום של הקבוצות</td></tr>
+  <tr><td><code>dbo.AuditLog</code></td><td>כל פעולת כתיבה שנוסתה, כולל כישלונות</td></tr>
+</table>
+
+<div class="warn">
+  <span class="box-title">טבלאות התצלום אינן מקור האמת</span>
+  <p>
+    <code>DirectoryUsers</code> ו-<code>DirectoryGroups</code> נכתבות <strong>אחרי</strong>
+    קריאה חיה מ-AD, ומתיישנות ברגע שהספרייה משתנה. הקונסולה תמיד מציגה קריאה
+    חיה. השתמש בטבלאות האלה לדוחות והיסטוריה - לעולם לא כדי לענות על
+    "איך הספרייה נראית עכשיו".
+  </p>
+</div>
+
+<h3>5.2 מה לא נשמר</h3>
+<p>
+  <strong>שום סיסמה לא נכתבת למסד.</strong> לא של מפעילים ולא של משתמשי קצה.
+  <code>dbo.Sessions</code> שומרת SHA-256 של הטוקן בלבד, כך שאין בו שום דבר
+  שניתן לשחזור או להשמעה חוזרת.
+</p>
+
+<h3>5.3 הרשאות SQL</h3>
+<p>
+  ברירת המחדל היא Windows Authentication - כלומר חשבון ההרצה ניגש ל-SQL.
+  שתי אפשרויות:
+</p>
+
+<h4>אפשרות א' - שהכלי ייצור את המסד (הפשוטה)</h4>
+<p>נדרשת הרשאת <code>dbcreator</code> על המופע, פעם אחת:</p>
+<pre><code>USE master;
+CREATE LOGIN [LAB\svc-dsmt] FROM WINDOWS;
+ALTER SERVER ROLE dbcreator ADD MEMBER [LAB\svc-dsmt];</code></pre>
+
+<h4>אפשרות ב' - ליצור את המסד מראש (המסודרת)</h4>
+<p>ה-DBA יוצר את המסד ומריץ את הסכמה, והכלי רק כותב אליה:</p>
+<pre><code>sqlcmd -S SQL01 -Q "CREATE DATABASE [DSMT];"
+sqlcmd -S SQL01 -d DSMT -i C:\DSMT\sql\schema.sql</code></pre>
+<pre><code>USE DSMT;
+CREATE USER [LAB\svc-dsmt] FOR LOGIN [LAB\svc-dsmt];
+ALTER ROLE db_datareader ADD MEMBER [LAB\svc-dsmt];
+ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];</code></pre>
+
+<p>
+  בשתי האפשרויות, בכל הפעלה הכלי בודק אילו טבלאות חסרות ויוצר אותן -
+  הפעולה בטוחה לחזרה ולא נוגעת בטבלאות קיימות.
+</p>
+
+<!-- ==================================================================== -->
+<h2 id="s6">שלב 6 - רשת, פורט והרשאת האזנה</h2>
+<span class="step-badge">שלב 6 מתוך 11</span>
+
+<h3>6.1 שתי מצבי האזנה</h3>
+<table>
+  <tr><th>ערך</th><th>מי יכול להגיע</th><th>דרישות</th></tr>
+  <tr><td><code>-ListenAddress localhost</code> (ברירת מחדל)</td><td>רק המכונה עצמה</td><td>אין. עובד מיד</td></tr>
+  <tr><td><code>-ListenAddress any</code></td><td>כל מכונה ברשת</td><td>הרשאה - ראה 6.2</td></tr>
+</table>
+
+<h3>6.2 הרשאת האזנה לכל הממשקים</h3>
+<p>
+  האזנה על כל הממשקים דורשת הרשאה. או להריץ מ-PowerShell מורם, או - עדיף -
+  לבצע הזמנת URL חד-פעמית שמאפשרת הרצה ללא הרשאות מיוחדות:
+</p>
+<pre><code>netsh http add urlacl url=http://+:8080/ user="LAB\svc-dsmt"</code></pre>
+
+<h3>6.3 חומת אש</h3>
+<pre><code>New-NetFirewallRule -DisplayName "DSMT console" -Direction Inbound `
+    -Protocol TCP -LocalPort 8080 -Action Allow</code></pre>
+
+<!-- ==================================================================== -->
+<h2 id="s7">שלב 7 - הרצה ראשונה</h2>
+<span class="step-badge">שלב 7 מתוך 11</span>
+
+<h3>7.1 הפעלה</h3>
+<p>ההרצה המלאה, כפי שתיראה במעבדה:</p>
+<pre><code>cd C:\DSMT
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Start-DSMT.ps1 `
+    -Domain LAB.LOCAL -ListenAddress any -Port 8080 `
+    -SqlServer SQL01 -SqlDatabase DSMT</code></pre>
+
+<p>הרצה מינימלית לבדיקה ראשונה - מקומית בלבד, בלי SQL:</p>
+<pre><code>powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Start-DSMT.ps1</code></pre>
+
+<p>
+  לחלופין: ערוך את המשתנים בראש <code>Start-DSMT.cmd</code>
+  (<code>DSMT_DOMAIN</code>, <code>DSMT_PORT</code>, <code>DSMT_SQLSERVER</code>)
+  ועשה דאבל-קליק.
+</p>
+
+<h3 id="s7-banner">7.2 קריאת מסך הבדיקות</h3>
+<p>לפני שהוא מאזין, השרת מריץ בדיקות מקדימות ומדפיס את התוצאה:</p>
+
+<pre><code>  DSMT - Directory Service Management Tool
+  Version &lt;the version from DsmtCommon.ps1&gt;
+
+  [ok]   ActiveDirectory module loaded
+  [ok]   Domain lab.local reachable (LAB)
+  [ok]   SQL Server SQL01 - database [DSMT] ready
+  [ok]   Front end found
+
+  Listening on http://+:8080/
+  Open http://localhost:8080/
+  Managing LAB.LOCAL - operators sign in with their own domain account
+  Audit log: C:\DSMT\data
+  Ctrl+C to stop.</code></pre>
+
+<div class="note">
+  <span class="box-title">כישלון בבדיקה מקדימה עוצר את השרת בכוונה</span>
+  <p>
+    כל בדיקה שנכשלת מדפיסה את התיקון שלה ומפילה את התהליך. זה מכוון: תקלת סביבה
+    שנבלעת עכשיו תחזור מאוחר יותר כשגיאה שנראית כמו באג בקוד, ותבזבז מחזור אבחון שלם.
+  </p>
+</div>
+
+<p>אם אין SQL, תופיע שורת אזהרה במקום השורה הירוקה - וזה תקין:</p>
+<pre><code>  [warn] No -SqlServer given: operators, sessions and the directory snapshot are NOT stored,
+         and the audit log is written to JSONL files in C:\DSMT\data</code></pre>
+
+<!-- ==================================================================== -->
+<h2 id="s8">שלב 8 - החיבור הראשוני</h2>
+<span class="step-badge">שלב 8 מתוך 11</span>
+
+<h3 id="s8-how">8.1 איך מתחברים</h3>
+
+<p><strong>1.</strong> פתח בדפדפן:</p>
+<pre><code>http://localhost:8080/          <span class="c">מהמכונה עצמה</span>
+http://dsmt-srv.lab.local:8080/ <span class="c">ממכונה אחרת ברשת</span></code></pre>
+
+<p>
+  <strong>2.</strong> יופיע מסך ההתחברות. בפינה התחתונה מוצג באדג' עם מספר
+  הגרסה - הוא נקרא מהשרת, ומאשר שהדפדפן מדבר עם ה-API בהצלחה.
+  אם הבאדג' ריק, הדף נטען אבל ה-API לא עונה.
+</p>
+
+<p><strong>3.</strong> הזן חשבון דומיין. כל אחד מהפורמטים הבאים תקין:</p>
+<pre><code>LAB\jdoe
+jdoe@lab.local
+jdoe</code></pre>
+
+<p>
+  <strong>4.</strong> לחץ <strong>Sign in</strong>, או פשוט הקש <strong>Enter</strong>
+  בשדה שם המשתמש או הסיסמה - שניהם שולחים את הטופס.
+</p>
+
+<div class="note">
+  <span class="box-title">במי להשתמש בהתחברות הראשונה</span>
+  <p>
+    השתמש בחשבון שכבר מוגדרות לו ההרשאות מ<a href="#s4">שלב 4</a>. אין "חשבון
+    ברירת מחדל", אין <code>admin/admin</code> ואין אשף יצירת משתמש ראשון -
+    <strong>לכלי אין מסד משתמשים משלו כלל</strong>. כל מי שיש לו חשבון תקין בדומיין
+    יכול להיכנס ולצפות; מה שהוא יוכל <em>לשנות</em> נקבע לגמרי על ידי ההאצלות שלו ב-AD.
+  </p>
+</div>
+
+<h3 id="s8-behind">8.2 מה קורה מאחורי הקלעים</h3>
+<ol>
+  <li>הדפדפן שולח <code>POST /api/session</code> עם שם המשתמש והסיסמה.</li>
+  <li>השרת מאמת אותם מול הדומיין (<code>PrincipalContext.ValidateCredentials</code>).</li>
+  <li>בהצלחה - נוצר טוקן סשן, והקרדנשלס נשמרים <strong>בזיכרון התהליך בלבד</strong>
+      כדי שאפשר יהיה לבצע פעולות בשם המפעיל.</li>
+  <li>נרשמת שורת audit של <code>Sign in</code>; אם SQL מוגדר, נרשמים גם המפעיל והסשן.</li>
+  <li>הטוקן נשמר ב-<code>localStorage</code> בדפדפן, והממשק נטען.</li>
+</ol>
+
+<p>
+  <strong>גם התחברות שנכשלה נרשמת</strong> ב-audit עם תוצאה <code>Denied</code> -
+  כך שניסיונות כושלים נראים בלוג.
+</p>
+
+<h3>8.3 רענון הדף (F5) לא מנתק</h3>
+<p>
+  הטוקן נשמר ב-<code>localStorage</code> ומאומת מול השרת בכל טעינת דף, כך שרענון,
+  סגירת טאב או פתיחה מחדש של הדפדפן <strong>אינם</strong> מבקשים סיסמה שוב.
+  הסשן פג אחרי 8 שעות של חוסר פעילות (ניתן לשינוי עם <code>-SessionHours</code>).
+</p>
+
+<div class="warn">
+  <span class="box-title">מה כן מנתק את כולם</span>
+  <p>
+    <strong>הפעלה מחדש של השרת.</strong> הקרדנשלס שנדרשים לפעולות מול AD קיימים
+    רק בזיכרון ולא נשמרים לשום מקום - ובמכוון. אחרי ריסטארט כל המפעילים
+    יתחברו מחדש. זה לא באג.
+  </p>
+</div>
+
+<h3>8.4 ההתמצאות הראשונה בממשק</h3>
+<table>
+  <tr><th>איפה</th><th>מה זה</th></tr>
+  <tr><td>כותרת עליונה</td><td>שם הדומיין ומספר ה-DC-ים <strong>האמיתי</strong>, נקרא חי</td></tr>
+  <tr><td>טאבים Users / Groups</td><td>רשימות חיות מהספרייה. החיפוש רץ מול AD, לא מסנן טבלה טעונה</td></tr>
+  <tr><td>כפתור <strong>About</strong></td><td>גרסה, דומיין, יער, רשימת ה-DC-ים, ואיפה נשמרות הרשומות</td></tr>
+  <tr><td>תפריט (☰)</td><td>ניווט, About, רענון מהספרייה, והתנתקות</td></tr>
+  <tr><td>Audit log</td><td>כל פעולת כתיבה שבוצעה דרך הכלי</td></tr>
+</table>
+
+<!-- ==================================================================== -->
+<h2 id="s9">שלב 9 - בדיקת קבלה</h2>
+<span class="step-badge">שלב 9 מתוך 11</span>
+
+<p>
+  עבור על הרשימה לפי הסדר. אל תדלג - זו ההרצה הראשונה של הקוד מול דומיין חי.
+  <strong>בצע אותה על חשבון בדיקה, לא על חשבון אמיתי.</strong>
+</p>
+
+<ul class="check">
+  <li>מסך ההתחברות נטען ומספר הגרסה מופיע בתחתית</li>
+  <li>התחברות עם חשבון דומיין מצליחה; אנטר בשדה הסיסמה עובד</li>
+  <li>בכותרת מופיעים שם הדומיין ומספר DC-ים <strong>נכון</strong></li>
+  <li><strong>About</strong> מציג את הגרסה, את היער ואת רשימת ה-DC-ים; ושורת
+      "Record store" תואמת למה שהגדרת (SQL או קבצים)</li>
+  <li>טאב Users מציג משתמשים אמיתיים מ-<code>LAB.LOCAL</code></li>
+  <li>חיפוש לפי שם, לפי מחלקה ולפי UPN מחזיר תוצאות סבירות ובמהירות מקובלת</li>
+  <li>לחיצה על שורה פותחת חלונית פרטים עם חברויות בקבוצות אמיתיות</li>
+  <li>טאב Groups מציג קבוצות אמיתיות עם מספר חברים נכון</li>
+  <li><strong>איפוס סיסמה על חשבון בדיקה</strong> מצליח, והסיסמה שנוצרה מוצגת פעם אחת</li>
+  <li>ניסיון לשמור בלי סיבה נחסם - כפתור האישור לא מבצע</li>
+  <li>הפעולה מופיעה ב-Audit log עם המפעיל, ה-DC, הסיבה ותוצאה <code>Success</code></li>
+  <li>אם SQL מוגדר: <code>SELECT TOP 10 * FROM dbo.AuditLog ORDER BY TimeUtc DESC</code>
+      מחזיר את אותה שורה</li>
+  <li>ייצוא CSV מוריד קובץ ונפתח נכון באקסל</li>
+  <li>פעולה מרובה על 2-3 חשבונות בדיקה מדווחת תוצאה לכל יעד בנפרד</li>
+  <li>F5 באמצע העבודה <strong>לא</strong> מבקש התחברות מחדש</li>
+  <li>פתיחה בטלפון: הטבלה נפרסת לכרטיסים וכל הנתונים נגישים</li>
+</ul>
+
+<div class="note">
+  <span class="box-title">נקודות שכדאי לשים לב אליהן במיוחד בהרצה הראשונה</span>
+  <p>
+    שם ה-DC בשורות ה-audit צריך להיראות כמו שרת אחד ולא שניים מודבקים;
+    <code>Set-ADAccountPassword</code> עובד מול ערוץ Negotiate מוצפן ללא LDAPS -
+    אם הוא נכשל, החשודים הרגילים הם מדיניות סיסמאות או האצלת Reset Password חסרה;
+    וכדאי לבדוק אם מגבלת 500 התוצאות מתאימה לגודל המעבדה שלך
+    (<code>-PageSize</code>).
+  </p>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="s10">שלב 10 - HTTPS לפני ייצור</h2>
+<span class="step-badge">שלב 10 מתוך 11</span>
+
+<div class="warn">
+  <span class="box-title">אל תפעיל ברשת מעבר ל-HTTP</span>
+  <p>
+    בהתחברות נשלחים שם משתמש וסיסמה של דומיין. מעל HTTP הם עוברים ברשת בלי
+    הצפנה. עבור מעבדה מקומית זה סביר; לפני כל שימוש אמיתי - חובה HTTPS.
+  </p>
+</div>
+
+<p><strong>1.</strong> ייבא תעודת שרת ל-<code>LocalMachine\My</code> וקח את ה-thumbprint.</p>
+<p><strong>2.</strong> קשור אותה לפורט:</p>
+<pre><code>netsh http add sslcert ipport=0.0.0.0:8443 certhash=&lt;THUMBPRINT&gt; `
+    appid={00000000-0000-0000-0000-000000000000}</code></pre>
+<p><strong>3.</strong> ב-<code>server\Start-DSMT.ps1</code> שנה את בניית הכתובת מ-<code>http://</code> ל-<code>https://</code>.</p>
+<p><strong>4.</strong> הפעל עם <code>-Port 8443</code>.</p>
+
+<!-- ==================================================================== -->
+<h2 id="s11">שלב 11 - הרצה קבועה כשירות</h2>
+<span class="step-badge">שלב 11 מתוך 11</span>
+
+<p>
+  השרת רץ בחלון PowerShell פתוח. להרצה מתמדת, ההמלצה הפשוטה היא Scheduled Task
+  שרץ תחת חשבון השירות, מופעל באתחול המכונה:
+</p>
+
+<pre><code>$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\DSMT\server\Start-DSMT.ps1 -Domain LAB.LOCAL -ListenAddress any -SqlServer SQL01"
+
+$trigger = New-ScheduledTaskTrigger -AtStartup
+
+Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigger `
+    -User "LAB\svc-dsmt" -RunLevel Limited</code></pre>
+
+<p>
+  שים לב שנדרשת הזמנת ה-URL מ<a href="#s6">שלב 6.2</a> כדי שזה יעבוד ללא הרשאות מוגברות.
+</p>
+
+<!-- ==================================================================== -->
+<h2 id="s12">עדכון גרסה והטמעת שינוי</h2>
+
+<h3>מה דורש מה</h3>
+<table>
+  <tr><th>מה השתנה</th><th>מה צריך לעשות</th></tr>
+  <tr><td><code>web\*</code>, <code>_ds\*</code></td><td>רענון קשיח בדפדפן (Ctrl+F5). אין צורך בריסטארט</td></tr>
+  <tr><td><code>server\**</code></td><td>הפעלה מחדש של התהליך. כל הסשנים ינותקו</td></tr>
+  <tr><td><code>sql\schema.sql</code></td><td>הפעלה מחדש - טבלאות חסרות נוצרות לבד</td></tr>
+</table>
+
+<h3>מספר הגרסה</h3>
+<p>
+  הגרסה מוגדרת ב<strong>מקום אחד בלבד</strong>: <code>$script:DsmtVersion</code>
+  בקובץ <code>server\lib\DsmtCommon.ps1</code>. משם היא מגיעה למסך ההתחברות,
+  לחלון About, למסך הפתיחה של השרת, לשורות הלוג ולרשומות ה-audit.
+  <strong>אין להקליד מספר גרסה בשום מקום אחר</strong> - זו בדיוק התקלה שהכלל הזה מונע.
+  פורמט: <code>MAJOR.FEATURE.FIX</code>.
+</p>
+
+<!-- ==================================================================== -->
+<h2 id="trouble">פתרון תקלות</h2>
+
+<table>
+  <tr><th>תופעה</th><th>סיבה סבירה</th><th>מה לעשות</th></tr>
+  <tr>
+    <td><code>[FAIL] ActiveDirectory module</code></td>
+    <td>RSAT לא מותקן</td>
+    <td><a href="#s2">שלב 2.1</a></td>
+  </tr>
+  <tr>
+    <td><code>[FAIL] Cannot reach domain</code></td>
+    <td>המכונה לא מחוברת לדומיין, או אין גישה ל-DC</td>
+    <td>בדוק <code>Get-ADDomain</code> ידנית, ואת חסימות הרשת</td>
+  </tr>
+  <tr>
+    <td><code>[FAIL] SQL Server ...</code></td>
+    <td>שם מופע שגוי, חומת אש, או חוסר הרשאה</td>
+    <td><a href="#s5">שלב 5.3</a>, או להסיר <code>-SqlServer</code> זמנית</td>
+  </tr>
+  <tr>
+    <td><code>Could not listen on http://+:8080/</code></td>
+    <td>אין הרשאת האזנה, או הפורט תפוס</td>
+    <td><a href="#s6">שלב 6.2</a>; <code>netstat -ano | findstr :8080</code></td>
+  </tr>
+  <tr>
+    <td>הדף נטען אבל אין גרסה בתחתית</td>
+    <td>ה-API לא עונה</td>
+    <td>בדוק את חלון השרת ואת <code>data\dsmt-*.log</code></td>
+  </tr>
+  <tr>
+    <td>"The user name or password is incorrect"</td>
+    <td>קרדנשלס שגויים, או חשבון נעול</td>
+    <td>שורת <code>Denied</code> ב-audit מאשרת שהבקשה הגיעה לשרת</td>
+  </tr>
+  <tr>
+    <td>פעולה נכשלת עם Access Denied</td>
+    <td>למפעיל אין את ההאצלה ב-AD</td>
+    <td><a href="#s4">שלב 4.2</a> - תיקון ב-AD, לא בקוד</td>
+  </tr>
+  <tr>
+    <td>כולם נותקו פתאום</td>
+    <td>השרת הופעל מחדש</td>
+    <td>התנהגות מתוכננת - <a href="#s8">שלב 8.3</a></td>
+  </tr>
+  <tr>
+    <td>הטקסט מוצג בפונט ברירת מחדל</td>
+    <td>Inter לא מוטמע מקומית, בכוונה</td>
+    <td>תקין. אין לחבר CDN - ראה למטה</td>
+  </tr>
+  <tr>
+    <td>רשימה נחתכת ב-500</td>
+    <td>מגבלת התוצאות לחיפוש</td>
+    <td>לצמצם את החיפוש, או להעלות <code>-PageSize</code></td>
+  </tr>
+</table>
+
+<div class="warn">
+  <span class="box-title">אל תוסיף שום הפניה חיצונית</span>
+  <p>
+    DSMT לא מבצע אף בקשה לאינטרנט, וזה תנאי לעבודה ברשת מנותקת. אם רוצים את
+    הפונט Inter - יש להוריד את קבצי ה-woff2 לתיקיית ערכת העיצוב ולהוסיף
+    <code>@font-face</code>. <strong>לא</strong> להחזיר קישור ל-Google Fonts או לכל CDN.
+  </p>
+</div>
+
+<h3>איפה מחפשים ראיות</h3>
+<table>
+  <tr><td><code>data\dsmt-YYYY-MM-DD.log</code></td><td>לוג השרת: הפעלות, שגיאות, סשנים</td></tr>
+  <tr><td><code>data\audit-YYYY-MM.jsonl</code></td><td>עותק קבצי של ה-audit - נכתב תמיד, גם כשיש SQL</td></tr>
+  <tr><td><code>dbo.AuditLog</code></td><td>אותן רשומות ב-SQL, לשאילתות ולדוחות</td></tr>
+  <tr><td>חלון השרת</td><td>שגיאות בזמן אמת</td></tr>
+</table>
+
+<!-- ==================================================================== -->
+<h2 id="ref">נספחים</h2>
+
+<h3>א. פרמטרים של Start-DSMT.ps1</h3>
+<table>
+  <tr><th>פרמטר</th><th>ברירת מחדל</th><th>תיאור</th></tr>
+  <tr><td><code>-Domain</code></td><td><code>LAB.LOCAL</code></td><td>הדומיין המנוהל</td></tr>
+  <tr><td><code>-Server</code></td><td>גילוי אוטומטי</td><td>לקבע DC ספציפי (FQDN)</td></tr>
+  <tr><td><code>-Port</code></td><td><code>8080</code></td><td>פורט האזנה</td></tr>
+  <tr><td><code>-ListenAddress</code></td><td><code>localhost</code></td><td><code>localhost</code> או <code>any</code></td></tr>
+  <tr><td><code>-SessionHours</code></td><td><code>8</code></td><td>תפוגת סשן בחוסר פעילות</td></tr>
+  <tr><td><code>-PageSize</code></td><td><code>500</code></td><td>תקרת תוצאות לחיפוש</td></tr>
+  <tr><td><code>-SqlServer</code></td><td>(ריק)</td><td>מופע SQL. ריק = ללא SQL</td></tr>
+  <tr><td><code>-SqlDatabase</code></td><td><code>DSMT</code></td><td>שם המסד</td></tr>
+  <tr><td><code>-SqlUsername</code> / <code>-SqlPassword</code></td><td>(ריק)</td><td>SQL Auth. ריק = Windows Auth</td></tr>
+</table>
+
+<h3>ב. פורמט קובץ ה-CSV לייבוא מרובה</h3>
+<p>שורת כותרות חובה. העמודה היחידה שחובה למלא היא <code>SamAccountName</code>:</p>
+<pre><code>SamAccountName,DisplayName,GivenName,Surname,Department,Title,Password,OU
+jdoe,John Doe,John,Doe,IT,Helpdesk,,
+asmith,Anna Smith,Anna,Smith,Finance,Analyst,,OU=Finance,DC=lab,DC=local</code></pre>
+<ul>
+  <li>שורה בלי <code>Password</code> מקבלת סיסמה אקראית תקנית.</li>
+  <li>שורה בלי <code>OU</code> משתמשת ב-OU שנבחר בחלון הייבוא.</li>
+  <li>כל שורה מדווחת בנפרד; כישלון בשורה אחת לא עוצר את השאר.</li>
+  <li>כל שורה נרשמת ב-audit בנפרד.</li>
+</ul>
+
+<h3>ג. מודל האבטחה - תקציר</h3>
+<ul>
+  <li>אין מסד משתמשים בכלי. אימות מול הדומיין בלבד.</li>
+  <li>כל פעולה רצה בהרשאות המפעיל; AD אוכף, ו-AD מתעד.</li>
+  <li>הסיסמה נשמרת בזיכרון התהליך למשך הסשן - ולכן השרת חייב לרוץ על מכונה
+      מוגבלת ומאחורי HTTPS.</li>
+  <li>סיסמאות לא נכתבות ל-SQL, ל-audit או ללוג. במסד יש רק hash של הטוקן.</li>
+  <li>קלט חיפוש עובר escaping לפני שהוא נכנס למסנן LDAP; כל שאילתות ה-SQL
+      פרמטריות.</li>
+  <li>סיבה היא שדה חובה בכל כתיבה, ונשמרת ברשומת ה-audit.</li>
+</ul>
+
+<div class="note">
+  <span class="box-title">שיפור עתידי שנבחן ונדחה במודע</span>
+  <p>
+    Kerberos Constrained Delegation היה מייתר את החזקת הסיסמה בזיכרון. הוא נדחה
+    כרגע כי הוא דורש הגדרת SPN והאצלה מול הדומיין החי - דבר שאי אפשר לתכנן
+    "על היבש". התיעוד המלא ב-<code>CLAUDE.md</code> תחת
+    "Attempted and deliberately NOT pursued". <strong>לפני שמישהו מתחיל את זה מחדש -
+    צריך לתאם.</strong>
+  </p>
+</div>
+
+<h3>ד. קבצים רלוונטיים</h3>
+<table>
+  <tr><td><code>README.md</code></td><td>סקירה טכנית של הפרויקט</td></tr>
+  <tr><td><code>CLAUDE.md</code></td><td>כללי העבודה על הפרויקט</td></tr>
+  <tr><td><code>PROGRESS.md</code></td><td>מצב נוכחי, משימות פתוחות והערות להמשך</td></tr>
+  <tr><td><code>CHANGELOG.md</code></td><td>הגרסה הסמכותית ומה השתנה בה</td></tr>
+  <tr><td><code>sql\schema.sql</code></td><td>סכמת המסד</td></tr>
+  <tr><td><code>prototype\</code></td><td><strong>אב-טיפוס עם נתונים מומצאים - לא הכלי</strong></td></tr>
+</table>
+
+<div class="warn">
+  <span class="box-title">אזהרה אחרונה: prototype\</span>
+  <p>
+    התיקייה <code>prototype\</code> מכילה את המוקאפ המקורי. כל שורה בו מומצאת וכל
+    כפתור מת. הוא משכנע מאוד ולכן מסוכן - <strong>אין להדגים אותו לאף אחד שעלול
+    לחשוב שהשורות אמיתיות, ואין להשתמש בו כדי לבדוק אם פיצ'ר עובד.</strong>
+  </p>
+</div>
+
+<p class="foot">
+  DSMT - Directory Service Management Tool &middot; מדריך התקנה והטמעה &middot;
+  מספר הגרסה המדויק מוצג במסך ההתחברות ובחלון About של הכלי עצמו, ונקרא מתוך
+  <code>$script:DsmtVersion</code>.
+</p>
+
+</main>
+</div>
+</body>
+</html>

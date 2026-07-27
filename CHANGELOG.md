@@ -13,6 +13,25 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.1.0 — 2026-07-27
+Deployment documentation.
+
+- Added `docs/deployment-guide.html` — step-by-step install and rollout guide
+  (Hebrew, RTL, self-contained single file, no external requests, prints
+  cleanly). Covers: why there is no installer and what "install" means here;
+  prerequisites; RSAT setup; file layout; the run-account vs operator identity
+  distinction and the AD delegation each action needs; SQL preparation with
+  both the auto-create and DBA-creates-it paths; port reservation and
+  firewall; reading the startup preflight banner; **how the first connection
+  works** (there is no default account and no first-user wizard — any valid
+  domain account signs in, AD decides what it may change); an acceptance
+  checklist for the first run; HTTPS; running as a scheduled task;
+  troubleshooting table; CSV format and parameter reference.
+- Updated `README.md` — links to the guide.
+
+Deploy: copy `docs\` alongside the rest of the tree. Documentation only, no
+runtime impact.
+
 ## 1.0.0 — 2026-07-27
 First working release. DSMT stops being a mock-up: the console now reads and
 writes live Active Directory on `LAB.LOCAL`, persists to SQL Server, and is

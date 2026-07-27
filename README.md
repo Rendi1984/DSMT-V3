@@ -12,6 +12,12 @@ invented rows.
 
 ---
 
+> **Deploying it for the first time?** Open
+> [`docs/deployment-guide.html`](docs/deployment-guide.html) in a browser -
+> a step-by-step install and first-connection guide, including what "install"
+> means here (there is no installer), the AD delegation each action needs, and
+> an acceptance checklist for the first run.
+
 ## Requirements
 
 On the machine that runs the server:
