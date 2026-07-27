@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/styles.css">
+<script src="_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/_ds_bundle.js"></script>
+<style>html,body{margin:0;height:100%}a{color:var(--color-accent-300);text-decoration:none}a:hover{color:var(--color-accent)}</style>
+</helmet>
+<div style="min-height:100vh;display:flex;flex-direction:column;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)">
+
+  <header style="display:flex;align-items:center;gap:20px;padding:0 20px;height:52px;border-bottom:1px solid var(--color-neutral-800)">
+    <div style="position:relative;display:flex;align-items:center;gap:10px">
+      <button onClick="{{ toggleMenu }}" aria-label="Menu" style="display:flex;flex-direction:column;gap:3.5px;background:transparent;border:1px solid var(--color-neutral-800);border-radius:6px;padding:8px 7px;cursor:pointer">
+        <span style="display:block;width:14px;height:1.5px;background:var(--color-neutral-300)"></span>
+        <span style="display:block;width:14px;height:1.5px;background:var(--color-neutral-300)"></span>
+        <span style="display:block;width:14px;height:1.5px;background:var(--color-neutral-300)"></span>
+      </button>
+      <span style="font:500 13px/1 var(--font-heading);letter-spacing:.1em;color:var(--color-text)">DSMT</span>
+      <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;top:44px;left:0;z-index:20;width:210px;background:var(--color-bg);border:1px solid var(--color-neutral-800);border-radius:8px;box-shadow:var(--shadow-lg);padding:6px;display:flex;flex-direction:column;gap:2px">
+          <button onClick="{{ menuUsers }}" style="text-align:left;background:transparent;border:0;color:var(--color-neutral-200);font:400 12.5px/1 var(--font-body);padding:9px 10px;border-radius:6px;cursor:pointer">Users</button>
+          <button onClick="{{ menuGroups }}" style="text-align:left;background:transparent;border:0;color:var(--color-neutral-200);font:400 12.5px/1 var(--font-body);padding:9px 10px;border-radius:6px;cursor:pointer">Groups</button>
+          <button onClick="{{ menuAudit }}" style="text-align:left;background:transparent;border:0;color:var(--color-neutral-200);font:400 12.5px/1 var(--font-body);padding:9px 10px;border-radius:6px;cursor:pointer">Audit log</button>
+          <div style="height:1px;margin:5px 4px;background:var(--color-neutral-800)"></div>
+          <div style="padding:2px 10px 8px;font-size:11px;color:var(--color-neutral-500)">Signed in as CORP\mcohen</div>
+          <a href="DSMT Login.dc.html" style="display:block;padding:9px 10px;border-radius:6px;font:500 12.5px/1 var(--font-body);color:var(--color-accent-200)">Log off</a>
+        </div>
+      </sc-if>
+    </div>
+    <nav style="display:flex;gap:2px;margin-inline-start:8px">
+      <button onClick="{{ showUsers }}" style="background:transparent;border:0;border-bottom:1px solid {{ usersUnderline }};color:{{ usersColor }};font:500 12.5px/1 var(--font-body);padding:9px 12px;cursor:pointer">Users</button>
+      <button onClick="{{ showGroups }}" style="background:transparent;border:0;border-bottom:1px solid {{ groupsUnderline }};color:{{ groupsColor }};font:500 12.5px/1 var(--font-body);padding:9px 12px;cursor:pointer">Groups</button>
+    </nav>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--color-neutral-500)">
+      <span>corp.local · 12 controllers</span>
+      <span style="width:26px;height:26px;border-radius:50%;border:1px solid var(--color-neutral-700);display:flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--color-neutral-300)">AD</span>
+    </div>
+  </header>
+
+  <sc-if value="{{ directoryView }}" hint-placeholder-val="{{ true }}">
+  <div style="flex:1;display:grid;grid-template-columns:1fr 380px;min-height:0">
+
+    <section style="display:flex;flex-direction:column;min-width:0;border-inline-end:1px solid var(--color-neutral-800)">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px 20px;flex-wrap:wrap">
+        <input class="input" placeholder="Search {{ entityPlural }}, UPN or OU…" value="{{ query }}" onChange="{{ setQuery }}" style="flex:1;min-width:220px">
+        <button class="btn btn-ghost" onClick="{{ toggleCols }}">Columns</button>
+        <button class="btn btn-secondary" onClick="{{ openImport }}">Import CSV</button>
+        <button class="btn btn-secondary" onClick="{{ noop }}">Export</button>
+        <button class="btn btn-primary" onClick="{{ openCreate }}">{{ createLabel }}</button>
+      </div>
+
+      <sc-if value="{{ colsOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="margin:0 20px 12px;padding:12px 14px;border:1px solid var(--color-neutral-800);border-radius:8px;display:flex;flex-wrap:wrap;gap:8px">
+          <sc-for list="{{ allColumns }}" as="col" hint-placeholder-count="6">
+            <button onClick="{{ col.toggle }}" style="border:1px solid {{ col.border }};background:{{ col.bg }};color:{{ col.color }};border-radius:99px;font:500 11px/1 var(--font-body);padding:6px 10px;cursor:pointer">{{ col.label }}</button>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ false }}">
+        <div style="margin:0 20px 12px;padding:9px 14px;border:1px solid var(--color-accent-700);background:var(--color-accent-900);border-radius:8px;display:flex;align-items:center;gap:12px;font-size:12px">
+          <span style="color:var(--color-accent-200)">{{ selectedCount }} selected</span>
+          <div style="flex:1"></div>
+          <button class="btn btn-ghost" onClick="{{ noop }}">Add to group</button>
+          <button class="btn btn-ghost" onClick="{{ noop }}">Move OU</button>
+          <button class="btn btn-ghost" onClick="{{ noop }}">Enable / Disable</button>
+          <button class="btn btn-ghost" onClick="{{ askDelete }}" style="color:var(--color-accent-200)">Delete…</button>
+        </div>
+      </sc-if>
+
+      <div style="flex:1;overflow:auto;padding:0 20px 20px">
+        <table class="table" style="width:100%;border-collapse:collapse;font-size:12.5px">
+          <thead>
+            <tr>
+              <th style="width:32px;text-align:left"><input type="checkbox" checked="{{ allChecked }}" onChange="{{ toggleAll }}" style="accent-color:var(--color-accent);width:13px;height:13px"></th>
+              <sc-for list="{{ columns }}" as="col" hint-placeholder-count="6">
+                <th style="text-align:left;white-space:nowrap;font-weight:500;color:var(--color-neutral-400)">{{ col.label }}</th>
+              </sc-for>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{ rows }}" as="row" hint-placeholder-count="10">
+              <tr onClick="{{ row.select }}" style="cursor:pointer;background:{{ row.bg }}">
+                <td><input type="checkbox" checked="{{ row.checked }}" onChange="{{ row.check }}" style="accent-color:var(--color-accent);width:13px;height:13px"></td>
+                <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="6">
+                  <td style="white-space:nowrap;color:{{ cell.color }}">{{ cell.text }}</td>
+                </sc-for>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+        <p style="margin:14px 0 0;font-size:11.5px;color:var(--color-neutral-500)">{{ resultLine }}</p>
+      </div>
+    </section>
+
+    <aside style="display:flex;flex-direction:column;min-height:0;overflow:auto">
+      <sc-if value="{{ hasDetail }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:18px 20px;display:flex;flex-direction:column;gap:18px">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <span style="font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-accent-300)">{{ detailKicker }}</span>
+            <h2 style="margin:0;font:500 20px/1.25 var(--font-heading)">{{ detailTitle }}</h2>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <span class="tag tag-outline">{{ detailSource }}</span>
+              <span class="tag tag-neutral">{{ detailStatus }}</span>
+            </div>
+          </div>
+
+          <div style="height:1px;background:linear-gradient(90deg,transparent,var(--color-neutral-800) 15%,var(--color-neutral-800) 85%,transparent)"></div>
+
+          <div style="display:flex;flex-direction:column;gap:11px">
+            <sc-for list="{{ detailFields }}" as="f" hint-placeholder-count="8">
+              <div style="display:grid;grid-template-columns:118px 1fr;gap:12px;align-items:baseline;font-size:12.5px">
+                <span style="color:var(--color-neutral-500)">{{ f.label }}</span>
+                <span style="color:{{ f.color }}">{{ f.value }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="height:1px;background:linear-gradient(90deg,transparent,var(--color-neutral-800) 15%,var(--color-neutral-800) 85%,transparent)"></div>
+
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <span style="font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-neutral-500)">{{ membershipLabel }}</span>
+            <ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column">
+              <sc-for list="{{ memberships }}" as="m" hint-placeholder-count="5">
+                <li style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--color-neutral-900);font-size:12.5px;color:var(--color-neutral-200)">
+                  <span style="width:4px;height:4px;border-radius:50%;background:var(--color-accent-500);flex:none"></span>
+                  <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ m.name }}</span>
+                  <span style="font-size:11px;color:var(--color-neutral-500)">{{ m.meta }}</span>
+                </li>
+              </sc-for>
+            </ul>
+            <sc-if value="{{ hasMoreMemberships }}" hint-placeholder-val="{{ true }}">
+              <button class="btn btn-ghost" onClick="{{ toggleMemberships }}" style="align-self:flex-start">{{ moreLabel }}</button>
+            </sc-if>
+          </div>
+
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <sc-for list="{{ detailActions }}" as="a" hint-placeholder-count="5">
+              <button class="btn btn-secondary" onClick="{{ a.run }}">{{ a.label }}</button>
+            </sc-for>
+            <button class="btn btn-ghost" onClick="{{ askDelete }}" style="color:var(--color-accent-200)">Delete…</button>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ noDetail }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:32px;text-align:center;font-size:12.5px;color:var(--color-neutral-500)">Select a row to see details.</div>
+      </sc-if>
+    </aside>
+  </div>
+
+  </sc-if>
+
+  <sc-if value="{{ auditView }}" hint-placeholder-val="{{ false }}">
+  <section style="flex:1;display:flex;flex-direction:column;min-height:0">
+    <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;padding:18px 20px 12px">
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <span style="font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--color-accent-300)">Audit log</span>
+        <h1 style="margin:0;font:500 22px/1.2 var(--font-heading)">Directory changes</h1>
+      </div>
+      <div style="flex:1"></div>
+      <input class="input" placeholder="Search target, operator or reason…" value="{{ auditQuery }}" onChange="{{ setAuditQuery }}" style="flex:0 1 300px;min-width:180px">
+      <button class="btn btn-secondary" onClick="{{ noop }}">Export</button>
+    </div>
+
+    <div style="display:flex;gap:2px;padding:0 20px 10px;flex-wrap:wrap">
+      <sc-for list="{{ auditFilters }}" as="f" hint-placeholder-count="5">
+        <button onClick="{{ f.pick }}" style="border:1px solid {{ f.border }};background:{{ f.bg }};color:{{ f.color }};border-radius:99px;font:500 11.5px/1 var(--font-body);padding:7px 11px;margin-inline-end:6px;cursor:pointer">{{ f.label }}</button>
+      </sc-for>
+    </div>
+
+    <div style="flex:1;overflow:auto;padding:0 20px 24px">
+      <table class="table" style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <thead>
+          <tr>
+            <th style="text-align:left;font-weight:500;color:var(--color-neutral-400);white-space:nowrap">Time</th>
+            <th style="text-align:left;font-weight:500;color:var(--color-neutral-400);white-space:nowrap">Action</th>
+            <th style="text-align:left;font-weight:500;color:var(--color-neutral-400);white-space:nowrap">Target</th>
+            <th style="text-align:left;font-weight:500;color:var(--color-neutral-400);white-space:nowrap">Operator</th>
+            <th style="text-align:left;font-weight:500;color:var(--color-neutral-400);white-space:nowrap">Controller</th>
+            <th style="text-align:left;font-weight:500;color:var(--color-neutral-400)">Reason</th>
+            <th style="text-align:left;font-weight:500;color:var(--color-neutral-400);white-space:nowrap">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{ auditRows }}" as="r" hint-placeholder-count="12">
+            <tr>
+              <td style="white-space:nowrap;color:var(--color-neutral-400)">{{ r.time }}</td>
+              <td style="white-space:nowrap;color:var(--color-text)">{{ r.action }}</td>
+              <td style="white-space:nowrap;color:var(--color-neutral-200)">{{ r.target }}</td>
+              <td style="white-space:nowrap;color:var(--color-neutral-300)">{{ r.operator }}</td>
+              <td style="white-space:nowrap;color:var(--color-neutral-500)">{{ r.dc }}</td>
+              <td style="color:var(--color-neutral-400)">{{ r.reason }}</td>
+              <td style="white-space:nowrap;color:{{ r.resultColor }}">{{ r.result }}</td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      <p style="margin:14px 0 0;font-size:11.5px;color:var(--color-neutral-500)">{{ auditLine }}</p>
+    </div>
+  </section>
+  </sc-if>
+
+  <sc-if value="{{ dialogOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" style="position:fixed;inset:0;background:rgba(9,10,18,.7);display:flex;align-items:center;justify-content:center;padding:24px">
+      <div class="dialog" style="width:100%;max-width:420px;background:var(--color-bg);border:1px solid var(--color-neutral-800);border-radius:8px;box-shadow:var(--shadow-lg);padding:20px;display:flex;flex-direction:column;gap:16px">
+        <h3 class="dialog-title" style="margin:0;font:500 17px/1.3 var(--font-heading)">{{ dialogTitle }}</h3>
+        <p style="margin:0;font-size:12.5px;line-height:1.55;color:var(--color-neutral-400)">{{ dialogBody }}</p>
+        <div class="field">
+          <label for="reason">Reason for audit log</label>
+          <input class="input" id="reason" value="{{ reason }}" onChange="{{ setReason }}" placeholder="Ticket ID or justification" style="width:100%">
+        </div>
+        <div class="dialog-actions" style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn btn-ghost" onClick="{{ closeDialog }}">Cancel</button>
+          <button class="btn btn-primary" onClick="{{ closeDialog }}" disabled="{{ confirmDisabled }}">{{ dialogConfirm }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+const USERS = [
+  ["Dana Levi","dlevi","dana.levi@corp.local","corp.local/HQ/Finance","Finance","Controller","Today 09:12","in 42 days","Enabled","AD",7,"R. Adler"],
+  ["Yossi Barak","ybarak","yossi.barak@corp.local","corp.local/HQ/IT","IT","Systems Engineer","Today 08:41","in 12 days","Enabled","AD",14,"M. Cohen"],
+  ["Noa Shapira","nshapira","noa.shapira@corp.local","corp.local/HQ/IT","IT","Helpdesk","Yesterday 17:55","Expired","Locked out","AD",5,"Y. Barak"],
+  ["Amir Tal","atal","amir.tal@corp.local","corp.local/Sales/EMEA","Sales","Account Executive","3 days ago","in 61 days","Disabled","AD",4,"L. Peretz"],
+  ["Lior Peretz","lperetz","lior.peretz@corp.local","corp.local/Sales","Sales","Regional Director","Today 07:30","in 88 days","Enabled","AD",11,"R. Adler"],
+  ["Maya Cohen","mcohen","maya.cohen@corp.local","corp.local/HQ/IT","IT","IT Manager","Today 09:44","in 21 days","Enabled","AD",19,"R. Adler"],
+  ["Roni Adler","radler","roni.adler@corp.local","corp.local/HQ/Exec","Executive","COO","Today 06:58","in 5 days","Enabled","AD",9,"—"],
+  ["Eitan Mor","emor","eitan.mor@corp.local","corp.local/HQ/Operations","Operations","Contractor","2 weeks ago","n/a","Enabled","AD",2,"M. Cohen"],
+  ["Shira Ben-Ami","sbenami","shira.benami@corp.local","corp.local/HQ/Finance","Finance","Analyst","Today 08:05","in 34 days","Enabled","AD",6,"D. Levi"],
+  ["Tomer Katz","tkatz","tomer.katz@corp.local","corp.local/HQ/External","External","Guest","1 month ago","n/a","Disabled","AD",1,"—"],
+  ["Gal Simon","gsimon","gal.simon@corp.local","corp.local/HQ/Marketing","Marketing","Designer","Yesterday 12:20","in 73 days","Enabled","AD",5,"L. Peretz"],
+  ["Avi Dror","adror","avi.dror@corp.local","corp.local/HQ/IT","IT","DBA","Today 09:01","in 9 days","Enabled","AD",8,"M. Cohen"]
+].map((r,i)=>({id:"u"+i,name:r[0],sam:r[1],upn:r[2],ou:r[3],dept:r[4],title:r[5],logon:r[6],pwd:r[7],status:r[8],source:r[9],groups:r[10],manager:r[11]}));
+
+const GROUPS = [
+  ["Domain Admins","Security · Global","corp.local/Users",4,"AD","Privileged"],
+  ["IT-Helpdesk","Security · Global","corp.local/HQ/IT",12,"AD","Standard"],
+  ["Finance-Reports","Security · Universal","corp.local/HQ/Finance",23,"AD","Standard"],
+  ["Sales-EMEA","Distribution","corp.local/Sales/EMEA",41,"AD","Standard"],
+  ["File-Share-RW","Security · Domain local","corp.local/HQ/IT",57,"AD","Standard"],
+  ["VPN-Users","Security · Global","corp.local/Users",96,"AD","Standard"],
+  ["Contractors","Security · Global","corp.local/HQ/Operations",7,"AD","Restricted"],
+  ["Backup-Operators","Security · Builtin","corp.local/Builtin",3,"AD","Privileged"]
+].map((r,i)=>({id:"g"+i,name:r[0],type:r[1],ou:r[2],members:r[3],source:r[4],scope:r[5]}));
+
+const AUDIT = [
+  ["Today 09:47","Reset password","dlevi","CORP\\mcohen","DC01-HQ","INC-4821 lockout after laptop swap","Success","user"],
+  ["Today 09:31","Add to group","atal → Sales-EMEA","CORP\\lperetz","DC02-HQ","New territory assignment","Success","group"],
+  ["Today 09:12","Unlock account","nshapira","CORP\\mcohen","DC01-HQ","INC-4817 repeated bad password","Success","user"],
+  ["Today 08:58","Disable user","tkatz","CORP\\mcohen","DC01-HQ","Contract ended 26 Jul","Success","user"],
+  ["Today 08:40","Move OU","gsimon → HQ/Marketing","CORP\\adror","DC03-BR","Department transfer CR-2290","Success","user"],
+  ["Today 08:22","Create user","rbenzvi","CORP\\adror","DC01-HQ","Onboarding ticket ONB-771","Success","user"],
+  ["Today 07:55","Remove from group","emor ← VPN-Users","CORP\\mcohen","DC02-HQ","Quarterly access review","Success","group"],
+  ["Yesterday 18:04","Delete group","Temp-Project-X","CORP\\mcohen","DC01-HQ","Project closed, CR-2284","Success","group"],
+  ["Yesterday 17:41","Reset password","sbenami","CORP\\ybarak","DC03-BR","User request, verified by phone","Success","user"],
+  ["Yesterday 16:20","Edit group members","Finance-Reports (+3)","CORP\\dlevi","DC01-HQ","Month-end reporting access","Success","group"],
+  ["Yesterday 15:02","Reset password","radler","CORP\\ybarak","DC02-HQ","Missing MFA confirmation","Denied","user"],
+  ["Yesterday 11:37","Bulk CSV import","24 users","CORP\\adror","DC01-HQ","Interns intake 2026-Q3","Partial","user"],
+  ["Yesterday 10:09","Create group","File-Share-RW","CORP\\adror","DC01-HQ","Share migration CR-2271","Success","group"],
+  ["25 Jul 16:48","Enable user","atal","CORP\\lperetz","DC02-HQ","Returned from leave","Success","user"],
+  ["25 Jul 14:15","Delete user","ohadk","CORP\\mcohen","DC01-HQ","Offboarding OFF-318, 30-day hold passed","Success","user"]
+];
+
+const USER_COLS = [
+  {key:"name",label:"Display name"},{key:"sam",label:"samAccountName"},{key:"upn",label:"UPN / email"},
+  {key:"ou",label:"OU / container"},{key:"status",label:"Status"},{key:"logon",label:"Last logon"},
+  {key:"dept",label:"Department"},{key:"title",label:"Title"},{key:"pwd",label:"Password expiry"},{key:"groups",label:"Groups"},{key:"manager",label:"Manager"}
+];
+const GROUP_COLS = [
+  {key:"name",label:"Group name"},{key:"type",label:"Type / scope"},{key:"ou",label:"Container"},
+  {key:"members",label:"Members"},{key:"scope",label:"Class"}
+];
+
+class Component extends DCLogic {
+  state = {
+    tab:"users", query:"", colsOpen:false,
+    visible:["name","sam","upn","ou","status","logon"],
+    selected:"u0", checked:{}, dialog:null, reason:""
+  };
+
+  list() {
+    const src = this.state.tab === "users" ? USERS : GROUPS;
+    const q = this.state.query.trim().toLowerCase();
+    return src.filter(r =>
+      (!q || Object.values(r).join(" ").toLowerCase().includes(q))
+    );
+  }
+
+  cols() {
+    const isUsers = this.state.tab === "users";
+    return (isUsers ? USER_COLS : GROUP_COLS).filter(c => !isUsers || this.state.visible.includes(c.key));
+  }
+
+  statusColor(v) {
+    if (v === "Locked out") return "var(--color-accent-200)";
+    if (v === "Disabled") return "var(--color-neutral-500)";
+    return "var(--color-neutral-200)";
+  }
+
+  renderVals() {
+    const s = this.state, isUsers = s.tab === "users";
+    const rows = this.list(), cols = this.cols();
+    const sel = rows.find(r => r.id === s.selected) || (isUsers ? USERS : GROUPS).find(r => r.id === s.selected);
+    const checkedIds = Object.keys(s.checked).filter(k => s.checked[k]);
+
+    const detailFields = sel ? (isUsers ? [
+      ["samAccountName", sel.sam], ["UPN", sel.upn], ["OU / container", sel.ou],
+      ["Department", sel.dept], ["Title", sel.title], ["Manager", sel.manager],
+      ["Last logon", sel.logon], ["Password expiry", sel.pwd]
+    ] : [
+      ["Type / scope", sel.type], ["Container", sel.ou], ["Members", String(sel.members)],
+      ["Class", sel.scope], ["Managed by", "M. Cohen"], ["Created", "12 Mar 2024"]
+    ]) : [];
+
+    const af = s.auditFilter || "All", aq = (s.auditQuery || "").trim().toLowerCase();
+    const auditRows = AUDIT.filter(r =>
+      (af === "All" || (af === "Users" && r[7] === "user") || (af === "Groups" && r[7] === "group")
+        || (af === "Passwords" && /password/i.test(r[1])) || (af === "Deletions" && /delet/i.test(r[1]))) &&
+      (!aq || r.join(" ").toLowerCase().includes(aq))
+    );
+
+    const memberList = isUsers
+      ? [["IT-Helpdesk","Security"],["VPN-Users","Security"],["Finance-Reports","Universal"],["File-Share-RW","Domain local"],["Domain Users","Default"],["Sales-EMEA","Distribution"],["Backup-Operators","Builtin"],["Contractors","Security"]]
+      : [["D. Levi","dlevi"],["Y. Barak","ybarak"],["M. Cohen","mcohen"],["A. Dror","adror"],["N. Shapira","nshapira"],["S. Ben-Ami","sbenami"],["G. Simon","gsimon"]];
+
+    return {
+      entityPlural: isUsers ? "users" : "groups",
+      createLabel: isUsers ? "New user" : "New group",
+      usersColor: isUsers ? "var(--color-text)" : "var(--color-neutral-500)",
+      groupsColor: s.tab === "groups" ? "var(--color-text)" : "var(--color-neutral-500)",
+      usersUnderline: isUsers ? "var(--color-accent)" : "transparent",
+      groupsUnderline: s.tab === "groups" ? "var(--color-accent)" : "transparent",
+      directoryView: s.tab !== "audit",
+      auditView: s.tab === "audit",
+      menuAudit: () => this.setState({ menuOpen:false, tab:"audit" }),
+      auditQuery: s.auditQuery || "",
+      setAuditQuery: e => this.setState({ auditQuery: e.target.value }),
+      auditFilters: ["All","Users","Groups","Passwords","Deletions"].map(label => {
+        const on = (s.auditFilter || "All") === label;
+        return { label, pick: () => this.setState({ auditFilter: label }),
+          bg: on ? "var(--color-accent-900)" : "transparent",
+          border: on ? "var(--color-accent-700)" : "var(--color-neutral-800)",
+          color: on ? "var(--color-accent-200)" : "var(--color-neutral-400)" };
+      }),
+      auditRows: auditRows.map(r => ({
+        time:r[0], action:r[1], target:r[2], operator:r[3], dc:r[4], reason:r[5], result:r[6],
+        resultColor: r[6] === "Success" ? "var(--color-neutral-300)" : "var(--color-accent-200)"
+      })),
+      auditLine: auditRows.length + " of " + AUDIT.length + " entries · retained 400 days",
+      menuOpen: !!s.menuOpen,
+      toggleMenu: () => this.setState({ menuOpen: !s.menuOpen }),
+      closeMenu: () => this.setState({ menuOpen: false }),
+      menuUsers: () => this.setState({ menuOpen:false, tab:"users", selected:"u0", checked:{} }),
+      menuGroups: () => this.setState({ menuOpen:false, tab:"groups", selected:"g0", checked:{} }),
+      showUsers: () => this.setState({ tab:"users", selected:"u0", checked:{}, colsOpen:false }),
+      showGroups: () => this.setState({ tab:"groups", selected:"g0", checked:{}, colsOpen:false }),
+
+      query: s.query,
+      setQuery: e => this.setState({ query: e.target.value }),
+
+      colsOpen: s.colsOpen && isUsers,
+      toggleCols: () => this.setState({ colsOpen: !s.colsOpen }),
+      allColumns: USER_COLS.map(c => {
+        const on = s.visible.includes(c.key);
+        return { label:c.label,
+          bg: on ? "var(--color-accent-900)" : "transparent",
+          border: on ? "var(--color-accent-700)" : "var(--color-neutral-800)",
+          color: on ? "var(--color-accent-200)" : "var(--color-neutral-400)",
+          toggle: () => this.setState({ visible: on ? s.visible.filter(k => k !== c.key) : s.visible.concat(c.key) }) };
+      }),
+
+      columns: cols,
+      rows: rows.map(r => ({
+        checked: !!s.checked[r.id],
+        check: e => { e.stopPropagation(); this.setState({ checked: Object.assign({}, s.checked, { [r.id]: !s.checked[r.id] }) }); },
+        select: () => this.setState({ selected: r.id }),
+        bg: r.id === s.selected ? "var(--color-neutral-900)" : "transparent",
+        cells: cols.map(c => ({
+          text: String(r[c.key]),
+          color: c.key === "status" ? this.statusColor(r.status)
+            : c.key === "name" ? "var(--color-text)" : "var(--color-neutral-300)"
+        }))
+      })),
+      allChecked: rows.length > 0 && rows.every(r => s.checked[r.id]),
+      toggleAll: () => {
+        const all = rows.every(r => s.checked[r.id]);
+        const next = Object.assign({}, s.checked);
+        rows.forEach(r => next[r.id] = !all);
+        this.setState({ checked: next });
+      },
+      hasSelection: checkedIds.length > 0,
+      selectedCount: checkedIds.length,
+      resultLine: rows.length + " of " + (isUsers ? USERS.length : GROUPS.length) + " " + (isUsers ? "users" : "groups"),
+
+      hasDetail: !!sel,
+      noDetail: !sel,
+      detailKicker: isUsers ? "User" : "Group",
+      detailTitle: sel ? sel.name : "",
+      detailSource: sel ? (isUsers ? sel.ou.split("/").pop() : sel.type.split(" · ").pop()) : "",
+      detailStatus: sel ? (isUsers ? sel.status : sel.members + " members") : "",
+      detailFields: detailFields.map(([label, value]) => ({
+        label, value,
+        color: label === "UPN" ? "var(--color-accent-300)" : "var(--color-neutral-200)"
+      })),
+      membershipLabel: isUsers ? "Group memberships" : "Sample members",
+      memberships: memberList.slice(0, s.showAllMembers ? memberList.length : 5).map(m => ({ name:m[0], meta:m[1] })),
+      hasMoreMemberships: memberList.length > 5,
+      moreLabel: s.showAllMembers ? "Show less" : "Show more (" + (memberList.length - 5) + ")",
+      toggleMemberships: () => this.setState({ showAllMembers: !s.showAllMembers }),
+      detailActions: (isUsers
+        ? ["Reset password","Unlock","Disable","Move OU","Add to group"]
+        : ["Edit members","Rename","Move OU","Export members"]
+      ).map(label => ({ label, run: () => this.setState({ dialog: label, reason: "" }) })),
+
+      dialogOpen: !!s.dialog,
+      dialogTitle: s.dialog === "Delete" ? "Delete " + (sel ? sel.name : "") : (s.dialog || "") + (sel ? " — " + sel.name : ""),
+      dialogBody: s.dialog === "Delete"
+        ? "This removes the object from the directory. Deletions are replicated to all controllers and recorded in the audit log."
+        : "This change is written to the directory and recorded in the audit log with your account and the reason below.",
+      dialogConfirm: s.dialog === "Delete" ? "Delete" : "Apply",
+      confirmDisabled: !s.reason.trim(),
+      reason: s.reason,
+      setReason: e => this.setState({ reason: e.target.value }),
+      askDelete: e => { if (e && e.stopPropagation) e.stopPropagation(); this.setState({ dialog: "Delete", reason: "" }); },
+      closeDialog: () => this.setState({ dialog: null, reason: "" }),
+      openCreate: () => this.setState({ dialog: isUsers ? "Create user" : "Create group", reason: "" }),
+      openImport: () => this.setState({ dialog: "Bulk CSV import", reason: "" }),
+      noop: () => {}
+    };
+  }
+}
+</script>
+</body>
+</html>

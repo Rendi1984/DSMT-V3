@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/styles.css">
+<script src="_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/_ds_bundle.js"></script>
+<style>html,body{margin:0;height:100%}a{color:var(--color-accent-300);text-decoration:none}a:hover{color:var(--color-accent)}</style>
+</helmet>
+<div dir="ltr" style="min-height:100vh;display:grid;grid-template-columns:1.4fr 1fr;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)">
+  <div style="position:relative;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:0;padding:48px;padding-bottom:190px;overflow:hidden;border-inline-end:1px solid var(--color-neutral-800)">
+    <img src="uploads/Gemini_Generated_Image_w5zx38w5zx38w5zx.png" alt="DSMT — Directory Service Management Tool" style="position:relative;width:100%;max-width:960px;mix-blend-mode:lighten;-webkit-mask-image:radial-gradient(closest-side ellipse at 50% 50%, #000 50%, transparent 90%);mask-image:radial-gradient(closest-side ellipse at 50% 50%, #000 50%, transparent 90%)">
+    <p style="position:relative;margin:-68px 0 0;max-width:50ch;text-align:center;font:400 15px/1.6 var(--font-body);color:var(--color-neutral-300)">One console for directory operations — users, groups, DNS and policy, across every domain controller you run.</p>
+    <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(120% 90% at 30% 35%, rgba(145,132,217,0.13), transparent 62%)"></div>
+    <div style="position:absolute;inset-inline:0;bottom:0;height:1px;background:linear-gradient(90deg,transparent,var(--color-accent-700) 30%,var(--color-accent-700) 70%,transparent)"></div>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:center;padding:var(--space-8, 40px)">
+    <form style="width:100%;max-width:340px;display:flex;flex-direction:column;gap:20px" onSubmit="{{ submit }}">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <span style="font:500 11px/1 var(--font-body);letter-spacing:.14em;text-transform:uppercase;color:var(--color-accent-300)">DSMT</span>
+        <h1 style="margin:0;font:500 28px/1.2 var(--font-heading)">Sign in</h1>
+        <p style="margin:0;font-size:13px;color:var(--color-neutral-400)">Use your domain account to continue.</p>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="field">
+          <label for="user">Username</label>
+          <input class="input" id="user" name="user" autocomplete="username" placeholder="DOMAIN\username" dir="ltr" style="width:100%">
+        </div>
+        <div class="field">
+          <label for="pw">Password</label>
+          <input class="input" id="pw" name="pw" type="password" autocomplete="current-password" placeholder="••••••••" dir="ltr" style="width:100%">
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12.5px">
+        <label style="display:flex;align-items:center;gap:8px;color:var(--color-neutral-300);cursor:pointer">
+          <input type="checkbox" style="accent-color:var(--color-accent);width:14px;height:14px">Remember me
+        </label>
+        <a href="#">Forgot password?</a>
+      </div>
+
+      <a class="btn btn-primary btn-block" href="DSMT Console.dc.html" style="text-align:center">Sign in</a>
+
+      <div style="height:1px;background:linear-gradient(90deg,transparent,var(--color-neutral-800) 20%,var(--color-neutral-800) 80%,transparent)"></div>
+      <p style="margin:0;font-size:11.5px;color:var(--color-neutral-500);display:flex;align-items:center;gap:7px">
+        <span style="width:5px;height:5px;border-radius:50%;background:var(--color-accent);box-shadow:0 0 8px var(--color-accent)"></span>
+        Secure connection · Directory Service Management Tool
+      </p>
+    </form>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    return { submit: (e) => e.preventDefault() };
+  }
+}
+</script>
+</body>
+</html>
