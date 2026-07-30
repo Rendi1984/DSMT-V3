@@ -54,6 +54,25 @@
     with no internet access, where Add-WindowsCapability cannot fetch RSAT.
 .PARAMETER InstallScheduledTask
     Register a scheduled task that starts DSMT at boot under -ServiceAccount.
+    The task is configured to run whether or not anyone is signed in, with no
+    execution time limit, and to restart itself if it fails.
+.PARAMETER InstallAsService
+    Register DSMT as a real Windows service instead of a scheduled task, so it
+    responds to Get-Service / Start-Service / Restart-Service and to the
+    service manager's recovery settings.
+
+    PowerShell cannot be a service directly - the service control manager
+    terminates any process that does not answer its protocol - so the
+    installer compiles a small C# host (DsmtService.exe) with the csc.exe that
+    ships with the .NET Framework, and that host runs Start-DSMT.ps1 as a child
+    process. Nothing is downloaded.
+
+    If -ServiceAccount is given you are prompted for its password, because the
+    service control manager has to store it. Without it the service runs as
+    LocalSystem, which reaches AD and SQL as the computer account.
+.PARAMETER StartWhenDone
+    Start DSMT as soon as the installation finishes - the service, the
+    scheduled task, or a plain background process, whichever was set up.
 .PARAMETER NoElevate
     Do not attempt to re-launch elevated. The steps that need administrator
     rights will be reported as failures instead.
@@ -84,6 +103,8 @@ param(
     [string] $SqlExpressSetup = '',
     [string] $FeatureSource = '',
     [switch] $InstallScheduledTask,
+    [switch] $InstallAsService,
+    [switch] $StartWhenDone,
     [switch] $NoElevate
 )
 
@@ -532,39 +553,204 @@ if ($ListenAddress -eq 'localhost') {
 # 10. Scheduled task
 # ---------------------------------------------------------------------------
 
-Write-Step 'Start at boot (scheduled task)'
+Write-Step 'Start automatically'
 
-if (-not $InstallScheduledTask) {
-    Write-Skip 'Not requested. Re-run with -InstallScheduledTask to register it.'
-} elseif (-not (Test-IsAdmin)) {
-    Write-Fail 'Needs administrator rights.' 'Re-run this installer elevated.'
-} else {
-    $taskName  = 'DSMT Console'
-    $startPath = Join-Path $scriptDir 'Start-DSMT.ps1'
+$script:StartMode = 'none'          # none | task | service
+$serviceName = 'DSMT'
+$startPath   = Join-Path $scriptDir 'Start-DSMT.ps1'
+$serviceExe  = Join-Path $scriptDir 'DsmtService.exe'
 
-    $argument = '-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"'
-    $argument += ' -Domain ' + $Domain + ' -Port ' + $Port + ' -ListenAddress ' + $ListenAddress
-    if ($sqlReady) { $argument += ' -SqlServer "' + $sqlTarget + '" -SqlDatabase ' + $SqlDatabase }
+# Start-DSMT.ps1 reads config\dsmt.config.json, written a step later, so
+# neither the task nor the service needs the settings on its command line.
+$startArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"'
 
-    try {
-        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-        if ($null -ne $existingTask) {
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
-            Write-Info 'Replaced the existing task'
-        }
+if ($InstallAsService) {
 
-        $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
-        $trigger = New-ScheduledTaskTrigger -AtStartup
+    if (-not (Test-IsAdmin)) {
+        Write-Fail 'Registering a service needs administrator rights.' 'Re-run this installer elevated.'
+    } else {
+        try {
+            # --- stop and remove any previous registration -----------------
+            $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($null -ne $existingService) {
+                if ($existingService.Status -ne 'Stopped') {
+                    Stop-Service -Name $serviceName -Force -ErrorAction Stop
+                    Write-Info 'Stopped the running service'
+                }
+                & sc.exe delete $serviceName | Out-Null
+                Start-Sleep -Seconds 2
+                Write-Info 'Removed the previous service registration'
+            }
 
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-                               -User $runAccount -RunLevel Limited -ErrorAction Stop | Out-Null
+            # --- compile the service host ---------------------------------
+            # PowerShell cannot be a service itself: the SCM kills any process
+            # that does not answer its protocol within the start timeout. This
+            # tiny host answers it and runs Start-DSMT.ps1 as a child. When the
+            # child dies the host stops with a non-zero exit code, so the SCM
+            # recovery settings below restart it.
+            $csharp = @'
+using System;
+using System.Diagnostics;
+using System.ServiceProcess;
 
-        Write-Ok ('Registered "' + $taskName + '" to start at boot as ' + $runAccount)
-        Write-Warn2 'A task running under a domain account needs that account''s password stored by Task Scheduler, or the "Log on as a batch job" right. Open the task once to confirm it is configured as you expect.'
-    } catch {
-        Write-Fail ('Could not register the scheduled task: ' + $_.Exception.Message) `
-                   'Register it manually - the command line is in docs\deployment-guide.html, step 11.'
+public class DsmtServiceHost : ServiceBase
+{
+    private Process child;
+    private bool stopping;
+
+    public DsmtServiceHost()
+    {
+        this.ServiceName = "DSMT";
+        this.CanStop = true;
+        this.CanShutdown = true;
     }
+
+    protected override void OnStart(string[] args)
+    {
+        stopping = false;
+
+        ProcessStartInfo info = new ProcessStartInfo();
+        info.FileName = "powershell.exe";
+        info.Arguments = @"__ARGUMENTS__";
+        info.WorkingDirectory = @"__WORKDIR__";
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+
+        child = new Process();
+        child.StartInfo = info;
+        child.EnableRaisingEvents = true;
+        child.Exited += new EventHandler(OnChildExited);
+        child.Start();
+    }
+
+    private void OnChildExited(object sender, EventArgs e)
+    {
+        if (stopping) { return; }
+        // The console died on its own. Report failure so the service manager
+        // applies its recovery actions instead of leaving a service that
+        // claims to be running with nothing behind it.
+        this.ExitCode = 1;
+        this.Stop();
+    }
+
+    protected override void OnStop()
+    {
+        stopping = true;
+        try
+        {
+            if (child != null && !child.HasExited)
+            {
+                child.Kill();
+                child.WaitForExit(15000);
+            }
+        }
+        catch { }
+    }
+
+    protected override void OnShutdown()
+    {
+        OnStop();
+    }
+
+    public static void Main()
+    {
+        ServiceBase.Run(new DsmtServiceHost());
+    }
+}
+'@
+            # The C# uses verbatim string literals, where a double quote is
+            # escaped by doubling it.
+            $csharp = $csharp.Replace('__ARGUMENTS__', $startArguments.Replace('"', '""'))
+            $csharp = $csharp.Replace('__WORKDIR__', $repoRoot)
+
+            if (Test-Path -LiteralPath $serviceExe) { Remove-Item -LiteralPath $serviceExe -Force }
+
+            Add-Type -TypeDefinition $csharp -Language CSharp `
+                     -OutputAssembly $serviceExe -OutputType ConsoleApplication `
+                     -ReferencedAssemblies 'System.ServiceProcess' -ErrorAction Stop
+
+            Write-Ok ('Compiled the service host: ' + $serviceExe)
+
+            # --- register --------------------------------------------------
+            $newService = @{
+                Name           = $serviceName
+                BinaryPathName = ('"' + $serviceExe + '"')
+                DisplayName    = 'DSMT - Directory Service Management Tool'
+                Description    = 'Serves the DSMT web console for Active Directory operations.'
+                StartupType    = 'Automatic'
+            }
+
+            if ($ServiceAccount) {
+                Write-Info ('Enter the password for ' + $ServiceAccount + ' - the service manager has to store it.')
+                $svcCred = Get-Credential -UserName $ServiceAccount -Message 'Password for the DSMT service account'
+                if ($null -eq $svcCred) {
+                    throw 'No credential was supplied, so the service cannot run under that account.'
+                }
+                $newService.Credential = $svcCred
+            }
+
+            New-Service @newService -ErrorAction Stop | Out-Null
+
+            if ($ServiceAccount) {
+                Write-Ok ('Registered service "' + $serviceName + '" running as ' + $ServiceAccount)
+            } else {
+                Write-Ok ('Registered service "' + $serviceName + '" running as LocalSystem')
+                Write-Warn2 'As LocalSystem it reaches AD and SQL as the computer account. Grant that account SQL rights, or re-run with -ServiceAccount.'
+            }
+
+            # Restart after 5s, then 10s, then every 30s; reset the counter daily.
+            & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+            Write-Ok 'Recovery configured: restart automatically on failure'
+
+            $script:StartMode = 'service'
+
+        } catch {
+            Write-Fail ('Could not register the service: ' + $_.Exception.Message) `
+                       'Use -InstallScheduledTask instead, or register the service manually.'
+        }
+    }
+
+} elseif ($InstallScheduledTask) {
+
+    if (-not (Test-IsAdmin)) {
+        Write-Fail 'Needs administrator rights.' 'Re-run this installer elevated.'
+    } else {
+        $taskName = 'DSMT Console'
+        try {
+            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($null -ne $existingTask) {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+                Write-Info 'Replaced the existing task'
+            }
+
+            $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $startArguments
+            $trigger = New-ScheduledTaskTrigger -AtStartup
+
+            # A console that must stay up needs all three of these: no time
+            # limit (the default stops it after 72 hours), restart on failure,
+            # and no dependency on mains power for laptops.
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                            -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+                            -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable
+
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+                                   -Settings $settings -User $runAccount -RunLevel Limited `
+                                   -Description 'Starts the DSMT web console at boot.' -ErrorAction Stop | Out-Null
+
+            Write-Ok ('Registered "' + $taskName + '" to start at boot as ' + $runAccount)
+            Write-Info 'Configured to run whether or not anyone is signed in, with no time limit and restart on failure.'
+            Write-Warn2 'A task running under a domain account needs that account''s password stored by Task Scheduler, or the "Log on as a batch job" right. Open the task once to confirm it is configured as you expect.'
+
+            $script:StartMode = 'task'
+
+        } catch {
+            Write-Fail ('Could not register the scheduled task: ' + $_.Exception.Message) `
+                       'Register it manually - the command line is in docs\deployment-guide.html, step 11.'
+        }
+    }
+
+} else {
+    Write-Skip 'Not requested. Use -InstallScheduledTask for a boot-time task, or -InstallAsService for a Windows service.'
 }
 
 # ---------------------------------------------------------------------------
@@ -599,7 +785,55 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# 12. Summary
+# 12. Start it
+# ---------------------------------------------------------------------------
+
+Write-Step 'Start DSMT'
+
+if (-not $StartWhenDone) {
+    Write-Skip 'Not requested. Re-run with -StartWhenDone to start it as soon as the install finishes.'
+} elseif ($script:Outstanding.Count -gt 0) {
+    Write-Skip 'Skipped - fix the outstanding items first, then start it.'
+} else {
+    try {
+        switch ($script:StartMode) {
+
+            'service' {
+                Start-Service -Name $serviceName -ErrorAction Stop
+                Start-Sleep -Seconds 3
+                $svc = Get-Service -Name $serviceName
+                if ($svc.Status -eq 'Running') {
+                    Write-Ok ('Service "' + $serviceName + '" is running')
+                } else {
+                    Write-Fail ('The service is ' + $svc.Status + ' rather than Running.') `
+                               ('Check ' + (Join-Path $dataPath 'dsmt-*.log') + ' - the preflight failure is recorded there.')
+                }
+            }
+
+            'task' {
+                Start-ScheduledTask -TaskName 'DSMT Console' -ErrorAction Stop
+                Start-Sleep -Seconds 3
+                Write-Ok 'Scheduled task started'
+                Write-Info ('If the console does not answer, check ' + (Join-Path $dataPath 'dsmt-*.log'))
+            }
+
+            default {
+                # No service and no task: run it in its own window so closing
+                # this installer does not take the console down with it.
+                Start-Process -FilePath 'powershell.exe' `
+                              -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"') `
+                              -WorkingDirectory $repoRoot | Out-Null
+                Write-Ok 'Started in a new PowerShell window'
+            }
+        }
+    } catch {
+        Write-Fail ('Could not start DSMT: ' + $_.Exception.Message) `
+                   ('Start it by hand: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"')
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 13. Summary
 # ---------------------------------------------------------------------------
 
 Write-Host ''
@@ -608,8 +842,24 @@ Write-Host '  ---------------------------------------------------------------' -
 if ($script:Outstanding.Count -eq 0) {
     Write-Host '  Installation complete. Nothing outstanding.' -ForegroundColor Green
     Write-Host ''
-    Write-Host '  Start the console with:' -ForegroundColor White
-    Write-Host ('    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $scriptDir 'Start-DSMT.ps1') + '"') -ForegroundColor Cyan
+
+    switch ($script:StartMode) {
+        'service' {
+            Write-Host '  DSMT is registered as a Windows service. Manage it with:' -ForegroundColor White
+            Write-Host ('    Get-Service ' + $serviceName) -ForegroundColor Cyan
+            Write-Host ('    Start-Service ' + $serviceName + '   /   Restart-Service ' + $serviceName) -ForegroundColor Cyan
+        }
+        'task' {
+            Write-Host '  DSMT starts at boot as a scheduled task. Manage it with:' -ForegroundColor White
+            Write-Host '    Get-ScheduledTask "DSMT Console"' -ForegroundColor Cyan
+            Write-Host '    Start-ScheduledTask "DSMT Console"   /   Stop-ScheduledTask "DSMT Console"' -ForegroundColor Cyan
+        }
+        default {
+            Write-Host '  Start the console with:' -ForegroundColor White
+            Write-Host ('    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"') -ForegroundColor Cyan
+        }
+    }
+
     Write-Host ''
     Write-Host ('  Then open  http://localhost:' + $Port + '/  and sign in with a domain account.') -ForegroundColor Cyan
     Write-Host '  There is no default account: any valid account in the domain can sign in,' -ForegroundColor DarkGray

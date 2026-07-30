@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.3.0` — matches the top entry of `CHANGELOG.md` and
+`1.4.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -42,6 +42,14 @@ its data is fabricated and every button is inert.
    - `Register-ScheduledTask -User <domain account>` without a stored
      password: it may need "Log on as a batch job" or an interactive password
      prompt. The installer warns about this but cannot verify it.
+   - **`-InstallAsService`**: the C# host is compiled at install time with
+     `Add-Type -OutputAssembly -OutputType ConsoleApplication`. Confirm the
+     compile succeeds on the target's .NET Framework, that the service starts
+     within the SCM timeout, that killing the child PowerShell triggers a
+     recovery restart, and that `Stop-Service` actually takes the child down
+     rather than orphaning it.
+   - Under service or task there is no console: confirm a deliberate failure
+     (e.g. a wrong `-SqlServer`) really does show up in `data\dsmt-*.log`.
    - That `config/dsmt.config.json` is written where the run account can read
      it, and that `Start-DSMT.ps1` then starts with no parameters.
 
