@@ -310,6 +310,10 @@ function Invoke-DsmtApi {
                 serviceUser = ($env:USERDOMAIN + '\' + $env:USERNAME)
                 accountKind = $cfg.AccountKind
             }
+            # The browser needs this to run its own idle countdown, so the
+            # operator is warned before the server drops them rather than
+            # discovering it on their next click.
+            sessionMinutes = $cfg.SessionMinutes
             storage = @{
                 sqlEnabled  = $sql.Enabled
                 sqlServer   = $sql.Server
@@ -369,10 +373,11 @@ function Invoke-DsmtApi {
 
     if ($Path -eq '/api/session' -and $method -eq 'GET') {
         Send-DsmtJson -Response $Response -Data @{
-            ok        = $true
-            version   = $cfg.Version
-            publisher = $cfg.Publisher
-            user      = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
+            ok             = $true
+            version        = $cfg.Version
+            publisher      = $cfg.Publisher
+            sessionMinutes = $cfg.SessionMinutes
+            user           = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
         }
         return
     }
@@ -397,7 +402,7 @@ function Invoke-DsmtApi {
                         server        = $cfg.Server
                         port          = $cfg.Port
                         listenAddress = $cfg.ListenAddress
-                        sessionHours  = $cfg.SessionHours
+                        sessionMinutes = $cfg.SessionMinutes
                         pageSize      = $cfg.PageSize
                         dataPath      = $cfg.DataPath
                         sqlEnabled    = $sql.Enabled
@@ -405,6 +410,47 @@ function Invoke-DsmtApi {
                         sqlDatabase   = $sql.Database
                         sqlError      = $sql.LastError
                     }
+                }
+                return
+            }
+
+            '^/api/settings/session$' {
+                if ($method -ne 'POST') { break }
+
+                $body = Read-DsmtBody -Request $Request
+                $raw  = Get-DsmtBodyValue -Body $body -Name 'sessionMinutes' -Default 0
+
+                $minutes = 0
+                if (-not [int]::TryParse([string]$raw, [ref] $minutes)) {
+                    Send-DsmtError -Response $Response -Message 'The idle timeout must be a whole number of minutes.' -StatusCode 400
+                    return
+                }
+
+                # 1 minute is short but legitimate for a kiosk; a week is the
+                # upper bound because past that the timeout is not a control.
+                if ($minutes -lt 1 -or $minutes -gt 10080) {
+                    Send-DsmtError -Response $Response -Message 'The idle timeout must be between 1 minute and 10080 minutes (7 days).' -StatusCode 400
+                    return
+                }
+
+                $previous = $cfg.SessionMinutes
+                $script:DsmtConfig.SessionMinutes = $minutes
+
+                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ SessionMinutes = $minutes }
+
+                Write-DsmtAudit -Action 'Change idle timeout' -Target ($previous + ' -> ' + $minutes + ' minutes') `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session'
+
+                Write-DsmtLog -Message ($session.Account + ' changed the idle timeout from ' + $previous + ' to ' + $minutes + ' minutes')
+
+                # Applies to every session immediately, including ones already
+                # open: the check is made against this value on each request.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok             = $true
+                    sessionMinutes = $minutes
+                    persisted      = $saved.Ok
+                    persistError   = $saved.Error
                 }
                 return
             }

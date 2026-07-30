@@ -20,7 +20,13 @@
     that requires an administrative shell or a one-time URL ACL reservation:
       netsh http add urlacl url=http://+:8080/ user="DOMAIN\dsmt-svc"
 .PARAMETER SessionHours
-    Idle lifetime of an operator session. Default 8.
+    Idle lifetime of an operator session, in hours. Kept for compatibility;
+    -SessionMinutes is the finer-grained form and wins if both are given.
+.PARAMETER SessionMinutes
+    Idle lifetime of an operator session, in minutes. Default 480 (8 hours).
+    An operator who does not touch the console for this long is signed out;
+    the browser warns them a minute before it happens. Changeable at runtime
+    from Settings, without a restart.
 .PARAMETER PageSize
     Maximum objects returned by one directory search. Default 500.
 .PARAMETER IdentityMode
@@ -69,6 +75,7 @@ param(
     [int]    $Port = 8080,
     [ValidateSet('localhost', 'any')][string] $ListenAddress = 'localhost',
     [int]    $SessionHours = 8,
+    [int]    $SessionMinutes = 0,
     [int]    $PageSize = 500,
     [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
     [string] $SqlServer = '',
@@ -93,7 +100,7 @@ $repoRoot  = Split-Path -Parent $scriptDir
 # command line. An explicit parameter always wins over the saved file.
 $saved = Get-DsmtSavedSettings -RootPath $repoRoot
 if ($null -ne $saved) {
-    foreach ($name in @('Domain', 'Server', 'Port', 'ListenAddress', 'SessionHours', 'PageSize', 'IdentityMode', 'SqlServer', 'SqlDatabase')) {
+    foreach ($name in @('Domain', 'Server', 'Port', 'ListenAddress', 'SessionHours', 'SessionMinutes', 'PageSize', 'IdentityMode', 'SqlServer', 'SqlDatabase')) {
         if ($PSBoundParameters.ContainsKey($name)) { continue }
 
         $prop = $saved.PSObject.Properties[$name]
@@ -106,8 +113,8 @@ if ($null -ne $saved) {
 }
 
 Initialize-DsmtConfig -RootPath $repoRoot -Domain $Domain -Server $Server -Port $Port `
-                      -ListenAddress $ListenAddress -SessionHours $SessionHours -PageSize $PageSize `
-                      -IdentityMode $IdentityMode
+                      -ListenAddress $ListenAddress -SessionHours $SessionHours -SessionMinutes $SessionMinutes `
+                      -PageSize $PageSize -IdentityMode $IdentityMode
 
 # Which account the installer registered this to run as, and of what kind.
 # Recorded for display only - what the process is actually running as is
@@ -213,6 +220,7 @@ if ($cfg.IdentityMode -eq 'hybrid') {
 } else {
     Write-Host '  Identity mode: operator - every read and write runs as the signed-in operator' -ForegroundColor DarkGray
 }
+Write-Host ('  Idle timeout: ' + $cfg.SessionMinutes + ' minutes') -ForegroundColor DarkGray
 Write-Host ('  Audit log: ' + $cfg.DataPath) -ForegroundColor DarkGray
 Write-Host '  Ctrl+C to stop.' -ForegroundColor DarkGray
 Write-Host ''

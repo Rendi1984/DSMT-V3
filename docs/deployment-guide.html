@@ -881,6 +881,29 @@ jdoe</code></pre>
   </p>
 </div>
 
+<h3>8.3a Idle timeout</h3>
+<p>
+  Separately from the refresh behaviour above, an operator who <strong>stops
+  using</strong> the console is signed out. The default is 480 minutes
+  (8 hours); change it in <strong>Settings</strong>, or at startup with
+  <code>-SessionMinutes</code>.
+</p>
+<ul>
+  <li>One minute before it expires, a dialog appears with a live countdown and
+      a <strong>Stay signed in</strong> button.</li>
+  <li>Any real interaction - a click, a keypress, a scroll - resets the clock
+      and dismisses the warning.</li>
+  <li><strong>Only genuine interaction counts.</strong> A page left open does
+      not keep itself alive; if it did, the timeout would mean nothing.</li>
+  <li>A change made in Settings applies to sessions that are <strong>already
+      open</strong>, not only to new ones.</li>
+</ul>
+<p>
+  The server is the enforcement - it drops a session that has not been used,
+  and nothing the browser does extends that. The countdown exists so an
+  operator is warned rather than discovering it as a failed action mid-task.
+</p>
+
 <h3>8.4 Finding your way around</h3>
 <table>
   <tr><th>Where</th><th>What it is</th></tr>
@@ -1237,7 +1260,8 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td><code>-Server</code></td><td>Auto-discover</td><td>Pin to a specific DC (FQDN)</td></tr>
   <tr><td><code>-Port</code></td><td><code>8080</code></td><td>Listening port</td></tr>
   <tr><td><code>-ListenAddress</code></td><td><code>localhost</code></td><td><code>localhost</code> or <code>any</code></td></tr>
-  <tr><td><code>-SessionHours</code></td><td><code>8</code></td><td>Idle session lifetime</td></tr>
+  <tr><td><code>-SessionMinutes</code></td><td><code>480</code></td><td>Idle timeout in minutes. Changeable at runtime in Settings</td></tr>
+  <tr><td><code>-SessionHours</code></td><td><code>8</code></td><td>The same setting in hours, kept for compatibility. <code>-SessionMinutes</code> wins if both are given</td></tr>
   <tr><td><code>-PageSize</code></td><td><code>500</code></td><td>Search result cap</td></tr>
   <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code></td></tr>
   <tr><td><code>-SqlServer</code></td><td>(empty)</td><td>SQL instance. Empty = no SQL</td></tr>

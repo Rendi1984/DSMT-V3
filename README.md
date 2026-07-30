@@ -70,8 +70,6 @@ port, optionally registers a boot-time scheduled task, and writes
 parameters. Each step prints `[ok]` / `[skip]` / `[FAIL]`, and the summary
 lists anything still outstanding with the fix for it.
 
-Three things it deliberately does not do:
-
 ### Which account DSMT runs as
 
 `-ServiceAccount` accepts four forms and classifies them automatically:
@@ -112,6 +110,8 @@ can see — stated in Settings next to the control, not buried here.
 **Writes stay on the operator in both modes.** That is what makes the domain
 controller's own security log name the person who made each change, and no
 tool can fake that after the fact.
+
+### Three things the installer deliberately does not do
 
 | Not automated | Why | What to do |
 | --- | --- | --- |
@@ -225,6 +225,12 @@ Audit
   time, or a custom range. Applied inside the SQL query, so the count is the
   true number in that window
 - Category filter chips, free-text search, CSV export
+
+Sessions
+
+- Idle timeout, default 8 hours, configurable in Settings and applied to
+  sessions already open. The browser warns a minute before with a countdown;
+  only genuine interaction resets the clock
 
 Settings and notifications
 

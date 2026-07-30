@@ -13,6 +13,44 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.6.0 — 2026-07-30
+Idle timeout: an operator who stops using the console is signed out, with a
+warning first, and the period is configurable from Settings.
+
+**Server** (`DsmtCommon.ps1`, `DsmtSession.ps1`, `DsmtHttp.ps1`,
+`Start-DSMT.ps1`):
+- The timeout is now held in **minutes, in one field** (`SessionMinutes`,
+  default 480). `-SessionHours` still works and is converted at startup rather
+  than stored alongside — two fields meaning the same thing is how they end up
+  disagreeing.
+- `-SessionMinutes` on `Start-DSMT.ps1`, saved in `config\dsmt.config.json`.
+- `POST /api/settings/session` changes it at runtime, audited, persisted, and
+  **applied to sessions that are already open** — the check is made against
+  the current value on every request, not captured when the session started.
+  Accepted range 1 minute to 7 days; anything else is a 400.
+- `/api/meta` and `GET /api/session` return the value so the browser can run
+  its own countdown.
+- The startup banner states the timeout.
+
+**Front end** (`web/app.js`):
+- A real idle watch. **Only genuine interaction counts** — mousedown, keydown,
+  touch, wheel, focus. Background work deliberately does not reset the clock,
+  or a console left open on a dashboard would keep its session alive forever
+  and the timeout would mean nothing.
+- One minute before expiry a dialog appears with a live countdown, "Stay
+  signed in" and "Sign out now". Any real activity dismisses it and tells the
+  server, so both clocks agree.
+- On expiry the session is ended server-side too, and the sign-in screen says
+  why rather than just appearing.
+- The server remains the enforcement — nothing the browser does extends a
+  session. The timer only exists so an operator is warned instead of
+  discovering it as a failed action mid-task.
+
+**Settings** — the timeout is editable, with presets from 5 minutes to 8
+hours. Changing it restarts the local countdown immediately.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart.
+
 ## 1.5.0 — 2026-07-30
 Flexible service identity: gMSA, dedicated account, machine account or the
 installing user — changeable at any time. Plus an identity mode that lets

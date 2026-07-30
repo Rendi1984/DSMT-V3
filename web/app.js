@@ -47,6 +47,7 @@ var state = {
   pageLimitHit: false,
   storage: null,
   identity: null,
+  sessionMinutes: 0,
   publisher: '',
   busy: 0
 };
@@ -187,9 +188,118 @@ function clearToken() {
 }
 
 function signOutLocal() {
+  stopIdleWatch();
   clearToken();
   state.user = null;
   showLogin();
+}
+
+// ---------------------------------------------------------------------------
+// Idle timeout
+//
+// The server is the enforcement: it drops a session that has not been used for
+// SessionMinutes, and nothing the browser does can extend that. This timer
+// exists so the operator is WARNED before it happens, instead of discovering
+// it as a failed action mid-task.
+//
+// Only real interaction counts as activity. Background work does not reset the
+// clock - otherwise a page left open on a dashboard would keep a session alive
+// forever, which defeats the point of having a timeout at all.
+// ---------------------------------------------------------------------------
+
+var IDLE_WARN_SECONDS = 60;
+
+var idle = {
+  minutes: 0,
+  lastActivity: 0,
+  tick: null,
+  warning: false,
+  countdown: 0
+};
+
+function startIdleWatch(minutes) {
+  idle.minutes = minutes || 0;
+  stopIdleWatch();
+  if (!idle.minutes) { return; }
+
+  noteActivity();
+
+  ['mousedown', 'keydown', 'touchstart', 'wheel', 'focus'].forEach(function (name) {
+    document.addEventListener(name, noteActivity, true);
+  });
+
+  idle.tick = window.setInterval(checkIdle, 1000);
+}
+
+function stopIdleWatch() {
+  if (idle.tick) { window.clearInterval(idle.tick); idle.tick = null; }
+  ['mousedown', 'keydown', 'touchstart', 'wheel', 'focus'].forEach(function (name) {
+    document.removeEventListener(name, noteActivity, true);
+  });
+  idle.warning = false;
+}
+
+function noteActivity() {
+  idle.lastActivity = Date.now();
+
+  // Dismissing the warning by moving the mouse is deliberate: the operator is
+  // demonstrably there. The server is told, so its clock agrees with ours.
+  if (idle.warning) {
+    idle.warning = false;
+    if (!$('dialogBackdrop').hidden && dialogState.isIdleWarning) { closeDialog(); }
+    api('/api/session', { allow401: true }).catch(function () { /* the timer keeps running */ });
+  }
+}
+
+function checkIdle() {
+  if (!idle.minutes || !state.token) { return; }
+
+  var idleSeconds = Math.floor((Date.now() - idle.lastActivity) / 1000);
+  var limit = idle.minutes * 60;
+  var remaining = limit - idleSeconds;
+
+  if (remaining <= 0) {
+    stopIdleWatch();
+    signOutIdle();
+    return;
+  }
+
+  if (remaining <= IDLE_WARN_SECONDS) {
+    idle.countdown = remaining;
+    if (!idle.warning) {
+      idle.warning = true;
+      showIdleWarning();
+    } else {
+      var span = $('idleCountdown');
+      if (span) { span.textContent = String(remaining); }
+    }
+  }
+}
+
+function showIdleWarning() {
+  openDialog({
+    title: 'Still there?',
+    confirmLabel: 'Stay signed in',
+    cancelLabel: 'Sign out now',
+    isIdleWarning: true,
+    body: '<p class="dialog-note">You have not used DSMT for ' + idle.minutes +
+          ' minutes. For security, you will be signed out in ' +
+          '<strong id="idleCountdown">' + idle.countdown + '</strong> seconds.</p>' +
+          '<p class="dialog-note">Anything you have typed into an open dialog will be lost.</p>',
+    onConfirm: function () { noteActivity(); closeDialog(); },
+    onCancel: function () { stopIdleWatch(); signOutIdle(); }
+  });
+}
+
+function signOutIdle() {
+  api('/api/session', { method: 'DELETE', allow401: true })
+    .catch(function () { /* signing out locally regardless */ })
+    .then(function () {
+      signOutLocal();
+      var err = $('loginError');
+      err.textContent = 'You were signed out after ' + idle.minutes + ' minutes without activity.';
+      err.hidden = false;
+    });
 }
 
 function showLogin() {
@@ -236,6 +346,7 @@ function boot() {
       applyVersion(meta.version, meta.publisher);
       state.storage = meta.storage || null;
       state.identity = meta.identity || null;
+      if (meta.sessionMinutes) { state.sessionMinutes = meta.sessionMinutes; }
       state.domain = meta.domain || '';
       var dom = $('loginDomain');
       if (dom && state.domain) { dom.textContent = state.domain; }
@@ -250,6 +361,7 @@ function boot() {
   api('/api/session', { allow401: true }).then(function (data) {
     if (!data || !data.ok) { signOutLocal(); return; }
     applyVersion(data.version, data.publisher);
+    if (data.sessionMinutes) { state.sessionMinutes = data.sessionMinutes; }
     state.user = data.user;
     enterApp();
   }).catch(function () {
@@ -262,6 +374,7 @@ function enterApp() {
   paintIdentity();
   loadDomainInfo();
   setTab(state.tab, true);
+  startIdleWatch(state.sessionMinutes);
 }
 
 function paintIdentity() {
@@ -935,9 +1048,11 @@ function exportAudit() {
 // Dialog engine
 // ---------------------------------------------------------------------------
 
-var dialogState = { onConfirm: null };
+var dialogState = { onConfirm: null, onCancel: null, isIdleWarning: false };
 
 function openDialog(config) {
+  dialogState.onCancel = config.onCancel || null;
+  dialogState.isIdleWarning = !!config.isIdleWarning;
   $('dialogTitle').textContent = config.title;
   $('dialogBody').innerHTML = config.body;
   $('dialogConfirm').textContent = config.confirmLabel || 'Apply';
@@ -959,6 +1074,8 @@ function openDialog(config) {
 function closeDialog() {
   $('dialogBackdrop').hidden = true;
   dialogState.onConfirm = null;
+  dialogState.onCancel = null;
+  dialogState.isIdleWarning = false;
 }
 
 function dialogError(message) {
@@ -1372,7 +1489,6 @@ function actionSettings() {
       ['Domain controller', s.server || 'Auto-discovered'],
       ['Listening on', s.listenAddress + ':' + s.port],
       ['Running as', s.serviceUser],
-      ['Session lifetime', s.sessionHours + ' hours idle'],
       ['Search result cap', String(s.pageSize)],
       ['Data folder', s.dataPath]
     ].filter(function (r) { return r[1]; }).map(function (r) {
@@ -1396,6 +1512,27 @@ function actionSettings() {
       confirmLabel: s.sqlEnabled ? 'Reconnect' : 'Create database',
       body:
         '<div class="detail-fields"><span class="detail-section-label">Server</span>' + readOnly + '</div>' +
+        '<hr class="rule">' +
+        '<span class="detail-section-label">Idle timeout</span>' +
+        '<p class="dialog-note">An operator who does not touch the console for this long is signed ' +
+        'out. The browser warns them a minute beforehand. Applies to sessions that are already ' +
+        'open, not just new ones.</p>' +
+        '<div class="row-2">' +
+          '<div class="field"><label for="setIdle">Minutes of inactivity</label>' +
+          '<input class="input" id="setIdle" type="number" min="1" max="10080" step="1" value="' +
+          esc(String(s.sessionMinutes || 480)) + '"></div>' +
+          '<div class="field"><label for="setIdlePreset">Common values</label>' +
+          '<select class="input" id="setIdlePreset">' +
+            '<option value="">Choose</option>' +
+            '<option value="5">5 minutes</option>' +
+            '<option value="15">15 minutes</option>' +
+            '<option value="30">30 minutes</option>' +
+            '<option value="60">1 hour</option>' +
+            '<option value="240">4 hours</option>' +
+            '<option value="480">8 hours</option>' +
+          '</select></div>' +
+        '</div>' +
+        '<button class="btn btn-secondary" type="button" id="applyIdle">Apply idle timeout</button>' +
         '<hr class="rule">' +
         '<span class="detail-section-label">Identity mode</span>' +
         '<p class="dialog-note">Which account performs directory operations. ' +
@@ -1428,6 +1565,33 @@ function actionSettings() {
         'setting is saved so it survives a restart. Creating a database needs the <code>dbcreator</code> ' +
         'right on the instance; connecting to one that already exists needs only read and write.</p>',
       onOpen: function () {
+        // ---- idle timeout ----
+        $('setIdlePreset').addEventListener('change', function (e) {
+          if (e.target.value) { $('setIdle').value = e.target.value; }
+        });
+
+        $('applyIdle').addEventListener('click', function () {
+          var minutes = parseInt($('setIdle').value, 10);
+          if (isNaN(minutes) || minutes < 1 || minutes > 10080) {
+            dialogError('The idle timeout must be between 1 and 10080 minutes (7 days).');
+            return;
+          }
+
+          api('/api/settings/session', { method: 'POST', body: { sessionMinutes: minutes } })
+            .then(function (res) {
+              state.sessionMinutes = res.sessionMinutes;
+              // Restart the local countdown against the new value straight
+              // away, so the browser and the server do not disagree.
+              startIdleWatch(res.sessionMinutes);
+              toast('Idle timeout set to ' + res.sessionMinutes + ' minutes.');
+              if (!res.persisted) {
+                toast('Applied, but not saved: ' + res.persistError + ' It will revert on restart.', 'bad');
+              }
+            })
+            .catch(function (err) { dialogError(err.message); });
+        });
+
+        // ---- identity mode ----
         var select = $('setIdentity');
         var warning = $('identityWarning');
 
@@ -1502,6 +1666,7 @@ function actionAbout() {
     ['Signed in as', state.user ? state.user.account : ''],
     ['Identity mode', state.identity ? state.identity.mode : ''],
     ['Service account', state.identity ? state.identity.serviceUser : ''],
+    ['Idle timeout', state.sessionMinutes ? (state.sessionMinutes + ' minutes') : ''],
     ['Domain', d ? d.domain : state.domain],
     ['NetBIOS name', d ? d.netbios : ''],
     ['Forest', d ? d.forest : ''],
@@ -1821,7 +1986,11 @@ function wireEvents() {
   });
 
   // ---- dialog ----
-  $('dialogCancel').addEventListener('click', closeDialog);
+  $('dialogCancel').addEventListener('click', function () {
+    var onCancel = dialogState.onCancel;
+    closeDialog();
+    if (onCancel) { onCancel(); }
+  });
   $('dialogConfirm').addEventListener('click', function () {
     if (dialogState.onConfirm) { dialogState.onConfirm(); }
   });

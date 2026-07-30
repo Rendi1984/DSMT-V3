@@ -135,7 +135,7 @@ function Get-DsmtSession {
     $s   = $script:DsmtSessions[$Token]
     $age = (Get-Date).ToUniversalTime() - $s.LastSeenUtc
 
-    if ($age.TotalHours -ge $cfg.SessionHours) {
+    if ($age.TotalMinutes -ge $cfg.SessionMinutes) {
         Remove-DsmtSession -Token $Token -Reason 'idle timeout'
         return $null
     }
@@ -167,7 +167,7 @@ function Clear-DsmtExpiredSessions {
 
     $stale = @()
     foreach ($key in $script:DsmtSessions.Keys) {
-        if (($now - $script:DsmtSessions[$key].LastSeenUtc).TotalHours -ge $cfg.SessionHours) {
+        if (($now - $script:DsmtSessions[$key].LastSeenUtc).TotalMinutes -ge $cfg.SessionMinutes) {
             $stale += $key
         }
     }

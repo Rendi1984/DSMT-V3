@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.5.0'
+$script:DsmtVersion = '1.6.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -41,7 +41,7 @@ $script:DsmtConfig = @{
     Server        = ''
     Port          = 8080
     ListenAddress = 'localhost'
-    SessionHours  = 8
+    SessionMinutes = 480
     PageSize      = 500
     LogFile       = ''
 }
@@ -59,10 +59,19 @@ function Initialize-DsmtConfig {
         [int]    $Port = 8080,
         [string] $ListenAddress = 'localhost',
         [int]    $SessionHours = 8,
+        [int]    $SessionMinutes = 0,
         [int]    $PageSize = 500,
         [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator'
     )
 
+    # The idle timeout is held in MINUTES, in one field. -SessionHours is kept
+    # because it was the original parameter, but it is converted here rather
+    # than stored alongside: two fields that mean the same thing is how they
+    # end up disagreeing.
+    if ($SessionMinutes -le 0) { $SessionMinutes = $SessionHours * 60 }
+    if ($SessionMinutes -lt 1) { $SessionMinutes = 1 }
+
+    $script:DsmtConfig.SessionMinutes = $SessionMinutes
     $script:DsmtConfig.IdentityMode  = $IdentityMode
     $script:DsmtConfig.RootPath      = $RootPath
     $script:DsmtConfig.WebPath       = Join-Path $RootPath 'web'
@@ -72,7 +81,6 @@ function Initialize-DsmtConfig {
     $script:DsmtConfig.Server        = $Server
     $script:DsmtConfig.Port          = $Port
     $script:DsmtConfig.ListenAddress = $ListenAddress
-    $script:DsmtConfig.SessionHours  = $SessionHours
     $script:DsmtConfig.PageSize      = $PageSize
 
     # The design system lives in a folder whose name carries the design tool's
