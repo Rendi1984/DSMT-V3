@@ -13,6 +13,54 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.3.0 — 2026-07-30
+Audit time filtering, a Settings screen that can create the database, and a
+notifications bell.
+
+**Audit log - filter by date** (`web/*`, `server/lib/DsmtAudit.ps1`,
+`server/lib/DsmtSql.ps1`, `server/lib/DsmtHttp.ps1`):
+- New range chips above the audit table: Last 24 hours, Last 48 hours, Last 7
+  days, Last 30 days, All time, and Custom range with two date/time pickers.
+- `GET /api/audit` accepts `from` and `to` (ISO 8601, both optional and
+  independent). A value that is present but unparseable is a 400, not a
+  silently ignored filter.
+- **The window is applied inside the SQL query**, not after the rows come
+  back — otherwise `TOP (@limit)` would take the newest 500 rows overall and
+  then filter them down, silently under-reporting an older window.
+- The JSONL fallback path widens its file scan to reach the requested start
+  date, so a custom window older than six months is not reported as empty
+  when it simply was not searched.
+- The line under the table now names the window it counted, and says whether
+  the records came from SQL Server or from files.
+
+**Settings** (`web/*`, `server/lib/DsmtHttp.ps1`, `server/lib/DsmtCommon.ps1`):
+- New **Settings** entry in the menu. Shows what the server is actually
+  running with (version, domain, DC, listen address, session lifetime, result
+  cap, data folder) and the current storage state.
+- From there an operator can point DSMT at a SQL Server and **create the DSMT
+  database and its tables without restarting**. `POST /api/settings/sql` runs
+  the same schema code the server uses, saves the setting to
+  `config/dsmt.config.json` so it survives a restart, audits the change, and
+  backfills the current operator and session into the new database.
+- `GET /api/settings` returns the running configuration.
+- `Save-DsmtSavedSettings` merges over the existing config file rather than
+  overwriting it.
+
+**Notifications** (`web/*`):
+- The avatar circle in the header is replaced by a notifications bell with a
+  count badge and a panel.
+- Every notification is derived from real server state — there are no seeded
+  or sample notifications. Currently raised: no SQL database configured (with
+  a **Create database** button that opens Settings), SQL reporting an error,
+  and the directory search hitting its result cap.
+
+**Changed**:
+- The header now shows the auto-detected domain name only; the controller
+  count moved to the menu and **About**, where there is room for it.
+
+Deploy: `web\*` — hard refresh (Ctrl+F5). `server\**` — restart
+`Start-DSMT.ps1`.
+
 ## 1.2.1 — 2026-07-27
 - `docs/deployment-guide.html` — rewritten in English. The guide was written in
   Hebrew and RTL; it is now `lang="en" dir="ltr"` throughout, matching the rest

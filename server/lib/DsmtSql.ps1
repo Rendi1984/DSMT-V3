@@ -410,12 +410,34 @@ function Get-DsmtSqlAudit {
     <#
     .SYNOPSIS
         Reads audit records back out of SQL with the same filters the audit
-        view offers.
+        view offers: free text, category, and a time window.
+    .PARAMETER FromUtc
+        Inclusive lower bound, UTC. $null for no lower bound.
+    .PARAMETER ToUtc
+        Inclusive upper bound, UTC. $null for no upper bound.
     #>
-    param([string] $Query = '', [string] $Filter = 'All', [int] $Limit = 500)
+    param(
+        [string] $Query = '',
+        [string] $Filter = 'All',
+        [int] $Limit = 500,
+        $FromUtc = $null,
+        $ToUtc = $null
+    )
 
     $where  = @()
     $params = @{ limit = $Limit }
+
+    # The time window is applied in SQL, not after the fact in PowerShell -
+    # otherwise TOP (@limit) would take the newest 500 rows overall and then
+    # filter them down, which silently under-reports an older window.
+    if ($null -ne $FromUtc) {
+        $where += 'TimeUtc >= @fromUtc'
+        $params['fromUtc'] = [datetime]$FromUtc
+    }
+    if ($null -ne $ToUtc) {
+        $where += 'TimeUtc <= @toUtc'
+        $params['toUtc'] = [datetime]$ToUtc
+    }
 
     switch ($Filter) {
         'Users'     { $where += 'Category = @cat';        $params['cat'] = 'user' }

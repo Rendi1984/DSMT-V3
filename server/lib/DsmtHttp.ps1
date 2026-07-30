@@ -98,6 +98,30 @@ function Get-DsmtBodyValue {
     return $prop.Value
 }
 
+function ConvertTo-DsmtUtcOrNull {
+    <#
+    .SYNOPSIS
+        Parses an ISO 8601 timestamp from the query string into UTC.
+    .DESCRIPTION
+        Returns $null for an empty value. THROWS on a value that is present
+        but unparseable, so a malformed range is reported as a 400 instead of
+        being silently ignored - a filter that quietly does nothing is how an
+        operator ends up believing a window is empty when it is not.
+    #>
+    param([string] $Value, [string] $FieldName)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+
+    $parsed = [datetime]::MinValue
+    $styles = [System.Globalization.DateTimeStyles]::RoundtripKind -bor [System.Globalization.DateTimeStyles]::AssumeLocal
+    $ok = [datetime]::TryParse($Value, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref] $parsed)
+
+    if (-not $ok) {
+        throw ('"' + $FieldName + '" is not a valid date/time: ' + $Value)
+    }
+    return $parsed.ToUniversalTime()
+}
+
 function Get-DsmtQueryValue {
     param($Request, [string] $Name, [string] $Default = '')
 
@@ -348,6 +372,87 @@ function Invoke-DsmtApi {
     try {
         switch -Regex ($Path) {
 
+            '^/api/settings$' {
+                if ($method -ne 'GET') { break }
+
+                $sql = Get-DsmtSqlState
+                Send-DsmtJson -Response $Response -Data @{
+                    ok = $true
+                    settings = @{
+                        version       = $cfg.Version
+                        domain        = $cfg.Domain
+                        server        = $cfg.Server
+                        port          = $cfg.Port
+                        listenAddress = $cfg.ListenAddress
+                        sessionHours  = $cfg.SessionHours
+                        pageSize      = $cfg.PageSize
+                        dataPath      = $cfg.DataPath
+                        sqlEnabled    = $sql.Enabled
+                        sqlServer     = $sql.Server
+                        sqlDatabase   = $sql.Database
+                        sqlError      = $sql.LastError
+                    }
+                }
+                return
+            }
+
+            '^/api/settings/sql$' {
+                if ($method -ne 'POST') { break }
+
+                $body     = Read-DsmtBody -Request $Request
+                $server   = ([string](Get-DsmtBodyValue -Body $body -Name 'server')).Trim()
+                $database = ([string](Get-DsmtBodyValue -Body $body -Name 'database' -Default 'DSMT')).Trim()
+                $user     = [string](Get-DsmtBodyValue -Body $body -Name 'username')
+                $pass     = [string](Get-DsmtBodyValue -Body $body -Name 'password')
+
+                if ([string]::IsNullOrWhiteSpace($server)) {
+                    Send-DsmtError -Response $Response -Message 'Enter the SQL Server instance to connect to.' -StatusCode 400
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($database)) { $database = 'DSMT' }
+
+                Write-DsmtLog -Message ($session.Account + ' is configuring SQL storage: ' + $server + ' [' + $database + ']')
+
+                $init = Initialize-DsmtSql -Server $server -Database $database -Username $user -Password $pass
+                if (-not $init.Ok) {
+                    Write-DsmtAudit -Action 'Configure SQL storage' -Target ($server + ' [' + $database + ']') `
+                                    -Operator $session.Account -Reason 'Console configuration change' `
+                                    -Result 'Failed' -Category 'session' -Detail $init.Error
+                    Send-DsmtError -Response $Response -Message $init.Error -StatusCode 400
+                    return
+                }
+
+                # Persist it so the database survives a restart of the server.
+                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{
+                    SqlServer   = $server
+                    SqlDatabase = $database
+                }
+
+                Write-DsmtAudit -Action 'Configure SQL storage' -Target ($server + ' [' + $database + ']') `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session' `
+                                -Detail 'Database and tables verified'
+
+                # Backfill the operator and this session so the new database is
+                # not born with a gap where the current sign-in should be.
+                Register-DsmtOperator -Account $session.Account -Sam $session.Sam `
+                                      -Display $session.Display -Upn $session.Upn -Token $session.Token
+
+                $sql = Get-DsmtSqlState
+                Send-DsmtJson -Response $Response -Data @{
+                    ok      = $true
+                    storage = @{
+                        sqlEnabled  = $sql.Enabled
+                        sqlServer   = $sql.Server
+                        sqlDatabase = $sql.Database
+                        sqlError    = ''
+                    }
+                    persisted      = $saved.Ok
+                    persistError   = $saved.Error
+                }
+                return
+            }
+
             '^/api/domain$' {
                 $info = Get-DsmtDomainInfo -Credential $session.Credential
                 Send-DsmtJson -Response $Response -Data @{ ok = $true; domain = $info }
@@ -568,12 +673,36 @@ function Invoke-DsmtApi {
                 $limit  = 500
                 [int]::TryParse((Get-DsmtQueryValue -Request $Request -Name 'limit' -Default '500'), [ref] $limit) | Out-Null
 
-                $audit = Get-DsmtAuditEntries -Query $q -Filter $filter -Limit $limit
+                # Time window. Both bounds are optional and independent.
+                $fromUtc = $null
+                $toUtc   = $null
+                try {
+                    $fromUtc = ConvertTo-DsmtUtcOrNull -Value (Get-DsmtQueryValue -Request $Request -Name 'from') -FieldName 'from'
+                    $toUtc   = ConvertTo-DsmtUtcOrNull -Value (Get-DsmtQueryValue -Request $Request -Name 'to')   -FieldName 'to'
+                } catch {
+                    Send-DsmtError -Response $Response -Message $_.Exception.Message -StatusCode 400
+                    return
+                }
+
+                if ($null -ne $fromUtc -and $null -ne $toUtc -and $fromUtc -gt $toUtc) {
+                    Send-DsmtError -Response $Response -Message 'The start of the range is after its end.' -StatusCode 400
+                    return
+                }
+
+                $audit = Get-DsmtAuditEntries -Query $q -Filter $filter -Limit $limit -FromUtc $fromUtc -ToUtc $toUtc
+
+                $fromEcho = ''
+                $toEcho   = ''
+                if ($null -ne $fromUtc) { $fromEcho = ([datetime]$fromUtc).ToString('o') }
+                if ($null -ne $toUtc)   { $toEcho   = ([datetime]$toUtc).ToString('o') }
+
                 Send-DsmtJson -Response $Response -Data @{
                     ok      = $true
                     items   = @($audit.entries)
                     total   = $audit.total
-                    months  = 6
+                    source  = $audit.source
+                    from    = $fromEcho
+                    to      = $toEcho
                 }
                 return
             }

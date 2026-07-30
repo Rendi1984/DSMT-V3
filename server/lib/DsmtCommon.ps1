@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.2.1'
+$script:DsmtVersion = '1.3.0'
 
 # Filled in by Start-DSMT.ps1 at startup.
 $script:DsmtConfig = @{
@@ -106,6 +106,48 @@ function Get-DsmtSavedSettings {
     } catch {
         Write-Host ('  [warn] ' + $path + ' could not be read (' + $_.Exception.Message + '); using defaults and command-line parameters only.') -ForegroundColor Yellow
         return $null
+    }
+}
+
+function Save-DsmtSavedSettings {
+    <#
+    .SYNOPSIS
+        Writes config\dsmt.config.json, merging over whatever is already
+        there so a value this call does not mention is preserved.
+    .OUTPUTS
+        Hashtable with Ok and Error.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $RootPath,
+        [Parameter(Mandatory = $true)][hashtable] $Values
+    )
+
+    $dir  = Join-Path $RootPath 'config'
+    $path = Join-Path $dir 'dsmt.config.json'
+
+    try {
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+
+        $merged = [ordered]@{}
+
+        $existing = Get-DsmtSavedSettings -RootPath $RootPath
+        if ($null -ne $existing) {
+            foreach ($prop in $existing.PSObject.Properties) {
+                $merged[$prop.Name] = $prop.Value
+            }
+        }
+        foreach ($key in $Values.Keys) {
+            $merged[$key] = $Values[$key]
+        }
+
+        ConvertTo-Json -InputObject $merged -Depth 4 |
+            Set-Content -LiteralPath $path -Encoding UTF8 -ErrorAction Stop
+
+        return @{ Ok = $true; Error = '' }
+    } catch {
+        return @{ Ok = $false; Error = $_.Exception.Message }
     }
 }
 

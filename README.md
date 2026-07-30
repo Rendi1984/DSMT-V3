@@ -151,7 +151,17 @@ Audit
 
 - Every write attempt, successful or not, with operator, controller, reason
   and result (Success / Partial / Failed / Denied)
-- Filter chips, free-text search, CSV export
+- Time-range filter: last 24 hours, last 48 hours, last 7 or 30 days, all
+  time, or a custom range. Applied inside the SQL query, so the count is the
+  true number in that window
+- Category filter chips, free-text search, CSV export
+
+Settings and notifications
+
+- **Settings** in the menu shows the running configuration and can point DSMT
+  at a SQL Server, creating the database and its tables without a restart
+- A notifications bell raises real conditions only — no SQL database
+  configured, SQL reporting an error, a search hitting its result cap
 
 Everywhere
 
