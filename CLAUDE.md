@@ -133,9 +133,13 @@ The server must run on **Windows PowerShell 5.1** — no `pwsh` on a lab DC.
 ---
 
 ## How changes are delivered
-- Development happens on a feature branch (currently
-  `claude/new-session-6q2ky9`) and merges to the default branch via pull
-  request. Do not push to another branch without explicit permission.
+- **`main` is the default branch.** Development happens on a short-lived
+  feature branch off `main`, and merges back via pull request. Small
+  documentation-only fixes may go straight to `main`. Do not push to another
+  branch without explicit permission.
+  (History note: the repository started empty, so the first release was built
+  on `claude/new-session-6q2ky9`; `main` was created from it at 1.2.1 and that
+  branch was deleted. There is no separate pre-`main` history to look for.)
 - **No build step.** Deployment is copying files.
   - `web/*`, `_ds/*` changed → hard refresh in the browser (Ctrl+F5).
   - `server/**` changed → restart `Start-DSMT.ps1`. Restarting ends all

@@ -154,4 +154,12 @@ verification against LAB.LOCAL is still outstanding — see Open task 1.
 - **Zero external requests** is a hard rule — no CDN, no webfont, no bundler.
   `prototype/support.js` still pulls React from unpkg, which is one of the
   reasons the prototype is not shippable.
-- Work is being developed on branch `claude/new-session-6q2ky9`.
+- **Branching**: `main` is the default branch and holds everything through
+  1.2.1. Work on a short-lived feature branch off `main` and merge back via
+  pull request; documentation-only fixes may go straight to `main`. The
+  original `claude/new-session-6q2ky9` branch was merged into `main` and
+  deleted — do not go looking for history there.
+- **Nothing has been verified at runtime yet.** Open task 1 is still open and
+  is the single most important thing outstanding: neither the installer nor
+  the server has ever been executed. Do not treat "it is on `main`" as "it
+  works".
