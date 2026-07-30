@@ -133,12 +133,53 @@ body { overflow: hidden; }
 }
 .domain-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btn-about { font-size: 12px; }
-.avatar {
-  width: 26px; height: 26px; border-radius: 50%; flex: none;
-  border: 1px solid var(--color-neutral-700);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 10px; color: var(--color-neutral-300);
+/* ---- notifications bell ---- */
+.bell-wrap { position: relative; flex: none; }
+.bell {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; cursor: pointer;
+  background: transparent; border: 1px solid var(--color-neutral-800);
+  border-radius: 50%; color: var(--color-neutral-300);
 }
+.bell:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); color: var(--color-text); }
+.bell[aria-expanded="true"] { border-color: var(--color-accent); color: var(--color-accent); }
+.bell-badge {
+  position: absolute; top: -3px; inset-inline-end: -3px;
+  min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 99px; border: 1px solid var(--color-bg);
+  background: var(--color-accent); color: var(--color-neutral-900);
+  font-size: 10px; line-height: 13px; text-align: center;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+}
+.bell-panel {
+  position: absolute; z-index: 32; top: 40px; inset-inline-end: 0;
+  width: min(340px, calc(100vw - 24px));
+  padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-neutral-800); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  max-height: min(420px, 70vh); overflow: auto;
+}
+.bell-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.bell-count { font-size: 11px; color: var(--color-neutral-500); }
+.note-item {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-neutral-900);
+  font-size: 12.5px;
+}
+.note-item:last-child { border-bottom: 0; }
+.note-title {
+  display: flex; align-items: center; gap: 7px;
+  color: var(--color-text);
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+}
+.note-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--color-neutral-600); }
+.note-advice .note-dot { background: var(--color-accent); box-shadow: 0 0 7px var(--color-accent); }
+.note-body { color: var(--color-neutral-400); line-height: 1.55; }
+.note-action { align-self: flex-start; margin-top: 2px; }
+.note-empty { font-size: 12.5px; color: var(--color-neutral-500); }
 
 /* ---- slide-out menu ---- */
 .menu-backdrop {
@@ -306,6 +347,21 @@ body { overflow: hidden; }
 }
 .audit-controls .input { flex: 0 1 300px; min-width: 180px; }
 .chips { display: flex; gap: var(--space-2); padding: 0 var(--space-4) var(--space-3); flex-wrap: wrap; }
+
+/* Custom audit range: two datetime inputs and an apply button. */
+.range-custom {
+  display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap;
+  margin: 0 var(--space-4) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-neutral-800); border-radius: var(--radius-md);
+}
+.range-custom .field { flex: 0 1 220px; min-width: 160px; }
+.range-custom .form-error { flex: 1 1 100%; }
+.range-window {
+  padding: 0 var(--space-4);
+  margin: 0 0 var(--space-2);
+  font-size: 11.5px; color: var(--color-neutral-500);
+}
 .res-success { color: var(--color-neutral-300); }
 .res-other   { color: var(--color-accent-200); }
 
@@ -408,6 +464,10 @@ body { overflow: hidden; }
   .audit-controls { margin-inline-start: 0; width: 100%; }
   .audit-controls .input { flex: 1 1 auto; }
   .chips { padding-inline: var(--space-3); }
+  .range-custom { margin-inline: var(--space-3); }
+  .range-custom .field { flex: 1 1 100%; }
+  .range-custom .btn { flex: 1 1 100%; }
+  .range-window { padding-inline: var(--space-3); }
   .detail-pane { width: 100vw; }
   .toasts { inset-inline: var(--space-3); inset-block-end: var(--space-3); max-width: none; }
   .dialog .row-2 { grid-template-columns: 1fr; }

@@ -90,12 +90,21 @@ function Get-DsmtAuditEntries {
         audit view offers.
     .PARAMETER Filter
         All | Users | Groups | Passwords | Deletions
+    .PARAMETER FromUtc
+        Inclusive lower bound of the time window, UTC. $null for no bound.
+    .PARAMETER ToUtc
+        Inclusive upper bound of the time window, UTC. $null for no bound.
+    .PARAMETER Months
+        How many monthly JSONL files to scan when SQL is not in use. Ignored
+        for the SQL path, and widened automatically to cover FromUtc.
     #>
     param(
         [string] $Query = '',
         [string] $Filter = 'All',
         [int]    $Months = 6,
-        [int]    $Limit = 500
+        [int]    $Limit = 500,
+        $FromUtc = $null,
+        $ToUtc = $null
     )
 
     # When SQL is configured it is the record of truth for the audit view.
@@ -104,7 +113,7 @@ function Get-DsmtAuditEntries {
     $sql = Get-DsmtSqlState
     if ($sql.Enabled) {
         try {
-            $fromSql = Get-DsmtSqlAudit -Query $Query -Filter $Filter -Limit $Limit
+            $fromSql = Get-DsmtSqlAudit -Query $Query -Filter $Filter -Limit $Limit -FromUtc $FromUtc -ToUtc $ToUtc
             $fromSql['source'] = 'sql'
             return $fromSql
         } catch {
@@ -114,6 +123,16 @@ function Get-DsmtAuditEntries {
 
     $entries = New-Object System.Collections.Generic.List[object]
     $now = Get-Date
+
+    # Widen the scan so it actually reaches back to FromUtc - otherwise a
+    # custom window older than the default six files would come back empty
+    # and look like "there are no records" rather than "we did not look".
+    if ($null -ne $FromUtc) {
+        $fromLocal = ([datetime]$FromUtc).ToLocalTime()
+        $span = (($now.Year - $fromLocal.Year) * 12) + ($now.Month - $fromLocal.Month) + 1
+        if ($span -gt $Months) { $Months = $span }
+        if ($Months -gt 120) { $Months = 120 }
+    }
 
     for ($i = 0; $i -lt $Months; $i++) {
         $path = Get-DsmtAuditPath -When $now.AddMonths(-$i)
@@ -143,6 +162,22 @@ function Get-DsmtAuditEntries {
     $filtered = New-Object System.Collections.Generic.List[object]
     foreach ($e in $entries) {
         $keep = $true
+
+        # Time window first: it is the cheapest test and the most selective.
+        if ($keep -and ($null -ne $FromUtc -or $null -ne $ToUtc)) {
+            $stamp = $null
+            try { $stamp = ([datetime]$e.time).ToUniversalTime() } catch { $stamp = $null }
+
+            if ($null -eq $stamp) {
+                # An unparseable timestamp is not silently dropped from an
+                # unbounded view, but it cannot honestly be placed inside a
+                # window either.
+                $keep = $false
+            } else {
+                if ($null -ne $FromUtc -and $stamp -lt [datetime]$FromUtc) { $keep = $false }
+                if ($null -ne $ToUtc   -and $stamp -gt [datetime]$ToUtc)   { $keep = $false }
+            }
+        }
 
         switch ($Filter) {
             'Users'      { if ($e.category -ne 'user')  { $keep = $false } }

@@ -39,6 +39,12 @@ var state = {
   auditTotal: 0,
   auditFilter: 'All',
   auditQuery: '',
+  auditRange: 'all',
+  auditFrom: null,
+  auditTo: null,
+  auditSource: '',
+  notifications: [],
+  pageLimitHit: false,
   storage: null,
   busy: 0
 };
@@ -67,6 +73,17 @@ var GROUP_COLS = [
 ];
 
 var AUDIT_FILTERS = ['All', 'Users', 'Groups', 'Passwords', 'Deletions'];
+
+/* Audit time windows. `hours` is how far back to look; null means no bound.
+   'custom' is driven by the two datetime inputs instead. */
+var AUDIT_RANGES = [
+  { key: '24h',    label: 'Last 24 hours', hours: 24 },
+  { key: '48h',    label: 'Last 48 hours', hours: 48 },
+  { key: '7d',     label: 'Last 7 days',   hours: 24 * 7 },
+  { key: '30d',    label: 'Last 30 days',  hours: 24 * 30 },
+  { key: 'all',    label: 'All time',      hours: null },
+  { key: 'custom', label: 'Custom range',  hours: null }
+];
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -213,6 +230,7 @@ function boot() {
       state.domain = meta.domain || '';
       var dom = $('loginDomain');
       if (dom && state.domain) { dom.textContent = state.domain; }
+      renderNotifications();
     }
   }).catch(function () { /* the login form still works */ });
 
@@ -239,26 +257,115 @@ function enterApp() {
 
 function paintIdentity() {
   if (!state.user) { return; }
-  var initials = (state.user.display || state.user.sam || '')
-    .split(/\s+/).filter(Boolean).slice(0, 2)
-    .map(function (p) { return p.charAt(0).toUpperCase(); }).join('');
-  var avatar = $('avatar');
-  avatar.textContent = initials || 'AD';
-  avatar.title = state.user.account || '';
   $('menuSignedIn').textContent = 'Signed in as ' + (state.user.account || state.user.sam);
 }
 
 function loadDomainInfo() {
   api('/api/domain').then(function (data) {
     state.domainInfo = data.domain;
+
+    // The header carries the auto-detected domain name only. The controller
+    // count lives in About and in the menu, where there is room for it.
+    $('domainLine').textContent = data.domain.domain;
+
     var count = data.domain.controllerCount;
-    var line = data.domain.domain + ' - ' + count + ' controller' + (count === 1 ? '' : 's');
-    $('domainLine').textContent = line;
-    $('menuDomain').textContent = line;
+    $('menuDomain').textContent = data.domain.domain + ' - ' + count +
+                                  ' controller' + (count === 1 ? '' : 's');
+    renderNotifications();
   }).catch(function (err) {
     $('domainLine').textContent = 'Domain unavailable';
     toast('Could not read the domain: ' + err.message, 'bad');
   });
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+//
+// Every notification is derived from real server state - there is no seeded
+// or sample notification. If the list is empty, the bell says so rather than
+// inventing something to show.
+// ---------------------------------------------------------------------------
+
+function buildNotifications() {
+  var list = [];
+  var storage = state.storage;
+
+  if (storage && !storage.sqlEnabled) {
+    list.push({
+      kind: 'advice',
+      title: 'No SQL database configured',
+      body: 'Operators, sessions and the directory snapshot are not being stored, ' +
+            'and the audit log is only written to files on the server. Create a ' +
+            'database to keep this history in SQL Server.',
+      actionLabel: 'Create database',
+      action: function () { closeBell(); actionSettings(); }
+    });
+  }
+
+  if (storage && storage.sqlEnabled && storage.sqlError) {
+    list.push({
+      kind: 'advice',
+      title: 'SQL Server reported a problem',
+      body: storage.sqlError,
+      actionLabel: 'Open settings',
+      action: function () { closeBell(); actionSettings(); }
+    });
+  }
+
+  if (state.pageLimitHit) {
+    list.push({
+      kind: 'info',
+      title: 'Result limit reached',
+      body: 'The last directory search returned the maximum of ' + state.limit +
+            ' objects, so there may be more that are not shown. Narrow the search, ' +
+            'or raise the page size on the server.',
+      actionLabel: '',
+      action: null
+    });
+  }
+
+  return list;
+}
+
+function renderNotifications() {
+  var list = buildNotifications();
+  state.notifications = list;
+
+  var badge = $('bellBadge');
+  badge.textContent = String(list.length);
+  badge.hidden = (list.length === 0);
+
+  $('bellCount').textContent = list.length
+    ? (list.length + (list.length === 1 ? ' item' : ' items'))
+    : '';
+
+  if (!list.length) {
+    $('bellList').innerHTML = '<p class="note-empty">Nothing needs attention. ' +
+      'Notifications appear here when the console finds something worth telling you about.</p>';
+    return;
+  }
+
+  $('bellList').innerHTML = list.map(function (n, i) {
+    var action = n.actionLabel
+      ? '<button class="btn btn-primary note-action" type="button" data-note="' + i + '">' +
+        esc(n.actionLabel) + '</button>'
+      : '';
+    return '<div class="note-item note-' + esc(n.kind) + '">' +
+             '<span class="note-title"><span class="note-dot"></span>' + esc(n.title) + '</span>' +
+             '<span class="note-body">' + esc(n.body) + '</span>' + action +
+           '</div>';
+  }).join('');
+}
+
+function openBell() {
+  renderNotifications();
+  $('bellPanel').hidden = false;
+  $('bellBtn').setAttribute('aria-expanded', 'true');
+}
+
+function closeBell() {
+  $('bellPanel').hidden = true;
+  $('bellBtn').setAttribute('aria-expanded', 'false');
 }
 
 // ---------------------------------------------------------------------------
@@ -431,10 +538,13 @@ function renderTable() {
 
   var noun = (state.tab === 'groups' ? 'groups' : 'users');
   var line = state.rows.length + ' ' + noun + ' from ' + (state.domainInfo ? state.domainInfo.domain : 'the directory');
-  if (state.limit && state.rows.length >= state.limit) {
+
+  state.pageLimitHit = !!(state.limit && state.rows.length >= state.limit);
+  if (state.pageLimitHit) {
     line += ' - result limit of ' + state.limit + ' reached, narrow the search to see the rest';
   }
   $('resultLine').textContent = line;
+  renderNotifications();
 
   updateBulkBar();
 }
@@ -598,28 +708,80 @@ function renderAuditFilters() {
     return '<button class="chip" type="button" data-filter="' + f + '" aria-pressed="' +
            (state.auditFilter === f) + '">' + f + '</button>';
   }).join('');
+
+  $('auditRanges').innerHTML = AUDIT_RANGES.map(function (r) {
+    return '<button class="chip" type="button" data-range="' + r.key + '" aria-pressed="' +
+           (state.auditRange === r.key) + '">' + esc(r.label) + '</button>';
+  }).join('');
+
+  $('auditCustom').hidden = (state.auditRange !== 'custom');
+}
+
+/* Resolves the selected chip into an absolute {from, to} window.
+   Computed in the browser, so "last 24 hours" means 24 hours in the
+   operator's own timezone; the ISO strings carry the offset and the server
+   converts them to UTC for the SQL query. */
+function auditWindow() {
+  if (state.auditRange === 'custom') {
+    return { from: state.auditFrom, to: state.auditTo };
+  }
+
+  var range = AUDIT_RANGES.filter(function (r) { return r.key === state.auditRange; })[0];
+  if (!range || range.hours === null) { return { from: null, to: null }; }
+
+  var from = new Date(Date.now() - (range.hours * 3600 * 1000));
+  return { from: from.toISOString(), to: null };
 }
 
 function loadAudit() {
   var path = '/api/audit?filter=' + encodeURIComponent(state.auditFilter);
   if (state.auditQuery) { path += '&q=' + encodeURIComponent(state.auditQuery); }
 
+  var window_ = auditWindow();
+  if (window_.from) { path += '&from=' + encodeURIComponent(window_.from); }
+  if (window_.to)   { path += '&to=' + encodeURIComponent(window_.to); }
+
   api(path).then(function (data) {
     state.auditRows = asArray(data.items);
     state.auditTotal = data.total || 0;
+    state.auditSource = data.source || '';
     renderAudit();
   }).catch(function (err) {
     state.auditRows = [];
+    state.auditTotal = 0;
     $('auditBody').innerHTML = '';
     $('auditLine').textContent = '';
+    renderAudit();
     toast('Could not read the audit log: ' + err.message, 'bad');
   });
 }
 
+/* Plain-language description of the window currently in force, so the count
+   below the table is never ambiguous about what it counted. */
+function windowLabel() {
+  if (state.auditRange === 'custom') {
+    if (!state.auditFrom && !state.auditTo) { return 'no range set'; }
+    var parts = [];
+    if (state.auditFrom) { parts.push('from ' + formatStamp(state.auditFrom)); }
+    if (state.auditTo)   { parts.push('to ' + formatStamp(state.auditTo)); }
+    return parts.join(' ');
+  }
+  var range = AUDIT_RANGES.filter(function (r) { return r.key === state.auditRange; })[0];
+  if (!range) { return ''; }
+  return range.label.toLowerCase();
+}
+
 function renderAudit() {
   if (!state.auditRows.length) {
+    // Say which window came back empty - "nothing in the last 24 hours" and
+    // "nothing at all" are very different answers for an auditor.
+    var scope = 'No audit entries in ' + windowLabel();
+    if (state.auditRange === 'all') { scope = 'No audit entries'; }
+    if (state.auditFilter !== 'All') { scope += ' for the ' + state.auditFilter + ' filter'; }
+    if (state.auditQuery) { scope += ' matching "' + state.auditQuery + '"'; }
+
     $('auditBody').innerHTML = '<tr><td colspan="7" data-label="">' +
-      '<span class="muted-sm">No audit entries match. Entries are written here as changes are made.</span>' +
+      '<span class="muted-sm">' + esc(scope) + '. Entries are written here as changes are made.</span>' +
       '</td></tr>';
     $('auditLine').textContent = '';
     return;
@@ -638,8 +800,19 @@ function renderAudit() {
       '</tr>';
   }).join('');
 
-  $('auditLine').textContent = state.auditRows.length + ' of ' + state.auditTotal +
-    ' entries - written by this console, newest first';
+  var line = state.auditRows.length + ' of ' + state.auditTotal + ' entries in ' + windowLabel() +
+             ' - written by this console, newest first';
+  if (state.auditSource === 'sql') { line += ' - stored in SQL Server'; }
+  else if (state.auditSource === 'file') { line += ' - stored in files on the server (no SQL configured)'; }
+  $('auditLine').textContent = line;
+}
+
+/* Formats a Date for a <input type="datetime-local">, which wants local time
+   with no timezone suffix. */
+function toLocalInput(date) {
+  function pad(n) { return ('0' + n).slice(-2); }
+  return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+         'T' + pad(date.getHours()) + ':' + pad(date.getMinutes());
 }
 
 function formatStamp(iso) {
@@ -1135,6 +1308,92 @@ function storageLine() {
   return 'No SQL Server configured - audit log written to files on the server only';
 }
 
+/* Settings: shows what the server is actually running with, and lets an
+   operator point it at a SQL Server and create the DSMT database from here
+   instead of restarting with -SqlServer. */
+function actionSettings() {
+  api('/api/settings').then(function (data) {
+    var s = data.settings;
+
+    var readOnly = [
+      ['Version', s.version],
+      ['Domain', s.domain],
+      ['Domain controller', s.server || 'Auto-discovered'],
+      ['Listening on', s.listenAddress + ':' + s.port],
+      ['Session lifetime', s.sessionHours + ' hours idle'],
+      ['Search result cap', String(s.pageSize)],
+      ['Data folder', s.dataPath]
+    ].map(function (r) {
+      return '<div class="detail-row"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>';
+    }).join('');
+
+    var status = s.sqlEnabled
+      ? '<p class="dialog-note">Connected to <strong>' + esc(s.sqlServer) + '</strong>, database ' +
+        '<strong>' + esc(s.sqlDatabase) + '</strong>. Operators, sessions, the directory snapshot ' +
+        'and the audit log are stored there.</p>'
+      : '<p class="dialog-note">No database is configured. The audit log is written to files under ' +
+        'the data folder, and operators, sessions and the directory snapshot are <strong>not stored ' +
+        'at all</strong>. Fill in a SQL Server below to create the database.</p>';
+
+    if (s.sqlEnabled && s.sqlError) {
+      status += '<p class="form-error">' + esc(s.sqlError) + '</p>';
+    }
+
+    openDialog({
+      title: 'Settings',
+      confirmLabel: s.sqlEnabled ? 'Reconnect' : 'Create database',
+      body:
+        '<div class="detail-fields"><span class="detail-section-label">Server</span>' + readOnly + '</div>' +
+        '<hr class="rule">' +
+        '<span class="detail-section-label">SQL Server storage</span>' +
+        status +
+        '<div class="field"><label for="setSqlServer">SQL Server instance</label>' +
+        '<input class="input" id="setSqlServer" placeholder="SQL01 or SQL01\\INSTANCE" autocomplete="off" value="' +
+        esc(s.sqlServer || '') + '"></div>' +
+        '<div class="field"><label for="setSqlDb">Database name</label>' +
+        '<input class="input" id="setSqlDb" autocomplete="off" value="' + esc(s.sqlDatabase || 'DSMT') + '"></div>' +
+        '<div class="row-2">' +
+          '<div class="field"><label for="setSqlUser">SQL user (blank = Windows auth)</label>' +
+          '<input class="input" id="setSqlUser" autocomplete="off"></div>' +
+          '<div class="field"><label for="setSqlPass">SQL password</label>' +
+          '<input class="input" id="setSqlPass" type="password" autocomplete="new-password"></div>' +
+        '</div>' +
+        '<p class="dialog-note">The database and its tables are created if they do not exist, and the ' +
+        'setting is saved so it survives a restart. Creating a database needs the <code>dbcreator</code> ' +
+        'right on the instance; connecting to one that already exists needs only read and write.</p>',
+      onConfirm: function () {
+        var server = $('setSqlServer').value.trim();
+        if (!server) { dialogError('Enter the SQL Server instance.'); return; }
+
+        api('/api/settings/sql', {
+          method: 'POST',
+          body: {
+            server: server,
+            database: $('setSqlDb').value.trim() || 'DSMT',
+            username: $('setSqlUser').value.trim(),
+            password: $('setSqlPass').value
+          }
+        }).then(function (res) {
+          state.storage = res.storage;
+          renderNotifications();
+          closeDialog();
+
+          toast('Database ready on ' + res.storage.sqlServer + ' (' + res.storage.sqlDatabase + ').');
+          if (!res.persisted) {
+            toast('The database works, but the setting could not be saved: ' + res.persistError +
+                  ' It will be lost on restart.', 'bad');
+          }
+          if (state.tab === 'audit') { loadAudit(); }
+        }).catch(function (err) {
+          dialogError(err.message);
+        });
+      }
+    });
+  }).catch(function (err) {
+    toast('Could not read the settings: ' + err.message, 'bad');
+  });
+}
+
 function actionAbout() {
   var d = state.domainInfo;
   var controllers = d ? asArray(d.controllers) : [];
@@ -1273,6 +1532,7 @@ function wireEvents() {
   els('.menu-item[data-tab]').forEach(function (b) {
     b.addEventListener('click', function () { setMenu(false); setTab(b.getAttribute('data-tab')); });
   });
+  $('menuSettings').addEventListener('click', function () { setMenu(false); actionSettings(); });
   $('menuAbout').addEventListener('click', function () { setMenu(false); actionAbout(); });
   $('menuRefresh').addEventListener('click', function () {
     setMenu(false);
@@ -1287,6 +1547,25 @@ function wireEvents() {
   });
 
   $('aboutBtn').addEventListener('click', actionAbout);
+
+  // ---- notifications ----
+  $('bellBtn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    if ($('bellPanel').hidden) { openBell(); } else { closeBell(); }
+  });
+
+  $('bellList').addEventListener('click', function (e) {
+    var button = e.target.closest('[data-note]');
+    if (!button) { return; }
+    var note = state.notifications[parseInt(button.getAttribute('data-note'), 10)];
+    if (note && note.action) { note.action(); }
+  });
+
+  document.addEventListener('click', function (e) {
+    if ($('bellPanel').hidden) { return; }
+    if (e.target.closest('.bell-wrap')) { return; }
+    closeBell();
+  });
 
   // ---- tabs ----
   els('.tab').forEach(function (b) {
@@ -1318,6 +1597,50 @@ function wireEvents() {
     if (!chip) { return; }
     state.auditFilter = chip.getAttribute('data-filter');
     renderAuditFilters();
+    loadAudit();
+  });
+
+  $('auditRanges').addEventListener('click', function (e) {
+    var chip = e.target.closest('[data-range]');
+    if (!chip) { return; }
+
+    state.auditRange = chip.getAttribute('data-range');
+    renderAuditFilters();
+
+    if (state.auditRange === 'custom') {
+      // Seed the pickers with the last 24 hours so the operator adjusts a
+      // sensible window instead of starting from two empty fields.
+      if (!$('auditFrom').value) { $('auditFrom').value = toLocalInput(new Date(Date.now() - 86400000)); }
+      if (!$('auditTo').value)   { $('auditTo').value   = toLocalInput(new Date()); }
+      $('auditRangeError').hidden = true;
+      $('auditFrom').focus();
+      return;   // nothing is applied until Apply range is pressed
+    }
+
+    state.auditFrom = null;
+    state.auditTo = null;
+    loadAudit();
+  });
+
+  $('auditApplyRange').addEventListener('click', function () {
+    var err = $('auditRangeError');
+    var fromValue = $('auditFrom').value;
+    var toValue = $('auditTo').value;
+
+    if (!fromValue && !toValue) {
+      err.textContent = 'Set a start, an end, or both.';
+      err.hidden = false;
+      return;
+    }
+    if (fromValue && toValue && new Date(fromValue) > new Date(toValue)) {
+      err.textContent = 'The start of the range is after its end.';
+      err.hidden = false;
+      return;
+    }
+
+    err.hidden = true;
+    state.auditFrom = fromValue ? new Date(fromValue).toISOString() : null;
+    state.auditTo   = toValue   ? new Date(toValue).toISOString()   : null;
     loadAudit();
   });
 
@@ -1411,6 +1734,7 @@ function wireEvents() {
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') { return; }
     if (!$('dialogBackdrop').hidden) { closeDialog(); return; }
+    if (!$('bellPanel').hidden) { closeBell(); return; }
     if (!$('menu').hidden) { setMenu(false); return; }
     if (!$('detailBackdrop').hidden) {
       $('detailPane').hidden = true;

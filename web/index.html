@@ -74,7 +74,26 @@
     <div class="head-right">
       <span class="domain-line" id="domainLine"></span>
       <button class="btn btn-ghost btn-about" id="aboutBtn" type="button">About</button>
-      <span class="avatar" id="avatar" title="">AD</span>
+
+      <div class="bell-wrap">
+        <button class="bell" id="bellBtn" type="button" aria-label="Notifications" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" focusable="false">
+            <path d="M12 3a6 6 0 0 0-6 6v3.6L4.5 15.4a.7.7 0 0 0 .6 1h13.8a.7.7 0 0 0 .6-1L18 12.6V9a6 6 0 0 0-6-6z"
+                  fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M9.8 19a2.3 2.3 0 0 0 4.4 0"
+                  fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="bell-badge" id="bellBadge" hidden></span>
+        </button>
+
+        <div class="bell-panel" id="bellPanel" hidden role="dialog" aria-label="Notifications">
+          <div class="bell-head">
+            <span class="detail-section-label">Notifications</span>
+            <span class="bell-count" id="bellCount"></span>
+          </div>
+          <div id="bellList"></div>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -85,6 +104,7 @@
     <button class="menu-item" data-tab="groups">Groups</button>
     <button class="menu-item" data-tab="audit">Audit log</button>
     <div class="menu-sep"></div>
+    <button class="menu-item" id="menuSettings">Settings</button>
     <button class="menu-item" id="menuAbout">About DSMT</button>
     <button class="menu-item" id="menuRefresh">Refresh from directory</button>
     <div class="menu-sep"></div>
@@ -147,6 +167,21 @@
         <button class="btn btn-secondary" id="auditExport" type="button">Export</button>
       </div>
     </div>
+    <div class="chips" id="auditRanges"></div>
+
+    <div class="range-custom" id="auditCustom" hidden>
+      <div class="field">
+        <label for="auditFrom">From</label>
+        <input class="input" id="auditFrom" type="datetime-local">
+      </div>
+      <div class="field">
+        <label for="auditTo">To</label>
+        <input class="input" id="auditTo" type="datetime-local">
+      </div>
+      <button class="btn btn-primary" id="auditApplyRange" type="button">Apply range</button>
+      <p class="form-error" id="auditRangeError" role="alert" hidden></p>
+    </div>
+
     <div class="chips" id="auditFilters"></div>
     <div class="table-wrap">
       <table class="table dsmt-table" id="auditTable">

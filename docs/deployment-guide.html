@@ -540,7 +540,11 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
   </p>
 </div>
 
-<p>You can skip this step entirely and run without SQL - see <a href="#s1">1.2</a>. If you do use it:</p>
+<p>
+  You can skip this step entirely and run without SQL - see <a href="#s1">1.2</a>
+  - and add it later from <strong>Menu &rarr; Settings</strong> in the console
+  itself, without restarting. If you do use it:
+</p>
 
 <h3>5.1 What is stored</h3>
 <table>
@@ -754,12 +758,43 @@ jdoe</code></pre>
 <h3>8.4 Finding your way around</h3>
 <table>
   <tr><th>Where</th><th>What it is</th></tr>
-  <tr><td>Header</td><td>The <strong>real</strong> domain name and DC count, read live</td></tr>
+  <tr><td>Header</td><td>The <strong>real</strong> domain name, detected automatically</td></tr>
   <tr><td>Users / Groups tabs</td><td>Live lists from the directory. Search runs against AD, it does not filter a preloaded table</td></tr>
+  <tr><td>Bell icon</td><td>Notifications raised from real server state - for example, that no SQL database is configured, with a button to create one</td></tr>
   <tr><td><strong>About</strong> button</td><td>Version, domain, forest, DC list, and where records are stored</td></tr>
-  <tr><td>Menu (three lines)</td><td>Navigation, About, refresh from the directory, and sign out</td></tr>
-  <tr><td>Audit log</td><td>Every write performed through the tool</td></tr>
+  <tr><td>Menu (three lines)</td><td>Navigation, <strong>Settings</strong>, About, refresh from the directory, and sign out</td></tr>
+  <tr><td>Audit log</td><td>Every write performed through the tool, filterable by category and by date range</td></tr>
 </table>
+
+<h3>8.5 Creating the database from the console</h3>
+<p>
+  If DSMT was started without SQL, the bell shows a notification saying so.
+  <strong>Menu &rarr; Settings</strong> lets you enter a SQL Server instance and
+  create the DSMT database and its tables without restarting the server. The
+  setting is saved to <code>config\dsmt.config.json</code>, so it survives a
+  restart, and the change is written to the audit log.
+</p>
+<p>
+  Creating a database needs the <code>dbcreator</code> right on the instance;
+  connecting to one that already exists needs only read and write. See
+  <a href="#s5">step 5.3</a>.
+</p>
+
+<h3>8.6 Filtering the audit log by date</h3>
+<p>
+  The audit view has two rows of filter chips. The first selects a time
+  window - <strong>Last 24 hours</strong>, <strong>Last 48 hours</strong>, Last
+  7 days, Last 30 days, All time, or <strong>Custom range</strong> with two
+  date/time pickers. The second filters by category (Users, Groups, Passwords,
+  Deletions). Both combine with the free-text search box.
+</p>
+<p>
+  Ranges are evaluated in your own timezone and applied inside the SQL query,
+  so the result count is the true number of records in that window - not the
+  most recent few hundred filtered afterwards. The line under the table always
+  names the window it counted and whether the records came from SQL Server or
+  from the file log.
+</p>
 
 <!-- ==================================================================== -->
 <h2 id="s9">Step 9 - Acceptance test</h2>
@@ -786,6 +821,12 @@ jdoe</code></pre>
   <li>The action appears in the Audit log with the operator, the DC, the reason and result <code>Success</code></li>
   <li>If SQL is configured: <code>SELECT TOP 10 * FROM dbo.AuditLog ORDER BY TimeUtc DESC</code>
       returns that same row</li>
+  <li>The audit range chips work: <strong>Last 24 hours</strong> and
+      <strong>Last 48 hours</strong> narrow the list, and a custom range returns
+      what you expect for a known date</li>
+  <li>If you started without SQL: the bell shows the "no database configured"
+      notification, and <strong>Settings</strong> creates the database
+      successfully</li>
   <li>CSV export downloads a file that opens correctly in Excel</li>
   <li>A bulk action on 2-3 test accounts reports a result per target</li>
   <li>Pressing F5 mid-session does <strong>not</strong> ask you to sign in again</li>
