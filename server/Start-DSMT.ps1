@@ -107,12 +107,17 @@ Write-Host ''
 # Both of these are the "one-time external step" class of failure: the code is
 # fine, the environment is not. Fail loudly here rather than in a request.
 
+# Every preflight failure is written to the log file as well as the console.
+# Under the Windows service or a scheduled task there is no console to read,
+# and a start that fails silently is impossible to diagnose.
+
 try {
     Assert-DsmtAdModule
     Write-Host '  [ok]   ActiveDirectory module loaded' -ForegroundColor Green
 } catch {
     Write-Host '  [FAIL] ActiveDirectory module' -ForegroundColor Red
     Write-Host ('         ' + $_.Exception.Message) -ForegroundColor Red
+    Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - ActiveDirectory module: ' + $_.Exception.Message)
     exit 1
 }
 
@@ -123,6 +128,7 @@ try {
     Write-Host ('  [FAIL] Cannot reach domain ' + $cfg.Domain) -ForegroundColor Red
     Write-Host ('         ' + $_.Exception.Message) -ForegroundColor Red
     Write-Host '         Check that this host is domain-joined and a domain controller is reachable.' -ForegroundColor Yellow
+    Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - cannot reach domain ' + $cfg.Domain + ': ' + $_.Exception.Message)
     exit 1
 }
 
@@ -134,6 +140,7 @@ if ($SqlServer) {
         Write-Host ('  [FAIL] SQL Server ' + $SqlServer + ' - ' + $sqlInit.Error) -ForegroundColor Red
         Write-Host '         DSMT will not start with a SQL target it cannot reach: fix the instance name,' -ForegroundColor Yellow
         Write-Host '         the firewall or the permissions, or start without -SqlServer to use file audit only.' -ForegroundColor Yellow
+        Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - SQL Server ' + $SqlServer + ': ' + $sqlInit.Error)
         exit 1
     }
 } else {
@@ -143,6 +150,7 @@ if ($SqlServer) {
 
 if (-not (Test-Path -LiteralPath (Join-Path $cfg.WebPath 'index.html'))) {
     Write-Host ('  [FAIL] Front end not found at ' + $cfg.WebPath) -ForegroundColor Red
+    Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - front end not found at ' + $cfg.WebPath)
     exit 1
 }
 Write-Host '  [ok]   Front end found' -ForegroundColor Green
@@ -161,6 +169,7 @@ try {
 } catch {
     Write-Host ('  [FAIL] Could not listen on ' + $prefix) -ForegroundColor Red
     Write-Host ('         ' + $_.Exception.Message) -ForegroundColor Red
+    Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - could not listen on ' + $prefix + ': ' + $_.Exception.Message)
     if ($ListenAddress -eq 'any') {
         Write-Host '         Listening on all interfaces needs an elevated shell, or a one-time reservation:' -ForegroundColor Yellow
         Write-Host ('         netsh http add urlacl url=http://+:' + $Port + '/ user="' + $env:USERDOMAIN + '\' + $env:USERNAME + '"') -ForegroundColor Yellow

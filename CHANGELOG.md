@@ -13,6 +13,46 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.4.0 — 2026-07-30
+Run DSMT unattended: as a real Windows service, or as a hardened scheduled
+task, and start it straight from the installer.
+
+**New** — `server/Install-DSMT.ps1`:
+- `-InstallAsService` registers DSMT as a Windows service, so it answers
+  `Get-Service` / `Start-Service` / `Restart-Service` and the service
+  manager's recovery settings. PowerShell cannot be a service directly — the
+  SCM kills any process that does not answer its protocol — so the installer
+  compiles a small C# host (`server\DsmtService.exe`) with the `csc.exe` that
+  ships with the .NET Framework and runs `Start-DSMT.ps1` as its child.
+  **Nothing is downloaded.** If the console dies, the host exits non-zero so
+  the SCM restarts it instead of leaving a service that claims to be running
+  with nothing behind it. Recovery is configured to 5s / 10s / every 30s.
+  With `-ServiceAccount` the installer prompts for the password (the SCM has
+  to store it); without it the service runs as LocalSystem and reaches AD and
+  SQL as the computer account, which the installer says out loud.
+- `-StartWhenDone` starts DSMT as soon as the install finishes — the service,
+  the task, or a background window, whichever was set up — and verifies it
+  actually came up rather than assuming it did.
+- Re-registering is clean: an existing service is stopped and deleted first.
+
+**Changed**:
+- The scheduled task is now configured for a process that must stay up:
+  **no execution time limit** (the default stopped it after 72 hours),
+  restart on failure (3 attempts a minute apart), start when available, and
+  no dependency on mains power. Previously it had Windows' defaults.
+- `server/Start-DSMT.ps1` — every preflight failure is now written to
+  `data\dsmt-*.log` as well as the console. Under a service or task there is
+  no console, and a start that failed silently was undiagnosable.
+- `Install-DSMT.cmd` — `DSMT_SERVICE`, `DSMT_AUTOSTART` and `DSMT_STARTNOW`
+  settings at the top.
+- `docs/deployment-guide.html` — step 11 rewritten: how to choose between the
+  two, why the compiled host exists, what the installer configures that a
+  hand-made task usually misses, and where to look when a headless start
+  fails.
+
+Deploy: `server\Install-DSMT.ps1`, `server\Start-DSMT.ps1`, `Install-DSMT.cmd`.
+Re-run the installer with the switch you want; restart `Start-DSMT.ps1`.
+
 ## 1.3.0 — 2026-07-30
 Audit time filtering, a Settings screen that can create the database, and a
 notifications bell.

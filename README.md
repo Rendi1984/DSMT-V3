@@ -43,9 +43,13 @@ a 360px phone to an ultrawide monitor.
 every step checks the current state first.
 
 ```powershell
-# The full lab setup
+# The full lab setup: prepare everything, run as a service, start now
 .\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
-                          -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask
+                          -ServiceAccount "LAB\svc-dsmt" -InstallAsService -StartWhenDone
+
+# Same, but as a boot-time scheduled task instead of a service
+.\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
+                          -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask -StartWhenDone
 
 # Minimal: finds a local SQL instance if there is one
 .\server\Install-DSMT.ps1
@@ -73,6 +77,31 @@ Three things it deliberately does not do:
 | Download RSAT on an offline Windows 10/11 client | `Add-WindowsCapability` fetches from Windows Update | Pass `-FeatureSource <FOD media or \sources\sxs>` |
 | Download SQL Server Express | DSMT hosts usually have no internet route, and a silent download would contradict that | Pass `-SqlExpressSetup <path to setup>` for an unattended install, or `-SkipSql` |
 | Delegate AD rights to operators | A security decision that depends on your OU structure | Delegate per OU — see the deployment guide, step 4 |
+
+### Running it unattended
+
+Two supported options, both set up by the installer:
+
+| | Scheduled task | Windows service |
+| --- | --- | --- |
+| Switch | `-InstallScheduledTask` | `-InstallAsService` |
+| Managed with | `Get-ScheduledTask "DSMT Console"` | `Get-Service DSMT` |
+| Restarts on failure | 3 attempts, 1 min apart | 5s, 10s, then every 30s |
+| Extra moving parts | none | a compiled host executable |
+
+**The scheduled task is the recommendation** unless you specifically need
+service semantics — it uses nothing but what Windows already ships.
+
+PowerShell cannot be a Windows service directly: the service control manager
+terminates any process that does not answer its protocol, so pointing
+`New-Service` at `powershell.exe` looks right and does not work. For
+`-InstallAsService` the installer compiles a small C# host
+(`server\DsmtService.exe`) with the `csc.exe` that ships with the .NET
+Framework — nothing is downloaded — and that host runs `Start-DSMT.ps1` as a
+child process, exiting non-zero if the console dies so the SCM restarts it.
+
+Under either option there is no console to read, so **every startup failure is
+written to `data\dsmt-*.log`** — check there first.
 
 ## Running it
 

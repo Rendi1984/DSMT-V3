@@ -868,32 +868,107 @@ jdoe</code></pre>
 <h2 id="s11">Step 11 - Running permanently</h2>
 <span class="step-badge">STEP 11 OF 11</span>
 
-<div class="ok">
-  <span class="box-title">The installer can do this for you</span>
+<p>
+  Run by hand, the server lives in an open PowerShell window and dies with it.
+  For permanent operation there are two supported options. The installer sets
+  up either one.
+</p>
+
+<h3>11.1 Choosing between them</h3>
+
+<table>
+  <tr><th></th><th>Scheduled task</th><th>Windows service</th></tr>
+  <tr><td>Installer switch</td><td><code>-InstallScheduledTask</code></td><td><code>-InstallAsService</code></td></tr>
+  <tr><td>In <code>Install-DSMT.cmd</code></td><td><code>set DSMT_AUTOSTART=1</code></td><td><code>set DSMT_SERVICE=1</code></td></tr>
+  <tr><td>Starts at boot</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td>Restarts on failure</td><td>Yes (3 attempts, 1 min apart)</td><td>Yes (5s, 10s, then every 30s)</td></tr>
+  <tr><td>Managed with</td><td><code>Get-ScheduledTask "DSMT Console"</code></td><td><code>Get-Service DSMT</code></td></tr>
+  <tr><td>Extra moving parts</td><td>None</td><td>A compiled host executable</td></tr>
+</table>
+
+<p>
+  <strong>Recommendation: the scheduled task</strong>, unless you specifically
+  need service semantics. It uses nothing but what Windows already ships and
+  has nothing to go stale. Choose the service if your operations processes are
+  built around <code>Get-Service</code> / <code>Restart-Service</code>, or if
+  you want the service manager's recovery behaviour.
+</p>
+
+<h3>11.2 As a Windows service</h3>
+
+<pre><code>.\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
+    -ServiceAccount "LAB\svc-dsmt" -InstallAsService -StartWhenDone</code></pre>
+
+<div class="note">
+  <span class="box-title">Why there is a compiled host</span>
   <p>
-    Run <code>Install-DSMT.ps1</code> with <code>-InstallScheduledTask</code>
-    (or <code>set DSMT_AUTOSTART=1</code> in <code>Install-DSMT.cmd</code>).
-    The detail here is for registering it by hand.
+    PowerShell cannot be a Windows service directly - the service control
+    manager terminates any process that does not answer its protocol within the
+    start timeout. Pointing <code>New-Service</code> at
+    <code>powershell.exe</code> looks like it should work and does not; it is a
+    common trap. The installer therefore compiles a small C# host,
+    <code>server\DsmtService.exe</code>, using the <code>csc.exe</code> that
+    ships with the .NET Framework - <strong>nothing is downloaded</strong> - and
+    that host runs <code>Start-DSMT.ps1</code> as a child process. If the
+    console dies, the host reports failure so the service manager restarts it
+    rather than leaving a service that claims to be running with nothing behind
+    it.
   </p>
 </div>
 
 <p>
-  The server runs in an open PowerShell window. For permanent operation the
-  simple recommendation is a scheduled task running under the service account,
-  triggered at machine startup:
+  With <code>-ServiceAccount</code> you are prompted for that account's
+  password, because the service control manager has to store it. Without it the
+  service runs as <strong>LocalSystem</strong>, reaching AD and SQL as the
+  computer account - in which case grant <code>LAB\SERVERNAME$</code> rights on
+  the SQL instance.
 </p>
+
+<pre><code>Get-Service DSMT
+Restart-Service DSMT
+Stop-Service DSMT</code></pre>
+
+<h3>11.3 As a scheduled task</h3>
+
+<pre><code>.\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
+    -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask -StartWhenDone</code></pre>
+
+<p>The installer configures three things that a hand-made task usually misses:</p>
+<ul>
+  <li><strong>No execution time limit</strong> - the default stops a task after 72 hours, which would take the console down every three days.</li>
+  <li><strong>Restart on failure</strong> - three attempts, a minute apart.</li>
+  <li><strong>Runs whether or not anyone is signed in</strong>, and starts even if the machine was unavailable at the scheduled moment.</li>
+</ul>
+
+<p>To register it by hand instead:</p>
 
 <pre><code>$action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\DSMT\server\Start-DSMT.ps1"
 
 $trigger = New-ScheduledTaskTrigger -AtStartup
 
-Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigger `
-    -User "LAB\svc-dsmt" -RunLevel Limited</code></pre>
+$settings = New-ScheduledTaskSettingsSet -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable
 
+Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigger `
+    -Settings $settings -User "LAB\svc-dsmt" -RunLevel Limited</code></pre>
+
+<div class="warn">
+  <span class="box-title">Both options need the URL reservation</span>
+  <p>
+    <a href="#s6">Step 6.2</a> is what lets DSMT listen without elevated rights.
+    Without it, an unprivileged service or task fails to start with
+    "Could not listen on http://+:8080/".
+  </p>
+</div>
+
+<h3>11.4 Diagnosing a start that fails with no console</h3>
 <p>
-  Note that the URL reservation from <a href="#s6">step 6.2</a> is required for
-  this to work without elevated rights.
+  Under a service or a task there is no window to read the preflight banner in.
+  Every startup failure is therefore also written to
+  <code>data\dsmt-YYYY-MM-DD.log</code> - check there first, before anything
+  else.
 </p>
 
 <!-- ==================================================================== -->
