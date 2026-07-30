@@ -23,6 +23,20 @@
     Idle lifetime of an operator session. Default 8.
 .PARAMETER PageSize
     Maximum objects returned by one directory search. Default 500.
+.PARAMETER IdentityMode
+    Which identity performs directory operations.
+
+    operator (default) - every read and write runs as the signed-in operator.
+    The domain controller enforces that operator's rights and records the
+    change against their account.
+
+    hybrid - reads run as the account this server runs under, writes still run
+    as the operator. Use it when operators should be able to browse the
+    directory without being granted broad read rights. NOTE: in hybrid mode
+    every operator can see every object the service account can see.
+
+    Writes stay on the operator in both modes, so the DC's own security log
+    always names the person who made the change.
 .PARAMETER SqlServer
     SQL Server instance that holds the DSMT database, e.g. 'SQL01' or
     'SQL01\LAB'. The database and its tables are created on first start if
@@ -56,6 +70,7 @@ param(
     [ValidateSet('localhost', 'any')][string] $ListenAddress = 'localhost',
     [int]    $SessionHours = 8,
     [int]    $PageSize = 500,
+    [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
     [string] $SqlServer = '',
     [string] $SqlDatabase = 'DSMT',
     [string] $SqlUsername = '',
@@ -78,7 +93,7 @@ $repoRoot  = Split-Path -Parent $scriptDir
 # command line. An explicit parameter always wins over the saved file.
 $saved = Get-DsmtSavedSettings -RootPath $repoRoot
 if ($null -ne $saved) {
-    foreach ($name in @('Domain', 'Server', 'Port', 'ListenAddress', 'SessionHours', 'PageSize', 'SqlServer', 'SqlDatabase')) {
+    foreach ($name in @('Domain', 'Server', 'Port', 'ListenAddress', 'SessionHours', 'PageSize', 'IdentityMode', 'SqlServer', 'SqlDatabase')) {
         if ($PSBoundParameters.ContainsKey($name)) { continue }
 
         $prop = $saved.PSObject.Properties[$name]
@@ -91,7 +106,16 @@ if ($null -ne $saved) {
 }
 
 Initialize-DsmtConfig -RootPath $repoRoot -Domain $Domain -Server $Server -Port $Port `
-                      -ListenAddress $ListenAddress -SessionHours $SessionHours -PageSize $PageSize
+                      -ListenAddress $ListenAddress -SessionHours $SessionHours -PageSize $PageSize `
+                      -IdentityMode $IdentityMode
+
+# Which account the installer registered this to run as, and of what kind.
+# Recorded for display only - what the process is actually running as is
+# whatever Windows started it with.
+if ($null -ne $saved) {
+    if ($saved.PSObject.Properties['ServiceAccount']) { $script:DsmtConfig.ServiceAccount = [string]$saved.ServiceAccount }
+    if ($saved.PSObject.Properties['AccountKind'])    { $script:DsmtConfig.AccountKind    = [string]$saved.AccountKind }
+}
 
 $cfg = Get-DsmtConfig
 
@@ -182,6 +206,13 @@ Write-Host ''
 Write-Host ('  Listening on ' + $prefix) -ForegroundColor Cyan
 Write-Host ('  Open ' + $browseUrl) -ForegroundColor Cyan
 Write-Host ('  Managing ' + $cfg.Domain + ' - operators sign in with their own domain account') -ForegroundColor DarkGray
+if ($cfg.IdentityMode -eq 'hybrid') {
+    Write-Host ('  Identity mode: hybrid - directory reads run as ' + $env:USERDOMAIN + '\' + $env:USERNAME + ',') -ForegroundColor Yellow
+    Write-Host '                 writes run as the signed-in operator.' -ForegroundColor Yellow
+    Write-Host '                 Every operator can see everything this account can see.' -ForegroundColor Yellow
+} else {
+    Write-Host '  Identity mode: operator - every read and write runs as the signed-in operator' -ForegroundColor DarkGray
+}
 Write-Host ('  Audit log: ' + $cfg.DataPath) -ForegroundColor DarkGray
 Write-Host '  Ctrl+C to stop.' -ForegroundColor DarkGray
 Write-Host ''

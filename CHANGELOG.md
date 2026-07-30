@@ -13,6 +13,70 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.5.0 — 2026-07-30
+Flexible service identity: gMSA, dedicated account, machine account or the
+installing user — changeable at any time. Plus an identity mode that lets
+directory reads run as the service account while writes stay on the operator.
+
+**Identity mode** (`server/lib/DsmtDirectory.ps1`, `DsmtCommon.ps1`,
+`DsmtHttp.ps1`, `Start-DSMT.ps1`, `web/*`):
+- `Get-DsmtAdParams` now takes `-Intent 'read'|'write'` and is **the single
+  place** that decides which identity performs an operation. All 16 call
+  sites declare their intent.
+- `operator` (default) — reads and writes both run as the signed-in operator.
+  Byte-for-byte the 1.4.x behaviour; an existing installation notices nothing.
+- `hybrid` — reads run as the account the server runs under, writes still run
+  as the operator. **Writes deliberately stay on the operator in both modes**,
+  because that is what makes the DC's own security log name the human who
+  made the change. Nothing can forge that afterwards.
+- "Runs as the service account" is implemented as *not passing* `-Credential`
+  — the process already runs as that account. That is precisely why a gMSA or
+  machine account works: there is no password to hand over.
+- `-Intent` defaults to `write`, so a call site that forgets to declare itself
+  keeps operator credentials rather than silently gaining service-account
+  rights.
+- Settable with `-IdentityMode`, in `config\dsmt.config.json`, or from
+  **Settings** at runtime (`POST /api/settings/identity`, audited).
+- The hybrid consequence — every operator can see everything the service
+  account can see — is stated in the Settings dialog next to the control, in
+  the startup banner, and as a notification. Not buried in documentation.
+
+**Service accounts** (`server/Install-DSMT.ps1`):
+- `-ServiceAccount` now accepts four forms, classified automatically:
+  the installing user (default), a dedicated account, a **gMSA** (detected by
+  the trailing `$`, no password requested), or **LocalSystem**.
+- Pre-flight per kind: a gMSA is verified with `Test-ADServiceAccount` before
+  anything is registered against it; an ordinary account is checked for
+  `PasswordNeverExpires` and for membership of Domain/Enterprise/Schema
+  Admins, both of which produce a loud warning rather than a silent surprise.
+- gMSA registration uses `sc.exe config obj= "DOM\name$" password= ""` after
+  `New-Service`, because `New-Service` cannot express a passwordless managed
+  account. Scheduled tasks use `New-ScheduledTaskPrincipal`.
+- The default remains the installing user: it is the only choice that cannot
+  fail, since the installer has just proved that account reaches AD and SQL.
+  It requires one password prompt — Windows cannot log on as an account at
+  boot without storing its password.
+
+**`-ChangeServiceAccount`** — move an installation to a different account
+without reinstalling. Updates all five things that depend on the identity as
+one operation: the service or scheduled task, **the URL reservation** (the one
+that otherwise breaks listening much later, with a misleading error), the
+`data\` permissions, the SQL login (printed as a script, since the installer
+may not hold rights on the instance), and the saved settings. The target
+account is verified and its password collected before anything is touched, so
+a failure leaves the installation as it was.
+
+**Publisher** — `$script:DsmtPublisher` in `DsmtCommon.ps1`, one constant like
+the version, surfaced through `/api/meta` into the sign-in footer and the
+About dialog. Set to **Rendi Group**.
+
+**Notifications** — two new, both derived from real state: running under a
+personal account (with the exact `-ChangeServiceAccount` command), and hybrid
+mode being active.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart. Re-run the installer
+only if you want to change the account.
+
 ## 1.4.0 — 2026-07-30
 Run DSMT unattended: as a real Windows service, or as a hardened scheduled
 task, and start it straight from the installer.

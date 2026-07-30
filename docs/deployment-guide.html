@@ -492,6 +492,132 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
   </p>
 </div>
 
+<h3>4.1a Which account DSMT itself runs as</h3>
+
+<p>Four forms are accepted, and the installer works out which is which:</p>
+
+<table>
+  <tr><th>Form</th><th>Password</th><th>Needs preparing</th><th>Use it when</th></tr>
+  <tr>
+    <td><em>omitted</em> - the installing user</td>
+    <td>Asked once</td>
+    <td><strong>Nothing</strong></td>
+    <td>Default. First install, lab, proof of concept</td>
+  </tr>
+  <tr>
+    <td><code>LAB\svc-dsmt</code></td>
+    <td>Asked once</td>
+    <td>Create the account, set the password not to expire</td>
+    <td>Production, where gMSA is not available</td>
+  </tr>
+  <tr>
+    <td><code>LAB\gmsa-dsmt$</code></td>
+    <td><strong>None</strong></td>
+    <td>KDS root key, <code>New-ADServiceAccount</code>, <code>Install-ADServiceAccount</code></td>
+    <td>Production. The best answer if the forest supports it</td>
+  </tr>
+  <tr>
+    <td><code>LocalSystem</code></td>
+    <td><strong>None</strong></td>
+    <td>Grant <code>LAB\HOSTNAME$</code> rights on SQL</td>
+    <td>No account may be created</td>
+  </tr>
+</table>
+
+<div class="note">
+  <span class="box-title">Why the installing user is the default</span>
+  <p>
+    It is the only choice that cannot fail. The account already exists, and by
+    the time this step runs the installer has just proved it reaches the
+    directory and SQL. Every other option introduces something that might not
+    be ready - and would surface as a service that will not start.
+  </p>
+  <p>
+    It still asks for the password once: Windows cannot log on as an account at
+    boot without storing its password, not even the account you are signed in
+    as right now.
+  </p>
+</div>
+
+<p>Preparing a gMSA, if you want one:</p>
+<pre><code><span class="c"># Once per forest. The -EffectiveTime skips the 10 hour propagation wait -</span>
+<span class="c"># acceptable in a lab, not in production.</span>
+Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10))
+
+New-ADServiceAccount -Name gmsa-dsmt -DNSHostName dsmt.lab.local `
+    -PrincipalsAllowedToRetrieveManagedPassword "DSMT-Hosts"
+
+<span class="c"># On the DSMT host</span>
+Install-ADServiceAccount -Identity gmsa-dsmt
+Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
+
+<h3>4.1b Changing the account later</h3>
+
+<p>
+  Nothing has to be reinstalled. One command updates <strong>all five</strong>
+  things that depend on the identity:
+</p>
+
+<pre><code>.\server\Install-DSMT.ps1 -ChangeServiceAccount "LAB\gmsa-dsmt$"</code></pre>
+
+<table>
+  <tr><th>#</th><th>What it updates</th><th>Why it matters</th></tr>
+  <tr><td>1</td><td>Service logon account, or scheduled task principal</td><td>The obvious one</td></tr>
+  <tr><td>2</td><td><strong>The URL reservation</strong></td><td><strong>The reservation names an account.</strong> Miss it and the new account cannot listen - and the failure looks like an unrelated bug weeks later</td></tr>
+  <tr><td>3</td><td><code>data\</code> permissions</td><td>Otherwise no logs and no file audit</td></tr>
+  <tr><td>4</td><td>SQL login</td><td>Printed as a script to run - the installer may not hold rights on the instance</td></tr>
+  <tr><td>5</td><td><code>config\dsmt.config.json</code></td><td>So the record matches reality</td></tr>
+</table>
+
+<p>
+  The target account is verified and its password collected <em>before</em>
+  anything is changed, so a failure leaves the installation exactly as it was.
+  Restart DSMT afterwards.
+</p>
+
+<div class="ok">
+  <span class="box-title">The console will remind you</span>
+  <p>
+    While DSMT runs under a personal account, the notifications bell shows it,
+    with the exact command to move to a service account. It disappears once you
+    do.
+  </p>
+</div>
+
+<h3>4.1c Identity mode - who performs each operation</h3>
+
+<table>
+  <tr><th>Mode</th><th>Reads</th><th>Writes</th></tr>
+  <tr><td><code>operator</code> (default)</td><td>The signed-in operator</td><td>The signed-in operator</td></tr>
+  <tr><td><code>hybrid</code></td><td>The service account</td><td><strong>The signed-in operator</strong></td></tr>
+</table>
+
+<p>
+  Use <code>hybrid</code> when operators should be able to browse the directory
+  without being granted broad read rights of their own, or when browsing
+  performance should not depend on who is signed in.
+</p>
+
+<div class="warn">
+  <span class="box-title">What hybrid changes, and what it deliberately does not</span>
+  <p>
+    <strong>It changes who can see what.</strong> In hybrid mode every operator
+    can see everything the service account can see, whether or not the
+    directory would have let them. If you have sensitive OUs, decide this
+    deliberately.
+  </p>
+  <p>
+    <strong>It does not change attribution.</strong> Writes stay on the
+    operator in both modes, so event 4724 (password reset), 4725 (disable) and
+    4728 (group change) on the domain controller always name the actual person.
+    That is not something a tool can fake afterwards - which is exactly why it
+    is worth keeping.
+  </p>
+</div>
+
+<p>Set it at install time, or change it later in <strong>Settings</strong> without a restart:</p>
+<pre><code>.\server\Install-DSMT.ps1 -IdentityMode hybrid</code></pre>
+
 <h3>4.2 Delegating rights to operators</h3>
 <p>
   If an operator is meant to reset passwords, that has to be delegated in AD,
@@ -827,6 +953,17 @@ jdoe</code></pre>
   <li>If you started without SQL: the bell shows the "no database configured"
       notification, and <strong>Settings</strong> creates the database
       successfully</li>
+  <li><strong>About</strong> shows "Rendi Group", the identity mode and the
+      account DSMT is running as</li>
+  <li>If you changed the account: <code>-ChangeServiceAccount</code> finished
+      cleanly, and the console still answers after a restart - if it does not,
+      the URL reservation is the first thing to check</li>
+  <li>If you switched to hybrid: an operator with no directory read rights can
+      still browse users, <strong>and a password reset by that operator still
+      shows their own name in event 4724 on the DC</strong></li>
+  <li><strong>Leave it running for four days</strong> and confirm it still
+      answers - this is the only way to catch a platform default that stops a
+      long-lived process</li>
   <li>CSV export downloads a file that opens correctly in Excel</li>
   <li>A bulk action on 2-3 test accounts reports a result per target</li>
   <li>Pressing F5 mid-session does <strong>not</strong> ask you to sign in again</li>
@@ -1076,7 +1213,9 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td><code>-Domain</code></td><td><code>LAB.LOCAL</code></td><td>The domain to manage</td></tr>
   <tr><td><code>-Port</code></td><td><code>8080</code></td><td>Port to reserve and open in the firewall</td></tr>
   <tr><td><code>-ListenAddress</code></td><td><code>any</code></td><td><code>localhost</code> skips the reservation and the firewall rule</td></tr>
-  <tr><td><code>-ServiceAccount</code></td><td>Current user</td><td>The account that will run it; receives the URL reservation, <code>data\</code> permissions and the scheduled task</td></tr>
+  <tr><td><code>-ServiceAccount</code></td><td>Current user</td><td>The account that will run it. Accepts a user, a gMSA (trailing <code>$</code>) or <code>LocalSystem</code> - see <a href="#s4">4.1a</a></td></tr>
+  <tr><td><code>-ChangeServiceAccount</code></td><td>-</td><td>Move an existing install to another account, updating all five dependent things - see <a href="#s4">4.1b</a></td></tr>
+  <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code> - see <a href="#s4">4.1c</a></td></tr>
   <tr><td><code>-SqlServer</code></td><td>Auto-detect</td><td>SQL instance to use</td></tr>
   <tr><td><code>-SqlDatabase</code></td><td><code>DSMT</code></td><td>Database name to create</td></tr>
   <tr><td><code>-SkipSql</code></td><td>Off</td><td>Install without any database</td></tr>
@@ -1100,6 +1239,7 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td><code>-ListenAddress</code></td><td><code>localhost</code></td><td><code>localhost</code> or <code>any</code></td></tr>
   <tr><td><code>-SessionHours</code></td><td><code>8</code></td><td>Idle session lifetime</td></tr>
   <tr><td><code>-PageSize</code></td><td><code>500</code></td><td>Search result cap</td></tr>
+  <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code></td></tr>
   <tr><td><code>-SqlServer</code></td><td>(empty)</td><td>SQL instance. Empty = no SQL</td></tr>
   <tr><td><code>-SqlDatabase</code></td><td><code>DSMT</code></td><td>Database name</td></tr>
   <tr><td><code>-SqlUsername</code> / <code>-SqlPassword</code></td><td>(empty)</td><td>SQL auth. Empty = Windows auth</td></tr>

@@ -16,11 +16,22 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.4.0'
+$script:DsmtVersion = '1.5.0'
+
+# ---------------------------------------------------------------------------
+# PUBLISHER - same rule as the version: defined once, read everywhere.
+# Shown in the About dialog and the sign-in footer, both fed from /api/meta.
+# Never type it into index.html or app.js.
+# ---------------------------------------------------------------------------
+$script:DsmtPublisher = 'Rendi Group'
 
 # Filled in by Start-DSMT.ps1 at startup.
 $script:DsmtConfig = @{
     Version       = $script:DsmtVersion
+    Publisher     = $script:DsmtPublisher
+    IdentityMode  = 'operator'
+    ServiceAccount = ''
+    AccountKind    = ''
     RootPath      = ''
     WebPath       = ''
     DataPath      = ''
@@ -48,9 +59,11 @@ function Initialize-DsmtConfig {
         [int]    $Port = 8080,
         [string] $ListenAddress = 'localhost',
         [int]    $SessionHours = 8,
-        [int]    $PageSize = 500
+        [int]    $PageSize = 500,
+        [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator'
     )
 
+    $script:DsmtConfig.IdentityMode  = $IdentityMode
     $script:DsmtConfig.RootPath      = $RootPath
     $script:DsmtConfig.WebPath       = Join-Path $RootPath 'web'
     $script:DsmtConfig.DataPath      = Join-Path $RootPath 'data'

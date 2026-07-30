@@ -72,6 +72,47 @@ lists anything still outstanding with the fix for it.
 
 Three things it deliberately does not do:
 
+### Which account DSMT runs as
+
+`-ServiceAccount` accepts four forms and classifies them automatically:
+
+| Form | Password | Needs preparing |
+| --- | --- | --- |
+| *omitted* — the installing user (default) | asked once | nothing |
+| `LAB\svc-dsmt` | asked once | create the account |
+| `LAB\gmsa-dsmt$` — a gMSA, detected by the `$` | **none** | KDS root key + `Install-ADServiceAccount` |
+| `LocalSystem` | **none** | grant `LAB\HOSTNAME$` on SQL |
+
+The installing user is the default because it is the only choice that cannot
+fail — it exists, and the installer has just proved it reaches AD and SQL.
+Windows still needs its password once, to log on at boot.
+
+Change it at any time, without reinstalling:
+
+```powershell
+.\server\Install-DSMT.ps1 -ChangeServiceAccount "LAB\gmsa-dsmt$"
+```
+
+That updates all five things that depend on the identity — the service or
+task, **the URL reservation**, the `data\` permissions, the SQL login (printed
+as a script) and the saved settings — after verifying the target account, so a
+failure changes nothing.
+
+### Identity mode
+
+| Mode | Reads | Writes |
+| --- | --- | --- |
+| `operator` (default) | signed-in operator | signed-in operator |
+| `hybrid` | the service account | **signed-in operator** |
+
+`hybrid` lets operators browse the directory without broad read rights of
+their own. It does mean every operator can see everything the service account
+can see — stated in Settings next to the control, not buried here.
+
+**Writes stay on the operator in both modes.** That is what makes the domain
+controller's own security log name the person who made each change, and no
+tool can fake that after the fact.
+
 | Not automated | Why | What to do |
 | --- | --- | --- |
 | Download RSAT on an offline Windows 10/11 client | `Add-WindowsCapability` fetches from Windows Update | Pass `-FeatureSource <FOD media or \sources\sxs>` |

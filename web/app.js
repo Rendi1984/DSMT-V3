@@ -46,6 +46,8 @@ var state = {
   notifications: [],
   pageLimitHit: false,
   storage: null,
+  identity: null,
+  publisher: '',
   busy: 0
 };
 
@@ -209,11 +211,17 @@ function showApp() {
 // Version - one value, from the API, painted everywhere it is shown
 // ---------------------------------------------------------------------------
 
-function applyVersion(version) {
-  if (!version) { return; }
-  state.version = version;
-  var badge = $('loginVersion');
-  if (badge) { badge.textContent = 'v' + version; }
+function applyVersion(version, publisher) {
+  if (version) {
+    state.version = version;
+    var badge = $('loginVersion');
+    if (badge) { badge.textContent = 'v' + version; }
+  }
+  if (publisher) {
+    state.publisher = publisher;
+    var by = $('loginPublisher');
+    if (by) { by.textContent = 'by ' + publisher; }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,8 +233,9 @@ function boot() {
 
   api('/api/meta', { allow401: true }).then(function (meta) {
     if (meta) {
-      applyVersion(meta.version);
+      applyVersion(meta.version, meta.publisher);
       state.storage = meta.storage || null;
+      state.identity = meta.identity || null;
       state.domain = meta.domain || '';
       var dom = $('loginDomain');
       if (dom && state.domain) { dom.textContent = state.domain; }
@@ -240,7 +249,7 @@ function boot() {
   state.token = token;
   api('/api/session', { allow401: true }).then(function (data) {
     if (!data || !data.ok) { signOutLocal(); return; }
-    applyVersion(data.version);
+    applyVersion(data.version, data.publisher);
     state.user = data.user;
     enterApp();
   }).catch(function () {
@@ -307,6 +316,47 @@ function buildNotifications() {
       kind: 'advice',
       title: 'SQL Server reported a problem',
       body: storage.sqlError,
+      actionLabel: 'Open settings',
+      action: function () { closeBell(); actionSettings(); }
+    });
+  }
+
+  var identity = state.identity;
+
+  if (identity && identity.accountKind === 'user') {
+    list.push({
+      kind: 'advice',
+      title: 'Running under a personal account',
+      body: 'DSMT runs as ' + (identity.serviceUser || 'an interactive account') +
+            '. Personal accounts have passwords that expire and leave with the person. ' +
+            'Move it to a dedicated service account or a gMSA when convenient.',
+      actionLabel: 'How',
+      action: function () {
+        closeBell();
+        openDialog({
+          title: 'Move DSMT to a service account',
+          hideConfirm: true,
+          cancelLabel: 'Close',
+          body: '<p class="dialog-note">Run this on the DSMT host, elevated. It updates the service or ' +
+                'scheduled task, the URL reservation, the data folder permissions and the saved settings ' +
+                'in one go, and prints the SQL grant you still need to run.</p>' +
+                '<div class="secret">.\\server\\Install-DSMT.ps1 -ChangeServiceAccount "DOMAIN\\svc-dsmt"</div>' +
+                '<p class="dialog-note">For a group managed service account, end the name with a dollar ' +
+                'sign and no password is asked for:</p>' +
+                '<div class="secret">.\\server\\Install-DSMT.ps1 -ChangeServiceAccount "DOMAIN\\gmsa-dsmt$"</div>' +
+                '<p class="dialog-note">Restart DSMT afterwards for the change to take effect.</p>'
+        });
+      }
+    });
+  }
+
+  if (identity && identity.mode === 'hybrid') {
+    list.push({
+      kind: 'info',
+      title: 'Hybrid identity mode is on',
+      body: 'Directory reads run as ' + (identity.serviceUser || 'the service account') +
+            ', so every operator can see everything that account can see. Writes still run as ' +
+            'the signed-in operator, so the domain controller records who made each change.',
       actionLabel: 'Open settings',
       action: function () { closeBell(); actionSettings(); }
     });
@@ -1317,13 +1367,15 @@ function actionSettings() {
 
     var readOnly = [
       ['Version', s.version],
+      ['Published by', s.publisher],
       ['Domain', s.domain],
       ['Domain controller', s.server || 'Auto-discovered'],
       ['Listening on', s.listenAddress + ':' + s.port],
+      ['Running as', s.serviceUser],
       ['Session lifetime', s.sessionHours + ' hours idle'],
       ['Search result cap', String(s.pageSize)],
       ['Data folder', s.dataPath]
-    ].map(function (r) {
+    ].filter(function (r) { return r[1]; }).map(function (r) {
       return '<div class="detail-row"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>';
     }).join('');
 
@@ -1345,6 +1397,20 @@ function actionSettings() {
       body:
         '<div class="detail-fields"><span class="detail-section-label">Server</span>' + readOnly + '</div>' +
         '<hr class="rule">' +
+        '<span class="detail-section-label">Identity mode</span>' +
+        '<p class="dialog-note">Which account performs directory operations. ' +
+        '<strong>Writes always run as the signed-in operator</strong> in either mode, so the domain ' +
+        'controller records who made each change.</p>' +
+        '<div class="field"><label for="setIdentity">Mode</label>' +
+        '<select class="input" id="setIdentity">' +
+          '<option value="operator"' + (s.identityMode === 'operator' ? ' selected' : '') + '>' +
+            'Operator - reads and writes both run as the signed-in operator</option>' +
+          '<option value="hybrid"' + (s.identityMode === 'hybrid' ? ' selected' : '') + '>' +
+            'Hybrid - reads run as the service account</option>' +
+        '</select></div>' +
+        '<p class="dialog-note" id="identityWarning"></p>' +
+        '<button class="btn btn-secondary" type="button" id="applyIdentity">Apply identity mode</button>' +
+        '<hr class="rule">' +
         '<span class="detail-section-label">SQL Server storage</span>' +
         status +
         '<div class="field"><label for="setSqlServer">SQL Server instance</label>' +
@@ -1361,6 +1427,38 @@ function actionSettings() {
         '<p class="dialog-note">The database and its tables are created if they do not exist, and the ' +
         'setting is saved so it survives a restart. Creating a database needs the <code>dbcreator</code> ' +
         'right on the instance; connecting to one that already exists needs only read and write.</p>',
+      onOpen: function () {
+        var select = $('setIdentity');
+        var warning = $('identityWarning');
+
+        // The consequence of hybrid is stated where the choice is made, not
+        // buried in documentation: it changes who can see what.
+        function describe() {
+          if (select.value === 'hybrid') {
+            warning.innerHTML = '<strong>Every operator will be able to see everything ' +
+              esc(s.serviceUser || 'the service account') + ' can see</strong>, whether or not they ' +
+              'have read rights of their own in the directory.';
+          } else {
+            warning.textContent = 'Each operator sees only what the directory lets them see.';
+          }
+        }
+        select.addEventListener('change', describe);
+        describe();
+
+        $('applyIdentity').addEventListener('click', function () {
+          api('/api/settings/identity', { method: 'POST', body: { mode: select.value } })
+            .then(function (res) {
+              if (state.identity) { state.identity.mode = res.identityMode; }
+              renderNotifications();
+              toast('Identity mode set to ' + res.identityMode + '.');
+              if (!res.persisted) {
+                toast('Applied, but not saved: ' + res.persistError + ' It will revert on restart.', 'bad');
+              }
+              if (state.tab !== 'audit') { loadRows(); }
+            })
+            .catch(function (err) { dialogError(err.message); });
+        });
+      },
       onConfirm: function () {
         var server = $('setSqlServer').value.trim();
         if (!server) { dialogError('Enter the SQL Server instance.'); return; }
@@ -1400,7 +1498,10 @@ function actionAbout() {
 
   var rows = [
     ['Version', state.version],
+    ['Published by', state.publisher],
     ['Signed in as', state.user ? state.user.account : ''],
+    ['Identity mode', state.identity ? state.identity.mode : ''],
+    ['Service account', state.identity ? state.identity.serviceUser : ''],
     ['Domain', d ? d.domain : state.domain],
     ['NetBIOS name', d ? d.netbios : ''],
     ['Forest', d ? d.forest : ''],
@@ -1426,7 +1527,10 @@ function actionAbout() {
               }).join('') + '</ul></div>'
             : '') +
           '<p class="dialog-note">Version numbering is MAJOR.FEATURE.FIX and comes from one constant on ' +
-          'the server, surfaced through /api/meta.</p>'
+          'the server, surfaced through /api/meta.</p>' +
+          (state.publisher
+            ? '<p class="dialog-note">' + esc(state.publisher) + '</p>'
+            : '')
   });
 }
 
@@ -1509,7 +1613,7 @@ function wireEvents() {
     }).then(function (data) {
       button.disabled = false;
       saveToken(data.token);
-      applyVersion(data.version);
+      applyVersion(data.version, data.publisher);
       state.user = data.user;
       $('loginPass').value = '';
       enterApp();

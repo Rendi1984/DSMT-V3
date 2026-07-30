@@ -98,6 +98,9 @@ picking the next number — don't trust a stale note elsewhere.
 `server/lib/DsmtCommon.ps1`.** It is copied into `$script:DsmtConfig.Version`
 at startup and reaches every display spot from there:
 
+The publisher name (`$script:DsmtPublisher`, "Rendi Group") follows the exact
+same rule and lives beside it — one constant, surfaced through `/api/meta`.
+
 | Where it is shown | How it gets there |
 | --- | --- |
 | Sign-in screen footer badge | `GET /api/meta` → `applyVersion()` |
@@ -224,6 +227,17 @@ cause. Three shapes:
    fake-data section) — write down the pattern itself, not just each instance.
 
 ### Known instances
+- **[Shape 3] A platform default silently kills a long-running process.**
+  Task Scheduler stops a task after 72 hours by default, which would have
+  taken the console down every three days with no error — found by reading
+  the code, not by running it, and fixed in 1.4.0 with
+  `-ExecutionTimeLimit ([TimeSpan]::Zero)`. **The pattern, not the instance:
+  whenever a new way of running DSMT is added (service, task, container,
+  reverse proxy), enumerate the platform's default limits on a long-lived
+  process before calling it done** — idle timeouts, recycling, execution
+  caps, power policy. The acceptance test for any hosting change is to leave
+  it running for four days and confirm it still answers; nothing shorter
+  catches this class.
 - **[Shape 2] "The server won't start."** The three preflight checks in
   `Start-DSMT.ps1` each name their own fix: the RSAT `ActiveDirectory` module
   is missing (`Install-WindowsFeature RSAT-AD-PowerShell`), the domain is

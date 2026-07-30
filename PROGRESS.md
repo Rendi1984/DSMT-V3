@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.4.0` — matches the top entry of `CHANGELOG.md` and
+`1.5.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -50,6 +50,18 @@ its data is fabricated and every button is inert.
      rather than orphaning it.
    - Under service or task there is no console: confirm a deliberate failure
      (e.g. a wrong `-SqlServer`) really does show up in `data\dsmt-*.log`.
+   - **gMSA (1.5.0)**: `Test-ADServiceAccount` detection, and whether
+     `sc.exe config DSMT obj= "LAB\gmsa$" password= ""` really takes. Also
+     `New-ScheduledTaskPrincipal -LogonType Password` with a gMSA.
+   - **`-ChangeServiceAccount` (1.5.0)**: the whole five-step sequence, and
+     specifically that the console still listens afterwards — the URL
+     reservation is the step that breaks quietly.
+   - **`hybrid` identity mode (1.5.0)**: that a read really does run as the
+     service account (test with an operator who has no read rights), and that
+     a write by that same operator still shows *their* name in event 4724 on
+     the DC. That second half is the whole point of the design.
+   - **Four-day soak.** Leave it running and confirm it still answers. This is
+     the only way to catch the class of bug the 72-hour task limit belonged to.
    - That `config/dsmt.config.json` is written where the run account can read
      it, and that `Start-DSMT.ps1` then starts with no parameters.
 

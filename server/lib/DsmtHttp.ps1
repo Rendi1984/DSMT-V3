@@ -300,10 +300,16 @@ function Invoke-DsmtApi {
     if ($Path -eq '/api/meta') {
         $sql = Get-DsmtSqlState
         Send-DsmtJson -Response $Response -Data @{
-            ok      = $true
-            version = $cfg.Version
-            domain  = $cfg.Domain
-            product = 'DSMT - Directory Service Management Tool'
+            ok        = $true
+            version   = $cfg.Version
+            publisher = $cfg.Publisher
+            domain    = $cfg.Domain
+            product   = 'DSMT - Directory Service Management Tool'
+            identity  = @{
+                mode        = $cfg.IdentityMode
+                serviceUser = ($env:USERDOMAIN + '\' + $env:USERNAME)
+                accountKind = $cfg.AccountKind
+            }
             storage = @{
                 sqlEnabled  = $sql.Enabled
                 sqlServer   = $sql.Server
@@ -337,10 +343,11 @@ function Invoke-DsmtApi {
                         -Reason 'Console sign-in' -Result 'Success' -Category 'session'
 
         Send-DsmtJson -Response $Response -Data @{
-            ok      = $true
-            token   = $created.Token
-            version = $cfg.Version
-            user    = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
+            ok        = $true
+            token     = $created.Token
+            version   = $cfg.Version
+            publisher = $cfg.Publisher
+            user      = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
         }
         return
     }
@@ -362,9 +369,10 @@ function Invoke-DsmtApi {
 
     if ($Path -eq '/api/session' -and $method -eq 'GET') {
         Send-DsmtJson -Response $Response -Data @{
-            ok      = $true
-            version = $cfg.Version
-            user    = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
+            ok        = $true
+            version   = $cfg.Version
+            publisher = $cfg.Publisher
+            user      = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
         }
         return
     }
@@ -380,6 +388,11 @@ function Invoke-DsmtApi {
                     ok = $true
                     settings = @{
                         version       = $cfg.Version
+                        publisher     = $cfg.Publisher
+                        identityMode   = $cfg.IdentityMode
+                        serviceUser    = ($env:USERDOMAIN + '\' + $env:USERNAME)
+                        serviceAccount = $cfg.ServiceAccount
+                        accountKind    = $cfg.AccountKind
                         domain        = $cfg.Domain
                         server        = $cfg.Server
                         port          = $cfg.Port
@@ -392,6 +405,40 @@ function Invoke-DsmtApi {
                         sqlDatabase   = $sql.Database
                         sqlError      = $sql.LastError
                     }
+                }
+                return
+            }
+
+            '^/api/settings/identity$' {
+                if ($method -ne 'POST') { break }
+
+                $body = Read-DsmtBody -Request $Request
+                $mode = ([string](Get-DsmtBodyValue -Body $body -Name 'mode')).Trim().ToLower()
+
+                if ($mode -ne 'operator' -and $mode -ne 'hybrid') {
+                    Send-DsmtError -Response $Response -Message 'Identity mode must be "operator" or "hybrid".' -StatusCode 400
+                    return
+                }
+
+                $previous = $cfg.IdentityMode
+                $script:DsmtConfig.IdentityMode = $mode
+
+                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ IdentityMode = $mode }
+
+                # A change to who reads the directory is a security-relevant
+                # change, so it is audited like any other.
+                Write-DsmtAudit -Action 'Change identity mode' -Target ($previous + ' -> ' + $mode) `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session' `
+                                -Detail ('Service account: ' + $env:USERDOMAIN + '\' + $env:USERNAME)
+
+                Write-DsmtLog -Message ($session.Account + ' changed the identity mode from ' + $previous + ' to ' + $mode)
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    identityMode = $mode
+                    persisted    = $saved.Ok
+                    persistError = $saved.Error
                 }
                 return
             }

@@ -16,9 +16,15 @@
        in one place is what stops the silent "blank cells, no error" bug that
        a casing mismatch produces.
 
-    Every write runs with the operator's own credentials, so the domain
-    controller enforces permissions and records the change against their
-    account.
+    3. Which identity performs an operation is decided in exactly one place:
+       Get-DsmtAdParams. Never call an AD cmdlet in this file without
+       splatting what it returns, and always declare -Intent 'read' or
+       'write' - that is what the identity modes hang off.
+
+    Every WRITE runs with the operator's own credentials in every mode, so the
+    domain controller enforces permissions and records the change against
+    their account. Reads may run as the service account, depending on
+    IdentityMode.
 .NOTES
     Author  : IT Team
     Requires: RSAT ActiveDirectory PowerShell module on the host running this
@@ -85,7 +91,7 @@ function Get-DsmtOperatorIdentity {
         [Parameter(Mandatory = $true)] $Credential
     )
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
     $me = Get-ADUser @ad -Identity $SamAccountName -Properties 'displayName', 'distinguishedName' -ErrorAction Stop
 
     $display = [string]$me.displayName
@@ -102,14 +108,49 @@ function Get-DsmtAdParams {
     <#
     .SYNOPSIS
         The -Server/-Credential pair every AD cmdlet call in this file splats.
+        THE one place that decides which identity performs an operation.
+    .DESCRIPTION
+        Two identity modes, set by IdentityMode in the configuration:
+
+          operator (default)
+            Every read and every write runs as the signed-in operator. The
+            domain controller enforces that operator's rights and records the
+            change against their account. This is the 1.4.x behaviour.
+
+          hybrid
+            Reads run as the service account (the process identity), writes
+            still run as the operator. Directory browsing then works for an
+            operator with no broad read rights, and stays consistent for
+            everyone - but WRITES DELIBERATELY STAY ON THE OPERATOR, because
+            that is what makes the DC's own security log name the human who
+            did it. Nothing can forge that attribution afterwards.
+
+        "Runs as the service account" simply means not passing -Credential at
+        all: the process is already running under that account. That is why
+        this works with a gMSA or a machine account, where no password exists
+        to hand over.
+    .PARAMETER Intent
+        'read' or 'write'. Defaults to 'write' on purpose: a call site that
+        forgets to declare its intent keeps the operator's credentials, which
+        is the conservative direction to fail in. The opposite default would
+        silently promote a missed call to service-account rights.
     #>
-    param($Credential)
+    param(
+        $Credential,
+        [ValidateSet('read', 'write')][string] $Intent = 'write'
+    )
 
     Assert-DsmtAdModule
-    return @{
-        Server     = (Get-DsmtServer -Credential $Credential)
-        Credential = $Credential
+
+    $cfg = Get-DsmtConfig
+    $params = @{ Server = (Get-DsmtServer -Credential $Credential) }
+
+    $useServiceIdentity = ($cfg.IdentityMode -eq 'hybrid' -and $Intent -eq 'read')
+    if (-not $useServiceIdentity) {
+        $params.Credential = $Credential
     }
+
+    return $params
 }
 
 function Get-DsmtDomainInfo {
@@ -120,7 +161,7 @@ function Get-DsmtDomainInfo {
     #>
     param($Credential)
 
-    $ad  = Get-DsmtAdParams -Credential $Credential
+    $ad  = Get-DsmtAdParams -Credential $Credential -Intent 'read'
     $cfg = Get-DsmtConfig
 
     $domain = Get-ADDomain @ad -ErrorAction Stop
@@ -254,7 +295,7 @@ function Get-DsmtUsers {
         [int] $Limit = 0
     )
 
-    $ad  = Get-DsmtAdParams -Credential $Credential
+    $ad  = Get-DsmtAdParams -Credential $Credential -Intent 'read'
     $cfg = Get-DsmtConfig
     if ($Limit -le 0) { $Limit = $cfg.PageSize }
 
@@ -288,7 +329,7 @@ function Get-DsmtUser {
     #>
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
     $u  = Get-ADUser @ad -Identity $Identity -Properties $script:DsmtUserProperties -ErrorAction Stop
 
     $detail = ConvertTo-DsmtUser -AdUser $u -IncludeDetail $true
@@ -361,7 +402,7 @@ function ConvertTo-DsmtGroup {
 function Get-DsmtGroups {
     param($Credential, [string] $Query = '', [int] $Limit = 0)
 
-    $ad  = Get-DsmtAdParams -Credential $Credential
+    $ad  = Get-DsmtAdParams -Credential $Credential -Intent 'read'
     $cfg = Get-DsmtConfig
     if ($Limit -le 0) { $Limit = $cfg.PageSize }
 
@@ -390,7 +431,7 @@ function Get-DsmtGroup {
     #>
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
     $g  = Get-ADGroup @ad -Identity $Identity -Properties $script:DsmtGroupProperties -ErrorAction Stop
 
     $detail = ConvertTo-DsmtGroup -AdGroup $g -IncludeDetail $true
@@ -415,7 +456,7 @@ function Get-DsmtGroup {
 function Get-DsmtOus {
     param($Credential)
 
-    $ad     = Get-DsmtAdParams -Credential $Credential
+    $ad     = Get-DsmtAdParams -Credential $Credential -Intent 'read'
     $domain = Get-ADDomain @ad -ErrorAction Stop
 
     $ous = @(Get-ADOrganizationalUnit @ad -Filter * -Properties 'distinguishedName', 'name' -ErrorAction Stop)
@@ -452,7 +493,7 @@ function Reset-DsmtPassword {
         [bool] $Unlock = $true
     )
 
-    $ad     = Get-DsmtAdParams -Credential $Credential
+    $ad     = Get-DsmtAdParams -Credential $Credential -Intent 'write'
     $secure = ConvertTo-SecureString -String $NewPassword -AsPlainText -Force
 
     Set-ADAccountPassword @ad -Identity $Identity -Reset -NewPassword $secure -ErrorAction Stop
@@ -469,14 +510,14 @@ function Reset-DsmtPassword {
 function Unlock-DsmtAccount {
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
     Unlock-ADAccount @ad -Identity $Identity -ErrorAction Stop
 }
 
 function Set-DsmtAccountEnabled {
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity, [Parameter(Mandatory = $true)][bool] $Enabled)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
     if ($Enabled) {
         Enable-ADAccount @ad -Identity $Identity -ErrorAction Stop
     } else {
@@ -487,21 +528,21 @@ function Set-DsmtAccountEnabled {
 function Move-DsmtObject {
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity, [Parameter(Mandatory = $true)][string] $TargetOu)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
     Move-ADObject @ad -Identity $Identity -TargetPath $TargetOu -ErrorAction Stop
 }
 
 function Add-DsmtGroupMember {
     param($Credential, [Parameter(Mandatory = $true)][string] $Group, [Parameter(Mandatory = $true)][string[]] $Members)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
     Add-ADGroupMember @ad -Identity $Group -Members $Members -Confirm:$false -ErrorAction Stop
 }
 
 function Remove-DsmtGroupMember {
     param($Credential, [Parameter(Mandatory = $true)][string] $Group, [Parameter(Mandatory = $true)][string[]] $Members)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
     Remove-ADGroupMember @ad -Identity $Group -Members $Members -Confirm:$false -ErrorAction Stop
 }
 
@@ -526,7 +567,7 @@ function New-DsmtUser {
         [bool]   $MustChange = $true
     )
 
-    $ad  = Get-DsmtAdParams -Credential $Credential
+    $ad  = Get-DsmtAdParams -Credential $Credential -Intent 'write'
     $cfg = Get-DsmtConfig
 
     $upn = $SamAccountName + '@' + $cfg.Domain
@@ -570,7 +611,7 @@ function New-DsmtGroup {
         [string] $Description = ''
     )
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
 
     $new = @{
         Name          = $Name
@@ -592,7 +633,7 @@ function Remove-DsmtObject {
     #>
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity, [Parameter(Mandatory = $true)][ValidateSet('user', 'group')][string] $Type)
 
-    $ad = Get-DsmtAdParams -Credential $Credential
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
 
     if ($Type -eq 'user') {
         $obj = Get-ADUser @ad -Identity $Identity -ErrorAction Stop
