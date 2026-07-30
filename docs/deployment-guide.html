@@ -149,10 +149,30 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
         <li><a href="#auto-limits">What it cannot do on its own</a></li>
       </ul>
     </li>
-    <li><a href="#s1">Step 1 - Prerequisites</a></li>
+    <li><a href="#forms">Every installation form, at a glance</a>
+      <ul class="sub">
+        <li><a href="#forms-run">A. How it stays running</a></li>
+        <li><a href="#forms-account">B. Which account</a></li>
+        <li><a href="#forms-storage">C. Where records are stored</a></li>
+        <li><a href="#forms-identity">D. Which identity acts</a></li>
+        <li><a href="#forms-examples">Putting it together</a></li>
+      </ul>
+    </li>
+    <li><a href="#s1">Step 1 - Prerequisites</a>
+      <ul class="sub">
+        <li><a href="#s1-matrix">What each choice requires</a></li>
+      </ul>
+    </li>
     <li><a href="#s2">Step 2 - Prepare the machine</a></li>
     <li><a href="#s3">Step 3 - Copy the files</a></li>
-    <li><a href="#s4">Step 4 - Run account and AD delegation</a></li>
+    <li><a href="#s4">Step 4 - Run account and AD delegation</a>
+      <ul class="sub">
+        <li><a href="#s4-account">4.2 Which account DSMT runs as</a></li>
+        <li><a href="#s4-change">4.3 Changing it later</a></li>
+        <li><a href="#s4-identity">4.4 Identity mode</a></li>
+        <li><a href="#s4-delegation">4.5 Delegating rights</a></li>
+      </ul>
+    </li>
     <li><a href="#s5">Step 5 - Prepare SQL Server</a></li>
     <li><a href="#s6">Step 6 - Network, port and listener reservation</a></li>
     <li><a href="#s7">Step 7 - First run</a>
@@ -164,6 +184,9 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
       <ul class="sub">
         <li><a href="#s8-how">How to sign in</a></li>
         <li><a href="#s8-behind">What happens behind the scenes</a></li>
+        <li><a href="#s8-idle">Idle timeout</a></li>
+        <li><a href="#s8-db">Creating the database from the console</a></li>
+        <li><a href="#s8-audit">Filtering the audit log by date</a></li>
       </ul>
     </li>
     <li><a href="#s9">Step 9 - Acceptance test</a></li>
@@ -332,7 +355,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
   <tr>
     <td>Delegate rights to operators in AD</td>
     <td>A security decision that depends on your OU structure and organisational policy - not something an install script should decide</td>
-    <td><a href="#s4">Step 4.2</a> - delegate exactly what is needed, at OU level</td>
+    <td><a href="#s4">Step 4.5</a> - delegate exactly what is needed, at OU level</td>
   </tr>
 </table>
 
@@ -351,6 +374,156 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
   <a href="#s7">step 7 - first run</a>.</strong> If you would rather understand
   or perform each step yourself, keep reading in order.
 </p>
+
+<!-- ==================================================================== -->
+<h2 id="forms">Every installation form, at a glance</h2>
+
+<p class="lead">
+  There is one installer. What differs is four independent choices you make
+  when you run it. Pick a row from each table below; they combine freely.
+</p>
+
+<h3 id="forms-run">A. How DSMT stays running</h3>
+
+<table>
+  <tr><th>Form</th><th>Switch</th><th>Starts at boot</th><th>Managed with</th><th>Needs</th></tr>
+  <tr>
+    <td><strong>Console window</strong></td>
+    <td><em>none</em></td>
+    <td>No - dies with the window</td>
+    <td>Ctrl+C</td>
+    <td>Nothing</td>
+  </tr>
+  <tr>
+    <td><strong>Scheduled task</strong><br><em>recommended</em></td>
+    <td><code>-InstallScheduledTask</code></td>
+    <td>Yes</td>
+    <td><code>Get-ScheduledTask "DSMT Console"</code></td>
+    <td>Administrator once</td>
+  </tr>
+  <tr>
+    <td><strong>Windows service</strong></td>
+    <td><code>-InstallAsService</code></td>
+    <td>Yes</td>
+    <td><code>Get-Service DSMT</code></td>
+    <td>Administrator once; compiles a small host - see <a href="#s11">11.2</a></td>
+  </tr>
+</table>
+
+<h3 id="forms-account">B. Which account it runs as</h3>
+
+<table>
+  <tr><th>Form</th><th>How to ask for it</th><th>Password</th><th>Must be prepared first</th></tr>
+  <tr>
+    <td><strong>The installing user</strong><br><em>default</em></td>
+    <td><em>omit <code>-ServiceAccount</code></em></td>
+    <td>Asked once</td>
+    <td><strong>Nothing</strong></td>
+  </tr>
+  <tr>
+    <td><strong>Dedicated account</strong></td>
+    <td><code>-ServiceAccount "LAB\svc-dsmt"</code></td>
+    <td>Asked once</td>
+    <td>Create the account; set its password not to expire</td>
+  </tr>
+  <tr>
+    <td><strong>gMSA</strong></td>
+    <td><code>-ServiceAccount "LAB\gmsa-dsmt$"</code></td>
+    <td><strong>None ever</strong></td>
+    <td>KDS root key, <code>New-ADServiceAccount</code>, <code>Install-ADServiceAccount</code> - see <a href="#s4-account">4.2</a></td>
+  </tr>
+  <tr>
+    <td><strong>Machine account</strong></td>
+    <td><code>-ServiceAccount LocalSystem</code></td>
+    <td><strong>None</strong></td>
+    <td>Grant <code>LAB\HOSTNAME$</code> rights on SQL</td>
+  </tr>
+</table>
+
+<p>
+  Any of these can be swapped later with
+  <code>-ChangeServiceAccount</code> - see <a href="#s4-change">4.3</a>.
+</p>
+
+<h3 id="forms-storage">C. Where records are stored</h3>
+
+<table>
+  <tr><th>Form</th><th>How to ask for it</th><th>What you get</th></tr>
+  <tr>
+    <td><strong>SQL, auto-detected</strong></td>
+    <td><em>omit <code>-SqlServer</code></em></td>
+    <td>Uses a local SQL instance if one exists, otherwise reports that none was found</td>
+  </tr>
+  <tr>
+    <td><strong>SQL, named</strong></td>
+    <td><code>-SqlServer SQL01</code></td>
+    <td>Creates the <code>DSMT</code> database and tables there</td>
+  </tr>
+  <tr>
+    <td><strong>SQL Express, installed for you</strong></td>
+    <td><code>-SqlExpressSetup &lt;path&gt;</code></td>
+    <td>Unattended install from media <em>you</em> supply - nothing is downloaded</td>
+  </tr>
+  <tr>
+    <td><strong>No database</strong></td>
+    <td><code>-SkipSql</code></td>
+    <td>Audit log to JSONL files. Operators, sessions and the snapshot are <strong>not</strong> stored</td>
+  </tr>
+</table>
+
+<p>
+  A database can also be added later from the console itself, with no restart -
+  <strong>Menu &rarr; Settings</strong>, see <a href="#s8-db">8.6</a>.
+</p>
+
+<h3 id="forms-identity">D. Which identity performs directory operations</h3>
+
+<table>
+  <tr><th>Form</th><th>How to ask for it</th><th>Reads</th><th>Writes</th></tr>
+  <tr>
+    <td><strong>Operator</strong><br><em>default</em></td>
+    <td><em>omit <code>-IdentityMode</code></em></td>
+    <td>The signed-in operator</td>
+    <td>The signed-in operator</td>
+  </tr>
+  <tr>
+    <td><strong>Hybrid</strong></td>
+    <td><code>-IdentityMode hybrid</code></td>
+    <td>The service account</td>
+    <td><strong>The signed-in operator</strong></td>
+  </tr>
+</table>
+
+<p>Changeable at runtime in Settings. See <a href="#s4-identity">4.4</a>.</p>
+
+<h3 id="forms-examples">Putting it together</h3>
+
+<pre><code><span class="c"># Simplest possible: try it out on this machine</span>
+.\server\Install-DSMT.ps1 -SkipSql -StartWhenDone
+
+<span class="c"># Typical lab: reachable on the network, SQL, starts at boot</span>
+.\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
+    -InstallScheduledTask -StartWhenDone
+
+<span class="c"># Production: gMSA, real Windows service, no password anywhere</span>
+.\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
+    -ServiceAccount "LAB\gmsa-dsmt$" -InstallAsService -StartWhenDone
+
+<span class="c"># Air-gapped Windows 10/11 client with FOD media on D:</span>
+.\server\Install-DSMT.ps1 -FeatureSource D:\sources\sxs -SkipSql
+
+<span class="c"># Later: move an existing installation onto a gMSA</span>
+.\server\Install-DSMT.ps1 -ChangeServiceAccount "LAB\gmsa-dsmt$"</code></pre>
+
+<div class="note">
+  <span class="box-title">Nothing here is a one-way door</span>
+  <p>
+    The account, the database, the identity mode, the idle timeout and the
+    hosting form can all be changed after the fact - by re-running the
+    installer, or from <strong>Settings</strong> in the console. Start with the
+    simplest thing that works and tighten it later.
+  </p>
+</div>
 
 <!-- ==================================================================== -->
 <h2 id="s1">Step 1 - Prerequisites</h2>
@@ -383,6 +556,87 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 
 <h3>1.3 Browser</h3>
 <p>A current Chrome, Edge or Firefox. The interface is responsive from a 360px phone to an ultrawide monitor.</p>
+
+<h3 id="s1-matrix">1.4 What each choice additionally requires</h3>
+
+<p>
+  The table above is the baseline for <em>any</em> installation. Each optional
+  choice from <a href="#forms">the forms section</a> adds its own one-time
+  requirement - and every one of them is the kind of thing that, if skipped,
+  shows up later as a failure that looks like a bug:
+</p>
+
+<table>
+  <tr><th>If you choose</th><th>You additionally need</th><th>Prepared by</th></tr>
+  <tr>
+    <td><code>-ListenAddress any</code></td>
+    <td>An administrative shell for the install, so the URL can be reserved</td>
+    <td>The installer, step 8</td>
+  </tr>
+  <tr>
+    <td><code>-InstallScheduledTask</code> with a domain account</td>
+    <td>The account's password (Task Scheduler stores it), or the <em>Log on as a batch job</em> right</td>
+    <td>You, at the prompt</td>
+  </tr>
+  <tr>
+    <td><code>-InstallAsService</code></td>
+    <td>The .NET Framework <code>csc.exe</code> - present on any supported Windows. Nothing to install</td>
+    <td>Already there</td>
+  </tr>
+  <tr>
+    <td><code>-ServiceAccount "LAB\gmsa-dsmt$"</code></td>
+    <td>A KDS root key in the forest (<strong>10 hour propagation</strong>), the gMSA object, and <code>Install-ADServiceAccount</code> on this host</td>
+    <td><strong>You, in advance</strong> - see <a href="#s4-account">4.2</a></td>
+  </tr>
+  <tr>
+    <td><code>-ServiceAccount LocalSystem</code></td>
+    <td>SQL rights for <code>LAB\HOSTNAME$</code>, the computer account</td>
+    <td>Your DBA</td>
+  </tr>
+  <tr>
+    <td>Letting DSMT create the database</td>
+    <td><code>dbcreator</code> on the instance</td>
+    <td>Your DBA, once - see <a href="#s5">5.3</a></td>
+  </tr>
+  <tr>
+    <td>Using a database that already exists</td>
+    <td><code>db_datareader</code> + <code>db_datawriter</code> for the run account</td>
+    <td>Your DBA</td>
+  </tr>
+  <tr>
+    <td><code>-SqlExpressSetup</code></td>
+    <td>The SQL Express installer downloaded in advance onto this machine</td>
+    <td><strong>You</strong> - DSMT never downloads</td>
+  </tr>
+  <tr>
+    <td>RSAT on an <strong>offline</strong> Windows 10/11 client</td>
+    <td>Feature-on-Demand media, passed as <code>-FeatureSource</code></td>
+    <td><strong>You</strong> - see <a href="#auto-limits">the fast path limits</a></td>
+  </tr>
+  <tr>
+    <td>Operators performing writes</td>
+    <td>AD delegation per OU, per action</td>
+    <td><strong>You</strong> - see <a href="#s4">4.5</a>. Never automated</td>
+  </tr>
+  <tr>
+    <td>Any real network use</td>
+    <td>A server certificate bound to the port</td>
+    <td>You - see <a href="#s10">step 10</a></td>
+  </tr>
+</table>
+
+<div class="note">
+  <span class="box-title">If you want the shortest possible path</span>
+  <p>
+    Nothing in the table above is required. On a domain-joined machine, with an
+    administrator shell, this works and needs no preparation at all:
+  </p>
+  <pre><code>.\server\Install-DSMT.ps1 -SkipSql -StartWhenDone</code></pre>
+  <p>
+    Add the database, the service account and HTTPS afterwards, in whatever
+    order suits you.
+  </p>
+</div>
 
 <!-- ==================================================================== -->
 <h2 id="s2">Step 2 - Prepare the machine</h2>
@@ -492,7 +746,7 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
   </p>
 </div>
 
-<h3>4.1a Which account DSMT itself runs as</h3>
+<h3 id="s4-account">4.2 Which account DSMT itself runs as</h3>
 
 <p>Four forms are accepted, and the installer works out which is which:</p>
 
@@ -551,7 +805,7 @@ New-ADServiceAccount -Name gmsa-dsmt -DNSHostName dsmt.lab.local `
 Install-ADServiceAccount -Identity gmsa-dsmt
 Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
 
-<h3>4.1b Changing the account later</h3>
+<h3 id="s4-change">4.3 Changing the account later</h3>
 
 <p>
   Nothing has to be reinstalled. One command updates <strong>all five</strong>
@@ -584,7 +838,7 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
   </p>
 </div>
 
-<h3>4.1c Identity mode - who performs each operation</h3>
+<h3 id="s4-identity">4.4 Identity mode - who performs each operation</h3>
 
 <table>
   <tr><th>Mode</th><th>Reads</th><th>Writes</th></tr>
@@ -618,7 +872,7 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
 <p>Set it at install time, or change it later in <strong>Settings</strong> without a restart:</p>
 <pre><code>.\server\Install-DSMT.ps1 -IdentityMode hybrid</code></pre>
 
-<h3>4.2 Delegating rights to operators</h3>
+<h3 id="s4-delegation">4.5 Delegating rights to operators</h3>
 <p>
   If an operator is meant to reset passwords, that has to be delegated in AD,
   not in the tool. Use the Delegation of Control Wizard on the relevant OU, or
@@ -645,7 +899,7 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
   </p>
 </div>
 
-<h3>4.3 Least privilege</h3>
+<h3>4.6 Least privilege</h3>
 <p>
   Do not hand out Domain Admins to make things work. Delegate exactly what is
   needed, at OU level. That is precisely why the tool is built to run with the
@@ -881,7 +1135,7 @@ jdoe</code></pre>
   </p>
 </div>
 
-<h3>8.3a Idle timeout</h3>
+<h3 id="s8-idle">8.4 Idle timeout</h3>
 <p>
   Separately from the refresh behaviour above, an operator who <strong>stops
   using</strong> the console is signed out. The default is 480 minutes
@@ -904,7 +1158,7 @@ jdoe</code></pre>
   operator is warned rather than discovering it as a failed action mid-task.
 </p>
 
-<h3>8.4 Finding your way around</h3>
+<h3>8.5 Finding your way around</h3>
 <table>
   <tr><th>Where</th><th>What it is</th></tr>
   <tr><td>Header</td><td>The <strong>real</strong> domain name, detected automatically</td></tr>
@@ -915,7 +1169,7 @@ jdoe</code></pre>
   <tr><td>Audit log</td><td>Every write performed through the tool, filterable by category and by date range</td></tr>
 </table>
 
-<h3>8.5 Creating the database from the console</h3>
+<h3 id="s8-db">8.6 Creating the database from the console</h3>
 <p>
   If DSMT was started without SQL, the bell shows a notification saying so.
   <strong>Menu &rarr; Settings</strong> lets you enter a SQL Server instance and
@@ -929,7 +1183,7 @@ jdoe</code></pre>
   <a href="#s5">step 5.3</a>.
 </p>
 
-<h3>8.6 Filtering the audit log by date</h3>
+<h3 id="s8-audit">8.7 Filtering the audit log by date</h3>
 <p>
   The audit view has two rows of filter chips. The first selects a time
   window - <strong>Last 24 hours</strong>, <strong>Last 48 hours</strong>, Last
@@ -1190,7 +1444,7 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr>
     <td>An action fails with Access Denied</td>
     <td>The operator lacks the delegation in AD</td>
-    <td><a href="#s4">Step 4.2</a> - fix it in AD, not in code</td>
+    <td><a href="#s4">Step 4.5</a> - fix it in AD, not in code</td>
   </tr>
   <tr>
     <td>Everyone was signed out at once</td>
@@ -1236,9 +1490,9 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td><code>-Domain</code></td><td><code>LAB.LOCAL</code></td><td>The domain to manage</td></tr>
   <tr><td><code>-Port</code></td><td><code>8080</code></td><td>Port to reserve and open in the firewall</td></tr>
   <tr><td><code>-ListenAddress</code></td><td><code>any</code></td><td><code>localhost</code> skips the reservation and the firewall rule</td></tr>
-  <tr><td><code>-ServiceAccount</code></td><td>Current user</td><td>The account that will run it. Accepts a user, a gMSA (trailing <code>$</code>) or <code>LocalSystem</code> - see <a href="#s4">4.1a</a></td></tr>
-  <tr><td><code>-ChangeServiceAccount</code></td><td>-</td><td>Move an existing install to another account, updating all five dependent things - see <a href="#s4">4.1b</a></td></tr>
-  <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code> - see <a href="#s4">4.1c</a></td></tr>
+  <tr><td><code>-ServiceAccount</code></td><td>Current user</td><td>The account that will run it. Accepts a user, a gMSA (trailing <code>$</code>) or <code>LocalSystem</code> - see <a href="#s4-account">4.2</a></td></tr>
+  <tr><td><code>-ChangeServiceAccount</code></td><td>-</td><td>Move an existing install to another account, updating all five dependent things - see <a href="#s4-change">4.3</a></td></tr>
+  <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code> - see <a href="#s4-identity">4.4</a></td></tr>
   <tr><td><code>-SqlServer</code></td><td>Auto-detect</td><td>SQL instance to use</td></tr>
   <tr><td><code>-SqlDatabase</code></td><td><code>DSMT</code></td><td>Database name to create</td></tr>
   <tr><td><code>-SkipSql</code></td><td>Off</td><td>Install without any database</td></tr>

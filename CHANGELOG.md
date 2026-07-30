@@ -14,8 +14,29 @@ deploying can hot-swap individual files without reasoning it out.
 ---
 
 ## 1.6.0 — 2026-07-30
-Idle timeout: an operator who stops using the console is signed out, with a
-warning first, and the period is configurable from Settings.
+Idle timeout, and a deployment guide that covers every installation form.
+
+**Deployment guide** (`docs/deployment-guide.html`):
+- New section **"Every installation form, at a glance"** — the four
+  independent choices an installation is made of (how it stays running, which
+  account, where records are stored, which identity acts), each as a table of
+  the concrete forms with the switch that selects it and what it needs. They
+  combine freely, and five worked examples show the common combinations.
+- New **1.4 "What each choice additionally requires"** — a matrix of every
+  optional choice against its one-time prerequisite and who provides it.
+  These are exactly the steps that, when skipped, resurface later as failures
+  that look like bugs: the KDS root key and its 10-hour propagation, the
+  `dbcreator` right, FOD media for an offline client, the batch-logon right.
+- Subsection numbering repaired: the incremental additions had produced
+  4.1a/4.1b/4.1c and 8.3a. Now 4.1–4.6 and 8.1–8.7, with stable anchors, and
+  every cross-reference updated to match.
+- Table of contents rebuilt to include the subsections that had accumulated
+  without ever being listed.
+- States explicitly that none of the choices is a one-way door: account,
+  database, identity mode, idle timeout and hosting form can all be changed
+  afterwards.
+
+Verified: no broken internal links, no external references, no Hebrew left.
 
 **Server** (`DsmtCommon.ps1`, `DsmtSession.ps1`, `DsmtHttp.ps1`,
 `Start-DSMT.ps1`):
