@@ -46,6 +46,11 @@ operator, the controller and a mandatory reason string.
   UI text in English and LTR unless that decision is deliberately changed — do
   not mix Hebrew strings into the interface just because a request arrives in
   Hebrew.
+- **This applies to the documentation too**, not only to the console:
+  `README.md`, `CLAUDE.md`, `PROGRESS.md`, `CHANGELOG.md` and
+  `docs/deployment-guide.html` are all English. The deployment guide was
+  written in Hebrew once and had to be rewritten — write new docs in English
+  the first time, whatever language the request arrives in.
 - Follow the **Nocturne** rules in
   `_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/readme.md`. The ones most
   often violated: take every color, font, spacing, radius and shadow from

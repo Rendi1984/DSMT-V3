@@ -13,6 +13,18 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.2.1 — 2026-07-27
+- `docs/deployment-guide.html` — rewritten in English. The guide was written in
+  Hebrew and RTL; it is now `lang="en" dir="ltr"` throughout, matching the rest
+  of the project's documentation and the console's own interface language. No
+  content was dropped: all 11 steps, the installer fast path, the acceptance
+  checklist, the troubleshooting table and all five appendices carry over, and
+  every anchor keeps its previous id so existing links still work. Still a
+  single self-contained file with zero external requests.
+
+Deploy: replace `docs\deployment-guide.html`. Documentation only, no runtime
+impact.
+
 ## 1.2.0 — 2026-07-27
 Automated installer. Preparing a machine is now one command instead of a
 checklist.
@@ -40,8 +52,8 @@ checklist.
   passed explicitly, so it can now be started with no parameters at all. An
   explicit parameter always wins. The banner says when settings came from the
   file.
-- `docs/deployment-guide.html` — new section "המסלול המהיר - סקריפט ההתקנה
-  האוטומטי": how to run it, what each of its 12 steps does mapped to the
+- `docs/deployment-guide.html` — new fast-path section for the installer: how
+  to run it, what each of its 12 steps does mapped to the
   manual step it replaces, the saved config file, expected output, and the
   three things it deliberately does not automate (offline RSAT source, SQL
   Express download, AD delegation) with what to do instead. Manual steps 2, 5,

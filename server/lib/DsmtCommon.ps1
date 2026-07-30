@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.2.0'
+$script:DsmtVersion = '1.2.1'
 
 # Filled in by Start-DSMT.ps1 at startup.
 $script:DsmtConfig = @{
