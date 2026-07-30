@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.6.0'
+$script:DsmtVersion = '1.7.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -24,6 +24,16 @@ $script:DsmtVersion = '1.6.0'
 # Never type it into index.html or app.js.
 # ---------------------------------------------------------------------------
 $script:DsmtPublisher = 'Rendi Group'
+
+# ---------------------------------------------------------------------------
+# IDLE TIMEOUT bounds - defined once and enforced on every route that can set
+# the value: the -SessionMinutes parameter, config\dsmt.config.json, and the
+# runtime API. The maximum is deliberate: a session that can outlive a working
+# day is not an idle control, it is a formality.
+# ---------------------------------------------------------------------------
+$script:DsmtSessionMinutesDefault = 15
+$script:DsmtSessionMinutesMin     = 1
+$script:DsmtSessionMinutesMax     = 480   # 8 hours
 
 # Filled in by Start-DSMT.ps1 at startup.
 $script:DsmtConfig = @{
@@ -41,7 +51,7 @@ $script:DsmtConfig = @{
     Server        = ''
     Port          = 8080
     ListenAddress = 'localhost'
-    SessionMinutes = 480
+    SessionMinutes = 15
     PageSize      = 500
     LogFile       = ''
 }
@@ -58,7 +68,7 @@ function Initialize-DsmtConfig {
         [string] $Server = '',
         [int]    $Port = 8080,
         [string] $ListenAddress = 'localhost',
-        [int]    $SessionHours = 8,
+        [int]    $SessionHours = 0,
         [int]    $SessionMinutes = 0,
         [int]    $PageSize = 500,
         [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator'
@@ -68,8 +78,14 @@ function Initialize-DsmtConfig {
     # because it was the original parameter, but it is converted here rather
     # than stored alongside: two fields that mean the same thing is how they
     # end up disagreeing.
-    if ($SessionMinutes -le 0) { $SessionMinutes = $SessionHours * 60 }
-    if ($SessionMinutes -lt 1) { $SessionMinutes = 1 }
+    #
+    # Bounds live here so they hold no matter which route set the value -
+    # a parameter, the saved config file, or the runtime API.
+    if ($SessionMinutes -le 0 -and $SessionHours -gt 0) { $SessionMinutes = $SessionHours * 60 }
+    if ($SessionMinutes -le 0) { $SessionMinutes = $script:DsmtSessionMinutesDefault }
+
+    if ($SessionMinutes -lt $script:DsmtSessionMinutesMin) { $SessionMinutes = $script:DsmtSessionMinutesMin }
+    if ($SessionMinutes -gt $script:DsmtSessionMinutesMax) { $SessionMinutes = $script:DsmtSessionMinutesMax }
 
     $script:DsmtConfig.SessionMinutes = $SessionMinutes
     $script:DsmtConfig.IdentityMode  = $IdentityMode
@@ -101,6 +117,20 @@ function Initialize-DsmtConfig {
 
 function Get-DsmtConfig {
     return $script:DsmtConfig
+}
+
+function Get-DsmtSessionBounds {
+    <#
+    .SYNOPSIS
+        The allowed idle-timeout range, so the API and the UI enforce and
+        display exactly the numbers this file defines - rather than each
+        repeating its own copy of them.
+    #>
+    return @{
+        Default = $script:DsmtSessionMinutesDefault
+        Min     = $script:DsmtSessionMinutesMin
+        Max     = $script:DsmtSessionMinutesMax
+    }
 }
 
 function Get-DsmtSavedSettings {

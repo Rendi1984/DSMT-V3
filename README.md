@@ -228,9 +228,9 @@ Audit
 
 Sessions
 
-- Idle timeout, default 8 hours, configurable in Settings and applied to
-  sessions already open. The browser warns a minute before with a countdown;
-  only genuine interaction resets the clock
+- Idle timeout, **default 15 minutes, maximum 8 hours**, configurable in
+  Settings and applied to sessions already open. The browser warns a minute
+  before with a countdown; only genuine interaction resets the clock
 
 Settings and notifications
 

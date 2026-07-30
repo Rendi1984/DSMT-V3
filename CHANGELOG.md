@@ -13,6 +13,37 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.7.0 — 2026-07-30
+Idle timeout defaults tightened.
+
+- **Default is now 15 minutes** (was 480). An idle console showing directory
+  objects and holding an operator's credentials should not sit unattended for
+  a working day.
+- **Maximum is 480 minutes (8 hours)**, down from 10080. A session that can
+  outlive a working day is not an idle control, it is a formality.
+- The default, minimum and maximum are **three constants in
+  `DsmtCommon.ps1`**, enforced on every route that can set the value — the
+  `-SessionMinutes` parameter, `config\dsmt.config.json`, and
+  `POST /api/settings/session` — and served to the browser through
+  `/api/meta` and `/api/settings` as `sessionBounds`, so the Settings form
+  validates against exactly the numbers the server enforces instead of
+  keeping its own copy.
+- Out-of-range values from a parameter or a config file are **clamped, not
+  rejected**: a stale config must not stop the server from starting. The
+  runtime API still rejects them with a 400, because there a human is
+  watching and silently changing their number would be worse.
+- `-SessionHours` no longer carries a default of its own, so it cannot
+  quietly override the new default when omitted.
+- Settings presets relabelled: 15 minutes is marked as the default, 8 hours
+  as the maximum.
+
+**Upgrading**: an existing `config\dsmt.config.json` keeps whatever it
+already has — an explicit setting still wins. Only fresh installs, and
+installations that never set a value, pick up 15 minutes. Anything above 480
+in an old file is clamped to 480 on the next start.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart.
+
 ## 1.6.0 — 2026-07-30
 Idle timeout, and a deployment guide that covers every installation form.
 

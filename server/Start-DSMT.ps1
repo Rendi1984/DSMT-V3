@@ -23,10 +23,12 @@
     Idle lifetime of an operator session, in hours. Kept for compatibility;
     -SessionMinutes is the finer-grained form and wins if both are given.
 .PARAMETER SessionMinutes
-    Idle lifetime of an operator session, in minutes. Default 480 (8 hours).
-    An operator who does not touch the console for this long is signed out;
-    the browser warns them a minute before it happens. Changeable at runtime
-    from Settings, without a restart.
+    Idle lifetime of an operator session, in minutes. Default 15, maximum 480
+    (8 hours). An operator who does not touch the console for this long is
+    signed out; the browser warns them a minute before it happens. Changeable
+    at runtime from Settings, without a restart. Values outside the range are
+    clamped rather than rejected, so a stale config file cannot stop the
+    server from starting.
 .PARAMETER PageSize
     Maximum objects returned by one directory search. Default 500.
 .PARAMETER IdentityMode
@@ -74,7 +76,7 @@ param(
     [string] $Server = '',
     [int]    $Port = 8080,
     [ValidateSet('localhost', 'any')][string] $ListenAddress = 'localhost',
-    [int]    $SessionHours = 8,
+    [int]    $SessionHours = 0,
     [int]    $SessionMinutes = 0,
     [int]    $PageSize = 500,
     [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',

@@ -1121,9 +1121,9 @@ jdoe</code></pre>
 <p>
   The token is kept in <code>localStorage</code> and revalidated against the
   server on every page load, so a refresh, closing a tab, or reopening the
-  browser <strong>does not</strong> ask for the password again. The session
-  expires after 8 hours of inactivity (configurable with
-  <code>-SessionHours</code>).
+  browser <strong>does not</strong> ask for the password again - as long as the
+  session has not gone idle past its timeout, which is a separate thing and is
+  covered in <a href="#s8-idle">8.4</a> below.
 </p>
 
 <div class="warn">
@@ -1138,8 +1138,9 @@ jdoe</code></pre>
 <h3 id="s8-idle">8.4 Idle timeout</h3>
 <p>
   Separately from the refresh behaviour above, an operator who <strong>stops
-  using</strong> the console is signed out. The default is 480 minutes
-  (8 hours); change it in <strong>Settings</strong>, or at startup with
+  using</strong> the console is signed out. The default is <strong>15
+  minutes</strong> and the maximum is <strong>480 minutes (8 hours)</strong>;
+  change it in <strong>Settings</strong>, or at startup with
   <code>-SessionMinutes</code>.
 </p>
 <ul>
@@ -1151,6 +1152,9 @@ jdoe</code></pre>
       not keep itself alive; if it did, the timeout would mean nothing.</li>
   <li>A change made in Settings applies to sessions that are <strong>already
       open</strong>, not only to new ones.</li>
+  <li>The ceiling of 8 hours is deliberate. A console that holds an operator's
+      credentials and shows directory objects should not sit unattended longer
+      than a working day - past that the timeout stops being a control.</li>
 </ul>
 <p>
   The server is the enforcement - it drops a session that has not been used,
@@ -1514,8 +1518,8 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td><code>-Server</code></td><td>Auto-discover</td><td>Pin to a specific DC (FQDN)</td></tr>
   <tr><td><code>-Port</code></td><td><code>8080</code></td><td>Listening port</td></tr>
   <tr><td><code>-ListenAddress</code></td><td><code>localhost</code></td><td><code>localhost</code> or <code>any</code></td></tr>
-  <tr><td><code>-SessionMinutes</code></td><td><code>480</code></td><td>Idle timeout in minutes. Changeable at runtime in Settings</td></tr>
-  <tr><td><code>-SessionHours</code></td><td><code>8</code></td><td>The same setting in hours, kept for compatibility. <code>-SessionMinutes</code> wins if both are given</td></tr>
+  <tr><td><code>-SessionMinutes</code></td><td><code>15</code></td><td>Idle timeout in minutes. Maximum 480 (8 hours). Changeable at runtime in Settings. Out-of-range values are clamped, not rejected</td></tr>
+  <tr><td><code>-SessionHours</code></td><td>-</td><td>The same setting in hours, kept for compatibility. <code>-SessionMinutes</code> wins if both are given</td></tr>
   <tr><td><code>-PageSize</code></td><td><code>500</code></td><td>Search result cap</td></tr>
   <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code></td></tr>
   <tr><td><code>-SqlServer</code></td><td>(empty)</td><td>SQL instance. Empty = no SQL</td></tr>

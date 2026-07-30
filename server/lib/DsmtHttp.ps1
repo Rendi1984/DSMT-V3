@@ -312,8 +312,11 @@ function Invoke-DsmtApi {
             }
             # The browser needs this to run its own idle countdown, so the
             # operator is warned before the server drops them rather than
-            # discovering it on their next click.
+            # discovering it on their next click. The bounds travel with it so
+            # the Settings form validates against the same numbers the server
+            # enforces.
             sessionMinutes = $cfg.SessionMinutes
+            sessionBounds  = Get-DsmtSessionBounds
             storage = @{
                 sqlEnabled  = $sql.Enabled
                 sqlServer   = $sql.Server
@@ -403,6 +406,7 @@ function Invoke-DsmtApi {
                         port          = $cfg.Port
                         listenAddress = $cfg.ListenAddress
                         sessionMinutes = $cfg.SessionMinutes
+                        sessionBounds  = Get-DsmtSessionBounds
                         pageSize      = $cfg.PageSize
                         dataPath      = $cfg.DataPath
                         sqlEnabled    = $sql.Enabled
@@ -426,10 +430,13 @@ function Invoke-DsmtApi {
                     return
                 }
 
-                # 1 minute is short but legitimate for a kiosk; a week is the
-                # upper bound because past that the timeout is not a control.
-                if ($minutes -lt 1 -or $minutes -gt 10080) {
-                    Send-DsmtError -Response $Response -Message 'The idle timeout must be between 1 minute and 10080 minutes (7 days).' -StatusCode 400
+                # Bounds come from DsmtCommon so the API cannot drift from what
+                # the parameter and the config file allow.
+                $bounds = Get-DsmtSessionBounds
+                if ($minutes -lt $bounds.Min -or $minutes -gt $bounds.Max) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message ('The idle timeout must be between ' + $bounds.Min + ' and ' + $bounds.Max +
+                                  ' minutes (' + [int]($bounds.Max / 60) + ' hours).')
                     return
                 }
 

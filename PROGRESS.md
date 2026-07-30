@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.6.0` — matches the top entry of `CHANGELOG.md` and
+`1.7.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -62,7 +62,8 @@ its data is fabricated and every button is inert.
      the DC. That second half is the whole point of the design.
    - **Four-day soak.** Leave it running and confirm it still answers. This is
      the only way to catch the class of bug the 72-hour task limit belonged to.
-   - **Idle timeout (1.6.0)**: set it to 2 minutes in Settings, leave the tab
+   - **Idle timeout (1.7.0)**: default is 15 minutes, maximum 480. Set it to
+     2 minutes in Settings, leave the tab
      alone, and confirm the warning appears at 60 seconds, the countdown runs,
      "Stay signed in" works, and expiry really ends the session server-side
      (a subsequent API call must 401). Confirm a page left open does NOT keep

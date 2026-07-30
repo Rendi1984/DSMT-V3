@@ -1482,6 +1482,15 @@ function actionSettings() {
   api('/api/settings').then(function (data) {
     var s = data.settings;
 
+    // The allowed range comes from the server, so this form validates against
+    // exactly the numbers the server enforces rather than its own copy.
+    var b = s.sessionBounds || {};
+    var bounds = {
+      min: b.Min || b.min || 1,
+      max: b.Max || b.max || 480,
+      def: b.Default || b.def || 15
+    };
+
     var readOnly = [
       ['Version', s.version],
       ['Published by', s.publisher],
@@ -1516,20 +1525,23 @@ function actionSettings() {
         '<span class="detail-section-label">Idle timeout</span>' +
         '<p class="dialog-note">An operator who does not touch the console for this long is signed ' +
         'out. The browser warns them a minute beforehand. Applies to sessions that are already ' +
-        'open, not just new ones.</p>' +
+        'open, not just new ones. The maximum is ' + bounds.max + ' minutes (' +
+        Math.round(bounds.max / 60) + ' hours) - a session that can outlive a working day is not ' +
+        'an idle control.</p>' +
         '<div class="row-2">' +
-          '<div class="field"><label for="setIdle">Minutes of inactivity</label>' +
-          '<input class="input" id="setIdle" type="number" min="1" max="10080" step="1" value="' +
-          esc(String(s.sessionMinutes || 480)) + '"></div>' +
+          '<div class="field"><label for="setIdle">Minutes of inactivity (' +
+          bounds.min + '-' + bounds.max + ')</label>' +
+          '<input class="input" id="setIdle" type="number" min="' + bounds.min + '" max="' + bounds.max +
+          '" step="1" value="' + esc(String(s.sessionMinutes || bounds.def)) + '"></div>' +
           '<div class="field"><label for="setIdlePreset">Common values</label>' +
           '<select class="input" id="setIdlePreset">' +
             '<option value="">Choose</option>' +
             '<option value="5">5 minutes</option>' +
-            '<option value="15">15 minutes</option>' +
+            '<option value="15">15 minutes (default)</option>' +
             '<option value="30">30 minutes</option>' +
             '<option value="60">1 hour</option>' +
             '<option value="240">4 hours</option>' +
-            '<option value="480">8 hours</option>' +
+            '<option value="480">8 hours (maximum)</option>' +
           '</select></div>' +
         '</div>' +
         '<button class="btn btn-secondary" type="button" id="applyIdle">Apply idle timeout</button>' +
@@ -1572,8 +1584,9 @@ function actionSettings() {
 
         $('applyIdle').addEventListener('click', function () {
           var minutes = parseInt($('setIdle').value, 10);
-          if (isNaN(minutes) || minutes < 1 || minutes > 10080) {
-            dialogError('The idle timeout must be between 1 and 10080 minutes (7 days).');
+          if (isNaN(minutes) || minutes < bounds.min || minutes > bounds.max) {
+            dialogError('The idle timeout must be between ' + bounds.min + ' and ' + bounds.max +
+                        ' minutes (' + Math.round(bounds.max / 60) + ' hours).');
             return;
           }
 
