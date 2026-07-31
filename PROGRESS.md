@@ -31,7 +31,86 @@ its data is fabricated and every button is inert.
 ---
 
 ## Open tasks
-1. **Run it against LAB.LOCAL.** Neither `Install-DSMT.ps1` nor
+
+1. **[BLOCKER — first real run, 2026-07-31] The console renders but almost
+   nothing works.** Reported from a first install on `LAB.LOCAL`, no SQL.
+   **Fix this before anything else. Do not build new features on top of it.**
+
+   ### What works
+   - Sign-in, and the session survives.
+   - The users grid loads real accounts from `LAB.LOCAL` (7 users, correct OUs,
+     correct status). So auth, the API, the AD reads and the attribute mapping
+     are all fine.
+   - Clicking a row loads the detail pane with real attributes and memberships.
+   - **Export** works — and it is the one action that does *not* open a dialog.
+   - The bell badge renders a count, so `/api/meta` and `renderNotifications()`
+     ran.
+
+   ### What is broken
+   - **Every button that opens a dialog does nothing**: About (from the header
+     *and* from the menu), New user, Import CSV, Columns, and every button in
+     the detail pane — Reset password, Unlock, Disable, Move OU, Add to group,
+     Delete. No dialog, no error on screen.
+   - **The notifications panel opens off the right edge of the viewport** and
+     is unreadable — it extends rightwards from the bell instead of being
+     right-aligned under it.
+   - Export gives no feedback that anything happened (the toast is not
+     appearing — which is consistent with the dialog problem: both are
+     overlays).
+   - With SQL configured: same behaviour, **and nothing is written to any
+     table**.
+
+   ### The pattern, and what it points at
+   Everything that fails is an **overlay** — dialog or toast. Everything that
+   works is either inline or a file download. Two candidates fit that:
+
+   a) **A JavaScript exception thrown from `openDialog`** (or from the toast
+      path), leaving `dispatchAction` dead. Checked statically and ruled out:
+      all 40 element ids `wireEvents()` touches exist in `index.html`, and
+      `openDialog` itself reads clean. So if it is JS, it is a runtime error
+      the console will name in one line.
+
+   b) **`web/app.css` served stale from the browser cache.** This fits the
+      bell panel precisely: without the `.bell-wrap { position: relative }`
+      rule the panel falls back to its static position and spills off-screen
+      to the right, exactly as reported. It would also explain missing
+      `[hidden] { display: none !important }` / `z-index` behaviour on the
+      dialog backdrop.
+
+   ### Do this first, in order — it should settle it in minutes
+   1. **Open DevTools (F12) → Console.** Read the first red error. That alone
+      probably identifies it. Screenshot it.
+   2. **Network tab, disable cache, hard reload (Ctrl+Shift+R).** Confirm
+      `app.js` and `app.css` are served 200 with current content, not 304 from
+      cache, and that neither 404s.
+   3. In the Console run `typeof openDialog` and then `actionAbout()` directly.
+      If About opens that way, the wiring is at fault; if it throws, the error
+      text is the answer.
+   4. Check `data\dsmt-YYYY-MM-DD.log` on the server for anything logged at
+      the moment of a click.
+
+   ### Also to investigate, separately
+   - **SQL writes**: with `-SqlServer` set, `dbo.Operators` and `dbo.Sessions`
+     should have rows from sign-in alone, and `dbo.DirectoryUsers` from the
+     first grid load — none of which needs a working button. If those tables
+     are empty too, the failure is server-side and independent of the UI bug:
+     check the startup banner for `[ok] SQL Server ...` and the log for
+     `Could not record the operator in SQL` / `User snapshot failed`.
+   - `dbo.AuditLog` being empty is **expected** while no write action can be
+     performed, so it proves nothing on its own.
+
+   ### Note for whoever picks this up
+   This is the first time any of this code has been executed. Everything
+   through 1.7.4 was verified statically only — that limitation is recorded
+   under "Attempted and deliberately NOT pursued" below, and this is exactly
+   the class of failure it predicted. Do not assume the rest of the acceptance
+   checklist passed; re-run it from the top once the overlays work.
+
+   gMSA testing is **not** worth attempting until this is fixed — agreed with
+   the reporter.
+
+2. **Run the rest of the acceptance checklist against LAB.LOCAL** (blocked by
+   task 1). Neither `Install-DSMT.ps1` nor
    `Start-DSMT.ps1` has ever been executed: the dev container is Linux with no
    PowerShell and no domain. Treat the first run as a test. On the installer,
    watch specifically:
@@ -81,7 +160,7 @@ its data is fabricated and every button is inert.
      (no LDAPS). If it fails with a constraint error, the usual causes are
      password policy or the operator lacking Reset Password delegation.
    - Whether `-ResultSetSize` 500 is the right page size for the lab.
-2. **Write a consolidated "required permissions" document.** *(Requested
+3. **Write a consolidated "required permissions" document.** *(Requested
    2026-07-31; deliberately not started yet — do this when asked.)*
 
    Today every permission is documented, but scattered across the deployment
@@ -113,21 +192,21 @@ its data is fabricated and every button is inert.
    table in `README.md`. Cross-reference rather than restate, so there is one
    source per fact — the same rule the version number follows.
 
-3. **Serve it over HTTPS before anyone uses it over the network.** The
+4. **Serve it over HTTPS before anyone uses it over the network.** The
    `netsh http add sslcert` recipe is in `README.md`; the prefix in
    `Start-DSMT.ps1` also has to change from `http://` to `https://`.
-4. **Decide the SQL retention story.** `dbo.AuditLog` grows forever and
+5. **Decide the SQL retention story.** `dbo.AuditLog` grows forever and
    nothing prunes `dbo.Sessions` or the snapshot tables. Pick a retention
    window and add a job.
-5. **Vendor Inter, or accept `system-ui`.** The Google Fonts `@import` was
+6. **Vendor Inter, or accept `system-ui`.** The Google Fonts `@import` was
    removed from `styles.css` for the offline constraint, so the console
    currently renders in the system font stack. If Inter is wanted, drop the
    woff2 files into the design-system folder and add an `@font-face` — do not
    re-add a CDN reference.
-6. **Consider Kerberos constrained delegation** so operator passwords need not
+7. **Consider Kerberos constrained delegation** so operator passwords need not
    be held in memory — see "Attempted and deliberately NOT pursued" below and
    check in before restarting that investigation.
-7. **Decide the fate of `prototype/`.** It is kept for reference; delete it
+8. **Decide the fate of `prototype/`.** It is kept for reference; delete it
    once nobody needs the original design pass.
 
 ---
