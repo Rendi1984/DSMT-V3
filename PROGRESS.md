@@ -81,21 +81,53 @@ its data is fabricated and every button is inert.
      (no LDAPS). If it fails with a constraint error, the usual causes are
      password policy or the operator lacking Reset Password delegation.
    - Whether `-ResultSetSize` 500 is the right page size for the lab.
-2. **Serve it over HTTPS before anyone uses it over the network.** The
+2. **Write a consolidated "required permissions" document.** *(Requested
+   2026-07-31; deliberately not started yet — do this when asked.)*
+
+   Today every permission is documented, but scattered across the deployment
+   guide and the README. Someone preparing an environment — or answering a
+   security review — needs one page listing all of them.
+
+   It should cover, grouped by who grants it:
+   - **Active Directory, per operator**: the delegation each console action
+     needs (Reset Password + write `pwdLastSet`, write `lockoutTime`, write
+     `userAccountControl`, Delete/Create Child for Move OU, write `member`,
+     Create Child, Delete). Source: deployment guide 4.5.
+   - **Active Directory, for the service account**: what it needs in each
+     identity mode — nothing beyond read in `operator` mode, directory read
+     in `hybrid`. Plus the gMSA prerequisites (`Add-KdsRootKey`,
+     `New-ADServiceAccount`, `PrincipalsAllowedToRetrieveManagedPassword`,
+     `Install-ADServiceAccount`).
+   - **SQL Server**: `dbcreator` to let DSMT create the database;
+     `db_datareader` + `db_datawriter` afterwards; which principal it applies
+     to for each account form, including `DOMAIN\HOST$` for LocalSystem.
+     Source: deployment guide 5.3 and `sql/schema.sql`.
+   - **Local machine**: administrator for the install only; modify on `data\`;
+     the URL reservation; the firewall rule; "Log on as a batch job" for a
+     scheduled task under a domain account.
+   - **What DSMT deliberately does NOT need**: Domain Admin, schema rights,
+     write access to its own program folder.
+
+   Format: a section in `docs/deployment-guide.html` (it is already the
+   operator-facing document, and a separate file would drift) plus a short
+   table in `README.md`. Cross-reference rather than restate, so there is one
+   source per fact — the same rule the version number follows.
+
+3. **Serve it over HTTPS before anyone uses it over the network.** The
    `netsh http add sslcert` recipe is in `README.md`; the prefix in
    `Start-DSMT.ps1` also has to change from `http://` to `https://`.
-3. **Decide the SQL retention story.** `dbo.AuditLog` grows forever and
+4. **Decide the SQL retention story.** `dbo.AuditLog` grows forever and
    nothing prunes `dbo.Sessions` or the snapshot tables. Pick a retention
    window and add a job.
-4. **Vendor Inter, or accept `system-ui`.** The Google Fonts `@import` was
+5. **Vendor Inter, or accept `system-ui`.** The Google Fonts `@import` was
    removed from `styles.css` for the offline constraint, so the console
    currently renders in the system font stack. If Inter is wanted, drop the
    woff2 files into the design-system folder and add an `@font-face` — do not
    re-add a CDN reference.
-5. **Consider Kerberos constrained delegation** so operator passwords need not
+6. **Consider Kerberos constrained delegation** so operator passwords need not
    be held in memory — see "Attempted and deliberately NOT pursued" below and
    check in before restarting that investigation.
-6. **Decide the fate of `prototype/`.** It is kept for reference; delete it
+7. **Decide the fate of `prototype/`.** It is kept for reference; delete it
    once nobody needs the original design pass.
 
 ---
