@@ -1503,6 +1503,11 @@ function settingsRow(label, value) {
 }
 
 function loadSettings() {
+  // The rail belongs to the rendered sections; drop it while there are none,
+  // otherwise a failed reload leaves a rail pointing at cards that are gone.
+  $('settingsNav').innerHTML = '';
+  $('settingsBody').parentNode.className = 'settings-main';
+  $('settingsBody').className = 'settings-body';
   $('settingsBody').innerHTML = '<p class="muted-sm">Loading...</p>';
 
   api('/api/settings').then(function (data) {
@@ -1534,9 +1539,11 @@ function renderSettings() {
                esc(s.sqlError) + '</div>';
   }
 
-  $('settingsBody').innerHTML =
-    // ---- system ----
-    '<section class="set-card">' +
+  // Sections are data, not one wall of markup: the rail, the arrangement
+  // switch and the cards all read from this one list.
+  var sections = [];
+
+  sections.push({ key: 'system', label: 'System', hint: 'Version, domain, paths', body:
       '<h2 class="set-h">System</h2>' +
       '<dl class="detail-fields">' +
         settingsRow('Version', s.version) +
@@ -1546,11 +1553,9 @@ function renderSettings() {
         settingsRow('Listening on', s.listenAddress + ':' + s.port) +
         settingsRow('Search result cap', String(s.pageSize)) +
         settingsRow('Data folder', s.dataPath) +
-      '</dl>' +
-    '</section>' +
+      '</dl>' });
 
-    // ---- network ----
-    '<section class="set-card">' +
+  sections.push({ key: 'network', label: 'Network', hint: 'Listening port', body:
       '<h2 class="set-h">Network</h2>' +
       '<dl class="detail-fields">' +
         settingsRow('Listening on', s.listenAddress + ':' + s.port) +
@@ -1567,11 +1572,9 @@ function renderSettings() {
         '<button class="btn btn-secondary" type="button" id="applyPort">Save port</button>' +
       '</div>' +
       '<div class="set-result" id="portResult"></div>' +
-      '<div id="portCommands"></div>' +
-    '</section>' +
+      '<div id="portCommands"></div>' });
 
-    // ---- SQL ----
-    '<section class="set-card">' +
+  sections.push({ key: 'sql', label: 'Database', hint: 'SQL Server connection', body:
       '<h2 class="set-h">Database</h2>' +
       storage +
       '<div class="set-form">' +
@@ -1606,11 +1609,9 @@ function renderSettings() {
           '<button class="btn btn-ghost" type="button" id="cancelCreateDb">Cancel</button>' +
         '</div>' +
       '</div>' +
-      '<div class="set-result" id="sqlResult"></div>' +
-    '</section>' +
+      '<div class="set-result" id="sqlResult"></div>' });
 
-    // ---- identity ----
-    '<section class="set-card">' +
+  sections.push({ key: 'identity', label: 'Identity', hint: 'Who reads the directory', body:
       '<h2 class="set-h">Identity</h2>' +
       '<dl class="detail-fields">' +
         settingsRow('DSMT runs as', s.serviceUser) +
@@ -1633,11 +1634,9 @@ function renderSettings() {
       '<div class="set-actions">' +
         '<button class="btn btn-secondary" type="button" id="applyIdentity">Apply identity mode</button>' +
       '</div>' +
-      '<div class="set-result" id="identityResult"></div>' +
-    '</section>' +
+      '<div class="set-result" id="identityResult"></div>' });
 
-    // ---- service account ----
-    '<section class="set-card">' +
+  sections.push({ key: 'account', label: 'Service account', hint: 'Move to gMSA or a user', body:
       '<h2 class="set-h">Service account</h2>' +
       '<p class="dialog-note">Move DSMT onto a dedicated account, a group managed service account ' +
       '(gMSA) or the machine account. Pick the target below and DSMT builds the exact command.</p>' +
@@ -1661,11 +1660,9 @@ function renderSettings() {
       'the account rewrites the Windows service or scheduled task, the HTTP URL reservation, the ' +
       'data folder permissions and the SQL login. Those need administrator rights on the host, which ' +
       'this process deliberately does not have. The command does all five as one operation and ' +
-      'verifies the account before touching anything.</p>' +
-    '</section>' +
+      'verifies the account before touching anything.</p>' });
 
-    // ---- sessions ----
-    '<section class="set-card">' +
+  sections.push({ key: 'sessions', label: 'Sessions', hint: 'Idle timeout', body:
       '<h2 class="set-h">Sessions</h2>' +
       '<p class="dialog-note">An operator who does not touch the console for this long is signed ' +
       'out; the browser warns a minute beforehand. Applies to sessions already open. Maximum ' +
@@ -1688,10 +1685,103 @@ function renderSettings() {
       '<div class="set-actions">' +
         '<button class="btn btn-secondary" type="button" id="applyIdle">Apply idle timeout</button>' +
       '</div>' +
-      '<div class="set-result" id="idleResult"></div>' +
-    '</section>';
+      '<div class="set-result" id="idleResult"></div>' });
 
+  var bodyHtml = '';
+  var navHtml = '';
+  var i;
+  for (i = 0; i < sections.length; i++) {
+    bodyHtml += '<section class="set-card" id="setSec-' + sections[i].key + '">' +
+                sections[i].body + '</section>';
+    navHtml += '<button class="set-nav-item" type="button" data-section="' + sections[i].key + '">' +
+               '<span>' + esc(sections[i].label) + '</span>' +
+               '<span class="set-nav-hint">' + esc(sections[i].hint) + '</span></button>';
+  }
+  $('settingsBody').innerHTML = bodyHtml;
+  $('settingsNav').innerHTML = navHtml;
+
+  state.settingsSections = sections;
+  wireSettingsLayout();
   wireSettings(bounds);
+}
+
+/* ---------------------------------------------------------------------------
+   Arrangement. Three shapes, because there is no single right one: a rail with
+   one section at a time (calm, and the only one that works on a phone), the
+   whole page in one readable column, or side-by-side columns for a wide
+   monitor. The choice and the open section are remembered per browser.
+   --------------------------------------------------------------------------- */
+
+var SET_LAYOUT_KEY = 'dsmt.settings.layout';
+var SET_SECTION_KEY = 'dsmt.settings.section';
+
+function readSetting(key, fallback) {
+  try {
+    var v = window.localStorage.getItem(key);
+    return v ? v : fallback;
+  } catch (e) { return fallback; }
+}
+
+function writeSetting(key, value) {
+  try { window.localStorage.setItem(key, value); } catch (e) { /* private mode */ }
+}
+
+function wireSettingsLayout() {
+  var buttons = $('settingsLayouts').querySelectorAll('.seg-btn');
+  var i;
+  for (i = 0; i < buttons.length; i++) {
+    buttons[i].onclick = function () {
+      writeSetting(SET_LAYOUT_KEY, this.getAttribute('data-layout'));
+      applySettingsLayout();
+    };
+  }
+
+  var items = $('settingsNav').querySelectorAll('.set-nav-item');
+  for (i = 0; i < items.length; i++) {
+    items[i].onclick = function () {
+      writeSetting(SET_SECTION_KEY, this.getAttribute('data-section'));
+      applySettingsLayout();
+    };
+  }
+
+  applySettingsLayout();
+}
+
+function applySettingsLayout() {
+  var sections = state.settingsSections || [];
+  if (!sections.length) { return; }
+
+  var layout = readSetting(SET_LAYOUT_KEY, 'focus');
+  if (layout !== 'focus' && layout !== 'list' && layout !== 'grid') { layout = 'focus'; }
+
+  var current = readSetting(SET_SECTION_KEY, sections[0].key);
+  var known = false;
+  var i;
+  for (i = 0; i < sections.length; i++) { if (sections[i].key === current) { known = true; } }
+  if (!known) { current = sections[0].key; }
+
+  var main = $('settingsBody').parentNode;
+  main.className = 'settings-main' + (layout === 'focus' ? ' has-nav' : '');
+  $('settingsBody').className = 'settings-body lay-' + layout;
+
+  var buttons = $('settingsLayouts').querySelectorAll('.seg-btn');
+  for (i = 0; i < buttons.length; i++) {
+    buttons[i].className = 'seg-btn' +
+      (buttons[i].getAttribute('data-layout') === layout ? ' is-active' : '');
+  }
+
+  var items = $('settingsNav').querySelectorAll('.set-nav-item');
+  for (i = 0; i < items.length; i++) {
+    items[i].className = 'set-nav-item' +
+      (items[i].getAttribute('data-section') === current ? ' is-active' : '');
+  }
+
+  // In "one section" mode the others are hidden, never removed - the handlers
+  // wired by wireSettings() stay attached to elements that still exist.
+  for (i = 0; i < sections.length; i++) {
+    var card = $('setSec-' + sections[i].key);
+    if (card) { card.hidden = (layout === 'focus' && sections[i].key !== current); }
+  }
 }
 
 function accountKindLabel(kind) {

@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.9.0** | 2026-07-31 | Settings rearranged: a section rail with one section at a time, and the operator picks the arrangement | Refresh |
 | **1.8.1** | 2026-07-31 | Fixes the idle-timeout 500; pick an existing database; confirm before creating; custom port; Settings laid out in columns | Restart + refresh |
 | **1.8.0** | 2026-07-31 | Settings becomes a full tab; shows the verbatim SQL error; builds the service-account command | Refresh |
 | **1.7.5** | 2026-07-31 | **Fixes the first-run blocker** - no dialog, toast or notification panel was visible | Refresh |
@@ -45,6 +46,43 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
+
+---
+
+## 1.9.0 — 2026-07-31
+
+**Settings is rearranged, and the arrangement is the operator's choice.**
+
+1.8.1 put the settings cards into a two- or three-column grid. That fixed the
+narrow-strip problem but produced a new one: six cards of unequal height in a
+grid have ragged bottoms, no reading order, and a form whose fields sit in a
+different column from the button that submits them. Density is not the same
+thing as order.
+
+What it is now:
+
+- **A section rail.** The six sections — System, Network, Database, Identity,
+  Service account, Sessions — are listed down the left with a one-line hint
+  each, and one section is shown at a time. The current one is marked with an
+  accent edge, not a filled block.
+- **Three arrangements, chosen in the header.** *One section* (the default,
+  the rail), *Single column* (everything, top to bottom, at a readable
+  measure), *Columns* (two from 1100px, three from 1700px — 1.8.1's layout,
+  kept for anyone who prefers it). The choice and the open section are
+  remembered per browser in `localStorage`.
+- **Cards are hidden, never removed.** Switching sections toggles `hidden` on
+  elements that stay in the DOM, so every handler wired by `wireSettings()`
+  stays attached — no re-wiring, and no dead buttons after a switch.
+- **On a phone** the rail becomes a horizontally scrolling row of section
+  chips above the card, so it never takes half the screen. Below 900px the
+  hints are dropped and the accent edge moves from the left to the bottom.
+
+There is no single correct arrangement for a screen that is used on a 360px
+phone and a 34" monitor, which is why this is a setting and not a decision.
+
+Files: `web/index.html`, `web/app.css`, `web/app.js`,
+`server/lib/DsmtCommon.ps1` (version). Copy `web/*` and hard-refresh
+(Ctrl+F5); restart the server only so the About dialog reports 1.9.0.
 
 ---
 

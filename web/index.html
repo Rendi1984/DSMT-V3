@@ -162,11 +162,26 @@
        overlay does not render, which is exactly what happened in 1.7.5. -->
   <div class="settings" id="settingsView" hidden>
     <div class="settings-head">
-      <span class="kicker">Settings</span>
-      <h1 class="settings-title">Server configuration</h1>
-      <p class="muted-sm">Read live from the server this console is served by.</p>
+      <div class="settings-head-text">
+        <span class="kicker">Settings</span>
+        <h1 class="settings-title">Server configuration</h1>
+        <p class="muted-sm">Read live from the server this console is served by.</p>
+      </div>
+      <!-- The arrangement is the operator's choice and is remembered per
+           browser, because a 24" monitor and a phone do not want the same one. -->
+      <div class="settings-layout-pick" role="group" aria-label="Arrangement">
+        <span class="set-cmd-label">Arrangement</span>
+        <div class="seg" id="settingsLayouts">
+          <button class="seg-btn" type="button" data-layout="focus">One section</button>
+          <button class="seg-btn" type="button" data-layout="list">Single column</button>
+          <button class="seg-btn" type="button" data-layout="grid">Columns</button>
+        </div>
+      </div>
     </div>
-    <div class="settings-body" id="settingsBody"></div>
+    <div class="settings-main">
+      <nav class="set-nav" id="settingsNav" aria-label="Settings sections"></nav>
+      <div class="settings-body" id="settingsBody"></div>
+    </div>
   </div>
 
   <!-- ---------- Audit ---------- -->
