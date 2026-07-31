@@ -21,7 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
-| **1.7.2** | 2026-07-31 | Changelog index table added |
+| **1.7.2** | 2026-07-31 | Version history indexed at the top of this file | Docs only |
 | **1.7.1** | 2026-07-30 | Deployment guide made usable on phones: tables reflow to cards, contents collapse, iOS safe areas | Docs only |
 | **1.7.0** | 2026-07-30 | Idle timeout default cut to 15 minutes, capped at 8 hours; bounds enforced on every route | Restart |
 | **1.6.0** | 2026-07-30 | Idle timeout with a warning countdown; deployment guide covers every installation form | Restart + refresh |
