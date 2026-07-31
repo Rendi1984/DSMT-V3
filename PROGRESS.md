@@ -247,6 +247,66 @@ Ordered by value for the effort, highest first.
     is a real piece of design work on the token sheet, not a CSS toggle. Listed
     last deliberately — the cost is much higher than it looks.
 
+13. **LAPS — read and audit the local administrator password.** Raised
+    2026-07-31: "logs for the admin password via LAPS. We will open this later
+    if it becomes relevant." **Not designed, not scheduled.**
+    Sketch only, so a future session does not start from nothing:
+    - Windows LAPS (Server 2019+ / 11 with the April 2023 update) stores the
+      password in `msLAPS-EncryptedPassword` / `msLAPS-Password`; legacy
+      Microsoft LAPS uses `ms-Mcs-AdmPwd`. **A future session must establish
+      which of the two this domain runs before designing anything** — they are
+      different attributes with different ACL models, and encrypted LAPS
+      cannot be read by a plain attribute fetch.
+    - Reading is already gated by AD: only principals granted
+      `CONTROL_ACCESS` on the attribute see it. That fits DSMT's model exactly
+      — it acts as the operator, so AD decides.
+    - **The audit requirement is the actual feature.** Every read must be an
+      audit record with a mandatory reason, exactly like a password reset,
+      because a LAPS read is functionally handing someone local admin. It is
+      the one place where the read matters as much as any write.
+    - Open questions to settle first: is the password ever displayed on
+      screen or only copied; is it masked by default; is there a retention
+      rule for the audit entries; and does an expiry-time write
+      (`msLAPS-PasswordExpirationTime`, forcing a rotation) belong here too.
+
+14. **Health checks for the Active Directory services themselves.** Raised
+    2026-07-31, alongside LAPS. **Not to be built yet.**
+    Settings -> Health today answers "can DSMT reach AD". This would answer
+    "is AD healthy", which is a different and much larger question. Sketch:
+    - **Replication** — `Get-ADReplicationPartnerMetadata -Scope Server` per
+      DC: last attempt, last success, consecutive failures. The single most
+      useful signal, and the one that goes unnoticed longest.
+    - **Per-controller reachability** — LDAP 389, LDAPS 636, Global Catalog
+      3268, and DNS resolution of each DC. DSMT already lists every DC.
+    - **The five FSMO role holders** — named, and reachable.
+    - **Time skew** between DCs. Kerberos fails past five minutes, and the
+      symptom looks like nothing to do with time.
+    - **SYSVOL / DFSR state**, and whether every DC advertises itself.
+    - **Secure channel** from the DSMT host (`Test-ComputerSecureChannel`).
+    Design constraints already known, so they are not rediscovered:
+    - These are **slow** — several remote calls per DC. It must not run on
+      opening the page the way the current checks do; it needs its own
+      explicit "Run AD checks" button and probably a per-DC progress list.
+    - Some checks need rights the signed-in operator may not have. Each must
+      degrade to "could not check, and why", never to a false green.
+    - This is diagnostic reporting, not monitoring. If it grows scheduling and
+      alerting it has become a different product; say no at that point.
+
+---
+
+## Under consideration — asked about, not decided
+
+**Replacing the HttpListener host with IIS.** Asked 2026-07-31; the answer was
+given in conversation and **no change was made, deliberately**. The trade-off
+in one line: IIS buys process lifetime management, real HTTPS certificate
+handling and Windows authentication, at the cost of the credential-in-memory
+design that produces per-operator attribution today — an app-pool recycle
+silently signs everyone out, and that is the same class of failure as the
+72-hour scheduled-task default already recorded below. **Do not begin this
+migration without an explicit decision**; if it is revisited, the first
+question is what happens to the sessions on a recycle, not how to host the
+files.
+
 ---
 
 ## Recurring root causes
