@@ -13,6 +13,47 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## Version history at a glance
+
+One line per release. The full entry for each is below — this table is an
+index into it, not a second record, so that there is still exactly one place
+where what changed is written down.
+
+| Version | Date | What changed | To deploy |
+| --- | --- | --- | --- |
+| **1.7.2** | 2026-07-31 | Changelog index table added |
+| **1.7.1** | 2026-07-30 | Deployment guide made usable on phones: tables reflow to cards, contents collapse, iOS safe areas | Docs only |
+| **1.7.0** | 2026-07-30 | Idle timeout default cut to 15 minutes, capped at 8 hours; bounds enforced on every route | Restart |
+| **1.6.0** | 2026-07-30 | Idle timeout with a warning countdown; deployment guide covers every installation form | Restart + refresh |
+| **1.5.0** | 2026-07-30 | Service identity: gMSA, dedicated, machine or installing user; `-ChangeServiceAccount`; identity mode; publisher | Restart + refresh |
+| **1.4.0** | 2026-07-30 | Run unattended as a Windows service or a hardened scheduled task; `-StartWhenDone` | Restart |
+| **1.3.0** | 2026-07-30 | Audit time filtering; Settings screen that creates the database; notifications bell | Restart + refresh |
+| **1.2.1** | 2026-07-27 | Deployment guide rewritten in English | Docs only |
+| **1.2.0** | 2026-07-27 | Automated installer and saved configuration | Re-run installer |
+| **1.1.0** | 2026-07-27 | Step-by-step deployment guide | Docs only |
+| **1.0.0** | 2026-07-27 | **First working release** — live AD, SQL persistence, responsive console | Full install |
+| 0.1.0 | 2026-07-27 | Design prototype imported (fabricated data, inert buttons) | — |
+| 0.0.0 | 2026-07-27 | Project scaffold | — |
+
+**Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
+in the browser (Ctrl+F5); *Docs only* = no runtime impact.
+
+The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
+onwards are on `feature/service-identity` and have not been merged.
+
+---
+
+## 1.7.2 — 2026-07-31
+- `CHANGELOG.md` — added a **"Version history at a glance"** table: one row
+  per release with the date, a one-line summary and what deploying it takes.
+  It is an index into the entries below it, not a second record — a separate
+  version-history file would have been a second source of truth to keep in
+  step, which is the failure mode the versioning rule exists to prevent.
+- `CLAUDE.md` — records that a release adds both the row and the entry, and
+  that the row must never carry a detail the entry does not.
+
+Deploy: documentation only, no runtime impact.
+
 ## 1.7.1 — 2026-07-30
 `docs/deployment-guide.html` made usable on a phone — Safari on iOS, and any
 Chromium browser on Android or iOS.

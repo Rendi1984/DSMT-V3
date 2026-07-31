@@ -92,7 +92,10 @@ always missed. A single source of truth makes that failure mode structurally
 impossible instead of relying on discipline to catch it every time.
 
 Check `CHANGELOG.md` (top entry) for the authoritative current version before
-picking the next number — don't trust a stale note elsewhere.
+picking the next number — don't trust a stale note elsewhere. Its "Version
+history at a glance" table is an index into the entries below it; when you add
+a release, add the row **and** the entry, and never let the row carry a detail
+that is not in the entry.
 
 **The one constant is `$script:DsmtVersion` in
 `server/lib/DsmtCommon.ps1`.** It is copied into `$script:DsmtConfig.Version`
