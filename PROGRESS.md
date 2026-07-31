@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.8.1` — matches the top entry of `CHANGELOG.md` and
+`1.10.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -189,6 +189,59 @@ its data is fabricated and every button is inert.
    check in before restarting that investigation.
 8. **Decide the fate of `prototype/`.** It is kept for reference; delete it
    once nobody needs the original design pass.
+
+---
+
+## Proposed features — NOT approved, do not build
+
+Put here on 2026-07-31 at the operator's request ("just propose, do not work
+on them"). Nothing below is a commitment and none of it has been designed.
+**A future session must not start any of these without being asked**; when one
+is picked, move it into "Open tasks" first.
+
+Ordered by value for the effort, highest first.
+
+1. **Saved searches / filter presets.** The Users grid already filters by OU,
+   department and text. Saving a combination under a name ("Disabled in Sales",
+   "No logon in 90 days") turns a repeated five-click task into one. Local to
+   the browser is enough to start; SQL later would share them across operators.
+2. **Undo the last action, from the audit entry.** Every write is already
+   recorded with its target and what changed. Disable/enable, group add/remove
+   and department edits are all exactly reversible. This is the highest-value
+   safety feature the tool does not have — and note it must create a *new*
+   audit record with its own reason, never erase the original.
+3. **Bulk import from CSV.** Named in the project description and still not
+   built. Requires a dry-run pass that reports what *would* happen before
+   anything is written; an import that half-succeeds with no preview is the
+   worst possible shape for this feature.
+4. **Password expiry and stale-account report.** "Expires in N days",
+   "no logon in 90 days", "password never expires" — read straight from
+   attributes DSMT already fetches. Mostly a query and a view.
+5. **Scheduled directory snapshot.** `dbo.DirectoryUsers` / `DirectoryGroups`
+   are only written when someone browses. A timed sync would make them
+   genuinely useful for reporting. **Must obey the fake-data rule**: anything
+   rendered from a snapshot has to be labelled as one, with its `LastSyncUtc`.
+6. **Audit retention and archive.** The table grows forever. Needs a retention
+   setting, an archive table, and a deliberate decision about who may purge —
+   an audit log that any operator can delete is not an audit log.
+7. **A read-only role.** DSMT has no permission model by design; AD enforces
+   everything. A UI-level read-only mode is *not* security, but it is useful
+   for a service desk that should look and not touch. Would need to be
+   labelled honestly as a guard rail, not a control.
+8. **Health check page.** One screen answering: is AD reachable, is SQL
+   reachable, is the RSAT module present, when did the last write succeed,
+   how many sessions are open. Turns "the server won't start" into a
+   self-service answer — see the Shape 2 entries below.
+9. **Live session list with the ability to sign someone out.** DSMT already
+   tracks sessions in `dbo.Sessions`. Useful with several operators, and
+   necessary the day someone leaves mid-shift.
+10. **Column chooser on the Audit table**, matching the one the Users grid
+    already has. Small, consistent, cheap.
+11. **Keyboard shortcuts** — `/` to search, `Esc` to close the detail pane,
+    `r` to refresh. Cheap, and the kind of thing a daily operator notices.
+12. **A dark/light theme switch.** Nocturne is a dark system; a light variant
+    is a real piece of design work on the token sheet, not a CSS toggle. Listed
+    last deliberately — the cost is much higher than it looks.
 
 ---
 
