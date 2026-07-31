@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.9.2** | 2026-07-31 | Database section states the live server and database as fields; a 404 on a new route now names the cause | Refresh |
 | **1.9.1** | 2026-07-31 | Settings keeps only the section rail; the arrangement switch is gone | Refresh |
 | **1.9.0** | 2026-07-31 | Settings rearranged: a section rail with one section at a time, and the operator picks the arrangement | Refresh |
 | **1.8.1** | 2026-07-31 | Fixes the idle-timeout 500; pick an existing database; confirm before creating; custom port; Settings laid out in columns | Restart + refresh |
@@ -47,6 +48,31 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
+
+---
+
+## 1.9.2 — 2026-07-31
+
+**Says what it is connected to, and explains a 404 on a new route.**
+
+- The **Database** section opens with a connection panel: a Connected /
+  Not connected marker and four fields — SQL Server instance, Database,
+  where the audit log goes, and whether operators, sessions and the snapshot
+  are stored. It was a sentence before; on a screen with two name-shaped
+  inputs, what is *live* has to be readable without comparing it to what is
+  typed in the boxes underneath.
+- The rail entry for Database now carries `server / database` as its hint,
+  so the current target is visible without opening the section.
+- `No API route for POST /api/settings/sql/databases` now adds what it
+  means: the web files were copied but the server was not restarted, so a new
+  front end is talking to an old back end. The raw 404 read like a broken
+  feature. **This is not a code fix — the route has existed since 1.8.1 —
+  it is a fix for the message.**
+
+Files: `web/app.js`, `web/app.css`, `server/lib/DsmtCommon.ps1` (version).
+Copy `web/*` and hard-refresh. Note that `server/lib/*.ps1` from 1.8.1 must
+be on the host and the server restarted before *List existing databases*,
+the custom port or the idle timeout will work at all.
 
 ---
 

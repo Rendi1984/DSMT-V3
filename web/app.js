@@ -1524,21 +1524,39 @@ function renderSettings() {
   var b = s.sessionBounds || {};
   var bounds = { min: b.Min || b.min || 1, max: b.Max || b.max || 480, def: b.Default || b.def || 15 };
 
-  var storage = s.sqlEnabled
-    ? '<p class="set-good">Connected to <strong>' + esc(s.sqlServer) + '</strong>, database ' +
-      '<strong>' + esc(s.sqlDatabase) + '</strong>. Operators, sessions, the directory snapshot and ' +
-      'the audit log are stored there.</p>'
-    : '<p class="set-warn"><strong>No database is configured.</strong> The audit log is written to ' +
-      'files under the data folder, and operators, sessions and the directory snapshot are ' +
-      '<strong>not stored at all</strong>.</p>';
+  // Where the data actually goes, stated as fields rather than buried in a
+  // sentence: on a screen with two name-shaped inputs, the one thing that must
+  // be unambiguous is which server and database are LIVE right now, as opposed
+  // to whatever is currently typed into the boxes below.
+  var storage =
+    '<div class="set-state' + (s.sqlEnabled ? ' set-state-on' : ' set-state-off') + '">' +
+      '<div class="set-state-head">' +
+        '<span class="set-state-dot"></span>' +
+        '<span>' + (s.sqlEnabled ? 'Connected' : 'Not connected') + '</span>' +
+      '</div>' +
+      '<dl class="detail-fields">' +
+        settingsRow('SQL Server instance', s.sqlEnabled ? s.sqlServer : 'None') +
+        settingsRow('Database', s.sqlEnabled ? s.sqlDatabase : 'None') +
+        settingsRow('Audit log', s.sqlEnabled ? 'SQL Server, and files under the data folder'
+                                              : 'Files under the data folder only') +
+        settingsRow('Operators, sessions, snapshot', s.sqlEnabled ? 'Stored in SQL Server'
+                                                                  : 'Not stored') +
+      '</dl>' +
+    '</div>';
+
+  if (!s.sqlEnabled) {
+    storage += '<p class="set-warn">No database is configured, so operators, sessions and the ' +
+               'directory snapshot are <strong>not stored at all</strong> and the audit log ' +
+               'survives only as files on the server.</p>';
+  }
 
   if (s.sqlError) {
     storage += '<div class="error-box"><strong>The last SQL attempt failed with:</strong>' +
                esc(s.sqlError) + '</div>';
   }
 
-  // Sections are data, not one wall of markup: the rail, the arrangement
-  // switch and the cards all read from this one list.
+  // Sections are data, not one wall of markup: the rail and the cards both
+  // read from this one list.
   var sections = [];
 
   sections.push({ key: 'system', label: 'System', hint: 'Version, domain, paths', body:
@@ -1572,7 +1590,8 @@ function renderSettings() {
       '<div class="set-result" id="portResult"></div>' +
       '<div id="portCommands"></div>' });
 
-  sections.push({ key: 'sql', label: 'Database', hint: 'SQL Server connection', body:
+  sections.push({ key: 'sql', label: 'Database',
+    hint: (s.sqlEnabled ? s.sqlServer + ' / ' + s.sqlDatabase : 'Not connected'), body:
       '<h2 class="set-h">Database</h2>' +
       storage +
       '<div class="set-form">' +
@@ -1765,6 +1784,19 @@ function accountKindLabel(kind) {
   return '';
 }
 
+/* "No API route for POST /api/..." has exactly one cause worth naming: the
+   web files were copied but the server was not restarted, so a new front end
+   is talking to an old back end. Say that instead of the raw 404, because the
+   raw 404 reads like a bug in the feature. */
+function explainApiError(message) {
+  if (message && message.indexOf('No API route') === 0) {
+    return message + ' - the server is running an older build than these web ' +
+           'files. Copy server\\lib\\*.ps1 to the DSMT host and restart ' +
+           'Start-DSMT.ps1, then reload this page.';
+  }
+  return message;
+}
+
 /* Inline result, shown next to the control that produced it - so a failure is
    readable even if no overlay renders. */
 function setResult(id, message, ok) {
@@ -1820,7 +1852,7 @@ function wireSettings(bounds) {
                 ' found. Pick one to use it, or type a new name to create one.', true);
     }).catch(function (err) {
       $('dbPickField').hidden = true;
-      setResult('sqlResult', err.message, false);
+      setResult('sqlResult', explainApiError(err.message), false);
     });
   });
 

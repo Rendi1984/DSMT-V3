@@ -509,6 +509,32 @@ body { overflow: hidden; }
 }
 .set-form .field { min-width: 0; }
 .set-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+/* The live connection, stated as fields. Not decoration: on a screen with two
+   name-shaped inputs, "what am I connected to right now" must be readable
+   without comparing it to what is typed in the boxes. */
+.set-state {
+  border: 1px solid var(--color-neutral-800);
+  border-left: 2px solid var(--color-neutral-700);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  display: flex; flex-direction: column; gap: var(--space-3);
+}
+.set-state-on  { border-left-color: var(--color-accent-500); }
+.set-state-off { border-left-color: var(--color-neutral-600); }
+.set-state-head {
+  display: flex; align-items: center; gap: var(--space-2);
+  font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-neutral-400);
+}
+.set-state-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--color-neutral-600);
+}
+.set-state-on .set-state-dot {
+  background: var(--color-accent); box-shadow: 0 0 8px var(--color-accent);
+}
+.set-state .detail-fields { margin: 0; }
+
 .set-good { margin: 0; font-size: 13px; color: var(--color-neutral-300); }
 .set-warn { margin: 0; font-size: 13px; color: var(--color-accent-200); }
 .set-cmd-label { font-size: 12px; color: var(--color-neutral-400); }
