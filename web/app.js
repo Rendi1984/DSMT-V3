@@ -982,15 +982,20 @@ function renderAudit() {
     if (state.auditFilter !== 'All') { scope += ' for the ' + state.auditFilter + ' filter'; }
     if (state.auditQuery) { scope += ' matching "' + state.auditQuery + '"'; }
 
-    $('auditBody').innerHTML = '<tr><td colspan="7" data-label="">' +
+    $('auditBody').innerHTML = '<tr><td colspan="8" data-label="">' +
       '<span class="muted-sm">' + esc(scope) + '. Entries are written here as changes are made.</span>' +
       '</td></tr>';
     $('auditLine').textContent = '';
     return;
   }
 
-  $('auditBody').innerHTML = state.auditRows.map(function (r) {
+  $('auditBody').innerHTML = state.auditRows.map(function (r, i) {
     var cls = (r.result === 'Success') ? 'res-success' : 'res-other';
+    var plan = undoPlan(r);
+    var undoCell = plan.ok
+      ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
+      : '<span class="cell-disabled undo-no" title="' + esc(plan.reason) + '">-</span>';
+
     return '<tr>' +
       '<td data-label="Time" class="cell-muted">' + esc(formatStamp(r.time)) + '</td>' +
       '<td data-label="Action" class="cell-name">' + esc(r.action) + '</td>' +
@@ -999,14 +1004,124 @@ function renderAudit() {
       '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>' +
       '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>' +
       '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>' +
+      '<td data-label="Undo">' + undoCell + '</td>' +
       '</tr>';
   }).join('');
+
+  var undoButtons = $('auditBody').querySelectorAll('[data-undo]');
+  for (var u = 0; u < undoButtons.length; u++) {
+    undoButtons[u].onclick = function () {
+      askUndo(state.auditRows[parseInt(this.getAttribute('data-undo'), 10)]);
+    };
+  }
 
   var line = state.auditRows.length + ' of ' + state.auditTotal + ' entries in ' + windowLabel() +
              ' - written by this console, newest first';
   if (state.auditSource === 'sql') { line += ' - stored in SQL Server'; }
   else if (state.auditSource === 'file') { line += ' - stored in files on the server (no SQL configured)'; }
   $('auditLine').textContent = line;
+}
+
+// ---------------------------------------------------------------------------
+// Undo
+//
+// This mirrors Get-DsmtUndoPlan in server/lib/DsmtHttp.ps1, and the SERVER IS
+// AUTHORITATIVE: it recomputes the plan and refuses anything not on its own
+// list. This copy exists only to decide whether to paint a button, and to say
+// why when it does not. If the two ever disagree, fix this one - a button that
+// appears and then fails is worse than no button.
+// ---------------------------------------------------------------------------
+
+function undoPlan(r) {
+  function no(why) { return { ok: false, reason: why, what: '' }; }
+
+  if (!r) { return no('No entry.'); }
+
+  // Only a change that actually happened can be put back. A Failed or Denied
+  // record changed nothing, so there is nothing to reverse.
+  if (r.result !== 'Success') {
+    return no('This action did not succeed, so there is nothing to undo.');
+  }
+
+  var detail = r.detail || '';
+  var m;
+
+  if (r.action === 'Disable user') { return { ok: true, reason: '', what: 'enable ' + r.target + ' again' }; }
+  if (r.action === 'Enable user')  { return { ok: true, reason: '', what: 'disable ' + r.target + ' again' }; }
+
+  if (r.action === 'Add to group') {
+    m = /^into\s+(.+)$/.exec(detail);
+    if (!m) { return no('The record does not name the group that was joined.'); }
+    return { ok: true, reason: '', what: 'remove ' + r.target + ' from ' + m[1] };
+  }
+
+  if (r.action === 'Remove from group') {
+    m = /^from\s+(.+)$/.exec(detail);
+    if (!m) { return no('The record does not name the group that was left.'); }
+    return { ok: true, reason: '', what: 'add ' + r.target + ' back to ' + m[1] };
+  }
+
+  if (r.action === 'Move OU') {
+    m = /^from\s+(.+?)\s+into\s+(.+)$/.exec(detail);
+    if (!m) {
+      return no('The record does not say which OU the object came from. Moves recorded from 1.11.0 onwards can be undone.');
+    }
+    return { ok: true, reason: '', what: 'move ' + r.target + ' back to ' + m[1] };
+  }
+
+  if (r.action === 'Reset password') {
+    return no('A password cannot be undone - DSMT never knew the previous one.');
+  }
+  if (r.action === 'Unlock account') {
+    return no('An unlock cannot be undone: a lockout comes from failed sign-ins, not from an administrator.');
+  }
+  if (/^(Create|Delete) (user|group)$/.test(r.action) || r.action === 'Bulk CSV import') {
+    return no('Creating and deleting are not reversible here - a recreated object gets a new SID, so every permission that pointed at the old one stays broken. Use the AD Recycle Bin.');
+  }
+
+  return no('There is no defined way to reverse "' + (r.action || '') + '".');
+}
+
+function askUndo(r) {
+  var plan = undoPlan(r);
+  if (!plan.ok) { toast(plan.reason, 'bad'); return; }
+
+  openDialog({
+    title: 'Undo ' + r.action,
+    confirmLabel: 'Undo it',
+    body:
+      '<p class="dialog-note">This will <strong>' + esc(plan.what) + '</strong>.</p>' +
+      '<dl class="detail-fields">' +
+        '<div class="detail-row"><dt>Original action</dt><dd>' + esc(r.action) + '</dd></div>' +
+        '<div class="detail-row"><dt>Performed by</dt><dd>' + esc(r.operator) + '</dd></div>' +
+        '<div class="detail-row"><dt>When</dt><dd>' + esc(formatStamp(r.time)) + '</dd></div>' +
+      '</dl>' +
+      // Said plainly, because an "undo" that quietly rewrote history would be
+      // the single worst thing this tool could do.
+      '<p class="dialog-note">The original entry stays in the audit log exactly as it is. ' +
+      'This is recorded as a new change, made by you, now - and it runs with your own ' +
+      'directory rights, like any other action here.</p>' +
+      reasonField(),
+    onConfirm: function () {
+      var reason = readReason();
+      if (!reason) { dialogError('Give a reason for the undo.'); return; }
+
+      api('/api/audit/undo', {
+        method: 'POST',
+        body: { action: r.action, target: r.target, detail: r.detail || '', reason: reason }
+      }).then(function (res) {
+        closeDialog();
+        if (res.ok) {
+          toast('Undone: ' + plan.what + '.', 'good');
+        } else {
+          toast('The undo did not succeed. See the audit log for the reason.', 'bad');
+        }
+        loadAudit();
+      }).catch(function (err) {
+        dialogError(err.message);
+      });
+    }
+  });
 }
 
 /* Formats a Date for a <input type="datetime-local">, which wants local time
@@ -1533,6 +1648,7 @@ function loadSettings() {
   // The rail belongs to the rendered sections; drop it while there are none,
   // otherwise a failed reload leaves a rail pointing at cards that are gone.
   $('settingsNav').innerHTML = '';
+  state.healthLoaded = false;
   $('settingsBody').innerHTML = '<p class="muted-sm">Loading...</p>';
 
   api('/api/settings').then(function (data) {
@@ -1585,6 +1701,18 @@ function renderSettings() {
   // Sections are data, not one wall of markup: the rail and the cards both
   // read from this one list.
   var sections = [];
+
+  // Health first: it is the section someone opens when something is wrong,
+  // and the one that answers "is it me or is it the server".
+  sections.push({ key: 'health', label: 'Health', hint: 'Is everything reachable', body:
+      '<h2 class="set-h">Health</h2>' +
+      '<p class="dialog-note">Every check below is run live, now. Nothing here changes anything, ' +
+      'so it is safe to press repeatedly while diagnosing.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="runHealth">Run checks</button>' +
+        '<span class="audit-stamp" id="healthStamp"></span>' +
+      '</div>' +
+      '<div id="healthBody"></div>' });
 
   sections.push({ key: 'system', label: 'System', hint: 'Version, domain, paths', body:
       '<h2 class="set-h">System</h2>' +
@@ -1796,12 +1924,85 @@ function showSettingsSection() {
       (items[i].getAttribute('data-section') === current ? ' is-active' : '');
   }
 
+  // Run the checks when Health is opened, not when Settings loads: they cost a
+  // live directory search and a SQL round trip, and nobody wants those on the
+  // way to changing an idle timeout.
+  if (current === 'health' && !state.healthLoaded) { loadHealth(); }
+
   // The other cards are hidden, never removed - the handlers wired by
   // wireSettings() stay attached to elements that still exist.
   for (i = 0; i < sections.length; i++) {
     var card = $('setSec-' + sections[i].key);
     if (card) { card.hidden = (sections[i].key !== current); }
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Health. One request, one verdict per check, and a fix for anything that is
+   not green - a red light with no instruction has moved the problem rather
+   than helped with it. Most of the "the server won't start" reports in this
+   project's history were a known external step nobody had done yet.
+   --------------------------------------------------------------------------- */
+
+function loadHealth() {
+  var btn = $('runHealth');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking...'; }
+  $('healthBody').innerHTML = '<p class="muted-sm">Running the checks...</p>';
+
+  api('/api/health').then(function (data) {
+    state.healthLoaded = true;
+    renderHealth(data);
+  }).catch(function (err) {
+    state.healthLoaded = true;
+    // A failure here is itself the answer: the server is not answering at all.
+    $('healthBody').innerHTML = '<div class="error-box"><strong>The health check itself failed.</strong>' +
+      esc(explainApiError(err.message)) + '</div>';
+  }).then(function () {
+    if (btn) { btn.disabled = false; btn.textContent = 'Run checks'; }
+  });
+}
+
+function healthWordFor(status) {
+  if (status === 'ok') { return 'OK'; }
+  if (status === 'warn') { return 'Attention'; }
+  return 'Failing';
+}
+
+function renderHealth(data) {
+  var checks = asArray(data.checks);
+
+  var head =
+    '<div class="set-state set-state-' + esc(data.overall) + '">' +
+      '<div class="set-state-head">' +
+        '<span class="set-state-dot"></span>' +
+        '<span>' + esc(healthWordFor(data.overall)) + '</span>' +
+      '</div>' +
+      '<p class="muted-sm">' +
+        (data.overall === 'ok'
+          ? 'Every check passed.'
+          : 'One or more checks need attention. Each one below says what to do.') +
+      '</p>' +
+    '</div>';
+
+  var rows = checks.map(function (c) {
+    var fix = c.fix
+      ? '<p class="health-fix"><strong>Fix:</strong> ' + esc(c.fix) + '</p>'
+      : '';
+    return '<div class="health-item health-' + esc(c.status) + '">' +
+             '<div class="health-item-head">' +
+               '<span class="set-state-dot"></span>' +
+               '<span class="health-name">' + esc(c.name) + '</span>' +
+               '<span class="health-verdict">' + esc(healthWordFor(c.status)) + '</span>' +
+             '</div>' +
+             '<p class="health-detail">' + esc(c.detail) + '</p>' +
+             fix +
+           '</div>';
+  }).join('');
+
+  $('healthBody').innerHTML = head + '<div class="health-list">' + rows + '</div>';
+
+  var stamp = $('healthStamp');
+  if (stamp) { stamp.textContent = 'Checked ' + formatStamp(data.checkedAt); }
 }
 
 function accountKindLabel(kind) {
@@ -1834,6 +2035,9 @@ function setResult(id, message, ok) {
 }
 
 function wireSettings(bounds) {
+
+  // ---- health ----
+  $('runHealth').addEventListener('click', function () { loadHealth(); });
 
   // ---- SQL ----
   function sqlCredentials() {

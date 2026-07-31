@@ -224,6 +224,276 @@ function Get-DsmtTargetList {
     return $list
 }
 
+function New-DsmtCheck {
+    <#
+    .SYNOPSIS
+        One health check result. Status is ok | warn | bad.
+    .DESCRIPTION
+        Every check carries a Fix string when it is not ok. A health page that
+        reports a red light without saying what to do about it has moved the
+        problem, not helped with it - see the Shape 2 entries in CLAUDE.md,
+        every one of which is a failure whose fix is a known external step.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Name,
+        [Parameter(Mandatory = $true)][ValidateSet('ok', 'warn', 'bad')][string] $Status,
+        [Parameter(Mandatory = $true)][string] $Detail,
+        [string] $Fix = ''
+    )
+
+    return [ordered]@{ name = $Name; status = $Status; detail = $Detail; fix = $Fix }
+}
+
+function Get-DsmtHealth {
+    <#
+    .SYNOPSIS
+        Answers, in one request: is AD reachable, is SQL reachable, is RSAT
+        present, how long has this process been up, and who is signed in.
+    .DESCRIPTION
+        Each check is wrapped in its own try/catch so one failure reports
+        itself rather than taking the page down - a health page that cannot
+        render when something is wrong is exactly the wrong shape.
+
+        Reads only. Nothing here changes state, so it is safe to press
+        repeatedly while diagnosing.
+    #>
+    param([Parameter(Mandatory = $true)] $Session)
+
+    $cfg    = Get-DsmtConfig
+    $checks = @()
+
+    # --- the RSAT module -----------------------------------------------
+    try {
+        Assert-DsmtAdModule
+        $checks += New-DsmtCheck -Name 'ActiveDirectory module' -Status 'ok' `
+                                 -Detail 'The RSAT ActiveDirectory module is loaded.'
+    } catch {
+        $checks += New-DsmtCheck -Name 'ActiveDirectory module' -Status 'bad' `
+                                 -Detail $_.Exception.Message `
+                                 -Fix 'Install-WindowsFeature RSAT-AD-PowerShell   (or Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools on a client OS), then restart Start-DSMT.ps1.'
+    }
+
+    # --- the domain ------------------------------------------------------
+    $controller = ''
+    try {
+        $info = Get-DsmtDomainInfo -Credential $Session.Credential
+        $controller = [string]$info.connectedTo
+        $checks += New-DsmtCheck -Name 'Domain' -Status 'ok' `
+                                 -Detail ($info.domain + ' - answering on ' + $controller + ', ' +
+                                          [string]$info.controllerCount + ' controller(s) in the domain.')
+    } catch {
+        $checks += New-DsmtCheck -Name 'Domain' -Status 'bad' `
+                                 -Detail $_.Exception.Message `
+                                 -Fix 'Check that this host can reach a domain controller for the configured domain (DNS first, then port 389/636). The domain is set in config\dsmt.config.json.'
+    }
+
+    # --- a real directory read -------------------------------------------
+    # Reaching the domain and being ALLOWED to read it are different things,
+    # and the second is what the console actually needs.
+    try {
+        $probe = @(Get-DsmtUsers -Credential $Session.Credential -Query '' -Limit 1)
+        $checks += New-DsmtCheck -Name 'Directory read' -Status 'ok' `
+                                 -Detail ('A search as ' + $Session.Account + ' returned ' + [string]$probe.Count + ' object(s).')
+    } catch {
+        $checks += New-DsmtCheck -Name 'Directory read' -Status 'bad' `
+                                 -Detail $_.Exception.Message `
+                                 -Fix 'The domain answered but the search failed. If this says access is denied, it is the signed-in operator''s AD rights - DSMT has no permission model of its own.'
+    }
+
+    # --- SQL --------------------------------------------------------------
+    $sql = Get-DsmtSqlState
+    if (-not $sql.Enabled) {
+        $checks += New-DsmtCheck -Name 'SQL Server' -Status 'warn' `
+                                 -Detail 'No database is configured. The audit log is written to files only, and operators, sessions and the directory snapshot are not stored.' `
+                                 -Fix 'Settings -> Database: enter the instance, then Connect.'
+    } else {
+        try {
+            $n = [int](Invoke-DsmtSqlCommand -Sql 'SELECT COUNT(*) FROM dbo.AuditLog' -Mode 'Scalar')
+            $checks += New-DsmtCheck -Name 'SQL Server' -Status 'ok' `
+                                     -Detail ($sql.Server + ' [' + $sql.Database + '] - ' + [string]$n + ' audit record(s).')
+        } catch {
+            $checks += New-DsmtCheck -Name 'SQL Server' -Status 'bad' `
+                                     -Detail $_.Exception.Message `
+                                     -Fix 'The connection was configured but is not answering now. Settings -> Database -> Reconnect shows the verbatim SQL error.'
+        }
+    }
+
+    # --- the data folder --------------------------------------------------
+    # The JSONL audit fallback lives here. If this is not writable, an audit
+    # record can be lost silently, which is the one failure this tool must not
+    # have.
+    try {
+        $probeFile = Join-Path $cfg.DataPath ('.health-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        Set-Content -LiteralPath $probeFile -Value 'ok' -Encoding UTF8 -ErrorAction Stop
+        Remove-Item -LiteralPath $probeFile -Force -ErrorAction SilentlyContinue
+        $checks += New-DsmtCheck -Name 'Data folder' -Status 'ok' `
+                                 -Detail ($cfg.DataPath + ' is writable.')
+    } catch {
+        $checks += New-DsmtCheck -Name 'Data folder' -Status 'bad' `
+                                 -Detail $_.Exception.Message `
+                                 -Fix 'The account DSMT runs as needs Modify on the data folder. Install-DSMT.ps1 -ChangeServiceAccount sets this, or grant it by hand.'
+    }
+
+    # --- the last write DSMT actually performed ---------------------------
+    $lastWrite = ''
+    try {
+        $recent = Get-DsmtAuditEntries -Query '' -Filter 'All' -Limit 200
+        foreach ($entry in @($recent.entries)) {
+            if ($entry.result -eq 'Success' -and $entry.category -ne 'session') {
+                $lastWrite = [string]$entry.time + ' - ' + [string]$entry.action + ' on ' + [string]$entry.target
+                break
+            }
+        }
+    } catch { }
+
+    if ([string]::IsNullOrWhiteSpace($lastWrite)) {
+        $checks += New-DsmtCheck -Name 'Last successful write' -Status 'warn' `
+                                 -Detail 'No successful directory write in the recent audit entries. That is normal on a fresh install, and a red flag on one that is in use.'
+    } else {
+        $checks += New-DsmtCheck -Name 'Last successful write' -Status 'ok' -Detail $lastWrite
+    }
+
+    # --- uptime -----------------------------------------------------------
+    $uptime = 'unknown'
+    if ($null -ne $cfg.StartedUtc) {
+        $span = (Get-Date).ToUniversalTime() - [datetime]$cfg.StartedUtc
+        $uptime = [string][int]$span.TotalDays + 'd ' + [string]$span.Hours + 'h ' + [string]$span.Minutes + 'm'
+    }
+    $checks += New-DsmtCheck -Name 'Uptime' -Status 'ok' `
+                             -Detail ('This process has been running for ' + $uptime + '. Restarting ends every session by design.')
+
+    # --- sessions ---------------------------------------------------------
+    $summary = Get-DsmtSessionSummary
+    $checks += New-DsmtCheck -Name 'Open sessions' -Status 'ok' `
+                             -Detail ([string]$summary.Count + ' operator session(s) open; they expire after ' +
+                                      [string]$cfg.SessionMinutes + ' minutes of inactivity.')
+
+    # --- overall ----------------------------------------------------------
+    # The worst individual result wins. A page that averages its checks into a
+    # comfortable green is worse than no page.
+    $overall = 'ok'
+    foreach ($check in $checks) {
+        if ($check.status -eq 'bad') { $overall = 'bad' }
+        elseif ($check.status -eq 'warn' -and $overall -eq 'ok') { $overall = 'warn' }
+    }
+
+    return @{
+        ok         = $true
+        overall    = $overall
+        checkedAt  = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
+        controller = $controller
+        sessions   = @($summary.Sessions)
+        checks     = @($checks)
+    }
+}
+
+function Get-DsmtUndoPlan {
+    <#
+    .SYNOPSIS
+        Works out how to reverse one audit record, or says why it cannot be.
+    .DESCRIPTION
+        An action is undoable only when reversing it restores the directory to
+        what it was, using nothing but the record itself. That is a much
+        smaller set than "actions that have an opposite":
+
+          Disable user        -> Enable user
+          Enable user         -> Disable user
+          Add to group        -> Remove from group      (detail: "into X")
+          Remove from group   -> Add to group           (detail: "from X")
+          Move OU             -> Move back              (detail: "from A into B")
+
+        Everything else is refused ON PURPOSE, and the reason is returned so
+        the console can say it out loud:
+
+          Reset password / Unlock account - the previous password is not known
+            to DSMT and never was. There is nothing to restore.
+          Create user / Create group      - "undo" would be a delete, and a
+            delete is not the inverse of a create.
+          Delete user / Delete group      - recreating the object gives it a
+            NEW SID. Every ACL, group membership and profile that referenced
+            the old one still does not. An "undo" that produces a
+            same-named stranger is a lie, and a dangerous one.
+          Bulk CSV import                 - many objects, one record each,
+            created not modified; see above.
+          Sign in / settings changes      - not directory state.
+
+        Note what this function does NOT do: it does not check that the
+        directory still looks the way the record left it. If someone else has
+        since changed the same object, the undo simply applies on top, exactly
+        as the equivalent button would. The audit log remains the record of
+        both events - the undo never rewrites or removes the original entry.
+    .OUTPUTS
+        Hashtable: Ok, Reason (when not Ok), Action, Category, Label, Group, Ou.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Action,
+        [string] $Detail = ''
+    )
+
+    $no = {
+        param($why)
+        return @{ Ok = $false; Reason = $why; Action = ''; Category = 'user'; Label = ''; Group = ''; Ou = '' }
+    }
+
+    switch -Regex ($Action) {
+
+        '^Disable user$' {
+            return @{ Ok = $true; Action = 'enable'; Category = 'user'
+                      Label = 'Undo: Disable user'; Group = ''; Ou = '' }
+        }
+
+        '^Enable user$' {
+            return @{ Ok = $true; Action = 'disable'; Category = 'user'
+                      Label = 'Undo: Enable user'; Group = ''; Ou = '' }
+        }
+
+        '^Add to group$' {
+            if ($Detail -notmatch '^into\s+(?<g>.+)$') {
+                return (& $no 'The record does not name the group that was joined.')
+            }
+            return @{ Ok = $true; Action = 'group-remove'; Category = 'group'
+                      Label = 'Undo: Add to group'; Group = $Matches['g'].Trim(); Ou = '' }
+        }
+
+        '^Remove from group$' {
+            if ($Detail -notmatch '^from\s+(?<g>.+)$') {
+                return (& $no 'The record does not name the group that was left.')
+            }
+            return @{ Ok = $true; Action = 'group-add'; Category = 'group'
+                      Label = 'Undo: Remove from group'; Group = $Matches['g'].Trim(); Ou = '' }
+        }
+
+        '^Move OU$' {
+            # Records written before 1.11.0 only say "into X" - the source was
+            # never captured, so there is nothing to move back to. Say that
+            # plainly rather than guessing at a container.
+            if ($Detail -notmatch '^from\s+(?<a>.+?)\s+into\s+(?<b>.+)$') {
+                return (& $no 'The record does not say which OU the object came from, so there is nowhere to move it back to. Moves recorded from 1.11.0 onwards can be undone.')
+            }
+            return @{ Ok = $true; Action = 'move-ou'; Category = 'user'
+                      Label = 'Undo: Move OU'; Group = ''; Ou = $Matches['a'].Trim() }
+        }
+
+        '^Reset password$' {
+            return (& $no 'A password cannot be undone - DSMT never knew the previous one. Reset it again if it was set in error.')
+        }
+
+        '^Unlock account$' {
+            return (& $no 'An unlock cannot be undone. A lockout is produced by failed sign-ins, not by an administrator, so there is no previous state to put back.')
+        }
+
+        '^(Create|Delete) (user|group)$' {
+            return (& $no 'Creating and deleting are not reversible here. A recreated object gets a NEW SID, so every permission and membership that pointed at the old one would still be broken - restore it from the AD Recycle Bin instead.')
+        }
+
+        '^Bulk CSV import$' {
+            return (& $no 'An import creates objects; see the note on creating and deleting.')
+        }
+    }
+
+    return (& $no ('There is no defined way to reverse "' + $Action + '".'))
+}
+
 function Invoke-DsmtBulkAction {
     <#
     .SYNOPSIS
@@ -239,7 +509,13 @@ function Invoke-DsmtBulkAction {
         [Parameter(Mandatory = $true)][string] $Reason,
         [Parameter(Mandatory = $true)][ValidateSet('user', 'group')][string] $Category,
         [Parameter(Mandatory = $true)][scriptblock] $Operation,
-        [string] $DetailSuffix = ''
+        [string] $DetailSuffix = '',
+        # Evaluated per target BEFORE the operation runs, when the detail
+        # depends on the state the operation is about to change - a move has
+        # to record where the object came FROM, and after the move that is
+        # gone. Never allowed to break the action: a throw here falls back to
+        # $DetailSuffix.
+        [scriptblock] $DetailBuilder = $null
     )
 
     $controller = ''
@@ -249,6 +525,16 @@ function Invoke-DsmtBulkAction {
     $okCount = 0
 
     foreach ($target in $Targets) {
+        $detail = $DetailSuffix
+        if ($null -ne $DetailBuilder) {
+            try {
+                $built = [string](& $DetailBuilder $target)
+                if (-not [string]::IsNullOrWhiteSpace($built)) { $detail = $built }
+            } catch {
+                Write-DsmtLog -Level 'WARN' -Message ('Could not build the audit detail for ' + $target + ': ' + $_.Exception.Message)
+            }
+        }
+
         try {
             # Out-Null matters: anything the operation emits would otherwise
             # join this function's output stream and turn the returned result
@@ -257,7 +543,7 @@ function Invoke-DsmtBulkAction {
             $okCount++
             $results += [ordered]@{ target = $target; ok = $true; error = '' }
             Write-DsmtAudit -Action $Action -Target $target -Operator $Session.Account -Reason $Reason `
-                            -Result 'Success' -Category $Category -Controller $controller -Detail $DetailSuffix
+                            -Result 'Success' -Category $Category -Controller $controller -Detail $detail
         } catch {
             $message = $_.Exception.Message
             $results += [ordered]@{ target = $target; ok = $false; error = $message }
@@ -869,6 +1155,102 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/audit/undo$' {
+                if ($method -ne 'POST') { break }
+
+                $body    = Read-DsmtBody -Request $Request
+                $oAction = ([string](Get-DsmtBodyValue -Body $body -Name 'action')).Trim()
+                $oTarget = ([string](Get-DsmtBodyValue -Body $body -Name 'target')).Trim()
+                $oDetail = ([string](Get-DsmtBodyValue -Body $body -Name 'detail')).Trim()
+                $reason  = ([string](Get-DsmtBodyValue -Body $body -Name 'reason')).Trim()
+
+                if ([string]::IsNullOrWhiteSpace($oAction) -or [string]::IsNullOrWhiteSpace($oTarget)) {
+                    Send-DsmtError -Response $Response -Message 'The audit entry to undo was not identified.' -StatusCode 400
+                    return
+                }
+                # An undo is a directory write like any other, so it carries a
+                # reason like any other. "Undoing a mistake" is still a reason
+                # someone has to type.
+                if ([string]::IsNullOrWhiteSpace($reason)) {
+                    Send-DsmtError -Response $Response -Message 'Give a reason for the undo.' -StatusCode 400
+                    return
+                }
+
+                $plan = Get-DsmtUndoPlan -Action $oAction -Detail $oDetail
+                if (-not $plan.Ok) {
+                    Send-DsmtError -Response $Response -Message $plan.Reason -StatusCode 400
+                    return
+                }
+
+                # The undo runs as the signed-in operator, exactly like the
+                # button that would perform the same change by hand - so it can
+                # never do anything this operator is not already allowed to do,
+                # and the DC records their name against it.
+                $undoDetail = 'Reverses "' + $oAction + '" on ' + $oTarget
+                if (-not [string]::IsNullOrWhiteSpace($oDetail)) { $undoDetail += ' (' + $oDetail + ')' }
+
+                switch ($plan.Action) {
+
+                    'enable' {
+                        $outcome = Invoke-DsmtBulkAction -Session $session -Targets @($oTarget) -Action $plan.Label `
+                            -Reason $reason -Category 'user' -DetailSuffix $undoDetail -Operation {
+                                param($target)
+                                Set-DsmtAccountEnabled -Credential $session.Credential -Identity $target -Enabled $true
+                            }
+                    }
+
+                    'disable' {
+                        $outcome = Invoke-DsmtBulkAction -Session $session -Targets @($oTarget) -Action $plan.Label `
+                            -Reason $reason -Category 'user' -DetailSuffix $undoDetail -Operation {
+                                param($target)
+                                Set-DsmtAccountEnabled -Credential $session.Credential -Identity $target -Enabled $false
+                            }
+                    }
+
+                    'group-add' {
+                        $undoGroup = $plan.Group
+                        $outcome = Invoke-DsmtBulkAction -Session $session -Targets @($oTarget) -Action $plan.Label `
+                            -Reason $reason -Category 'group' -DetailSuffix $undoDetail -Operation {
+                                param($target)
+                                Add-DsmtGroupMember -Credential $session.Credential -Group $undoGroup -Members @($target)
+                            }
+                    }
+
+                    'group-remove' {
+                        $undoGroup = $plan.Group
+                        $outcome = Invoke-DsmtBulkAction -Session $session -Targets @($oTarget) -Action $plan.Label `
+                            -Reason $reason -Category 'group' -DetailSuffix $undoDetail -Operation {
+                                param($target)
+                                Remove-DsmtGroupMember -Credential $session.Credential -Group $undoGroup -Members @($target)
+                            }
+                    }
+
+                    'move-ou' {
+                        $undoOu = $plan.Ou
+                        $outcome = Invoke-DsmtBulkAction -Session $session -Targets @($oTarget) -Action $plan.Label `
+                            -Reason $reason -Category 'user' -DetailSuffix $undoDetail -Operation {
+                                param($target)
+                                Move-DsmtObject -Credential $session.Credential -Identity $target -TargetOu $undoOu
+                            }
+                    }
+
+                    default {
+                        Send-DsmtError -Response $Response -Message 'That undo is not implemented.' -StatusCode 400
+                        return
+                    }
+                }
+
+                Write-DsmtLog -Message ($session.Account + ' undid "' + $oAction + '" on ' + $oTarget)
+                Send-DsmtJson -Response $Response -Data $outcome
+                return
+            }
+
+            '^/api/health$' {
+                if ($method -ne 'GET') { break }
+                Send-DsmtJson -Response $Response -Data (Get-DsmtHealth -Session $session)
+                return
+            }
+
             '^/api/audit$' {
                 if ($method -ne 'GET') { break }
                 $q      = Get-DsmtQueryValue -Request $Request -Name 'q'
@@ -985,7 +1367,15 @@ function Invoke-DsmtApi {
                         $category = [string](Get-DsmtBodyValue -Body $body -Name 'type' -Default 'user')
 
                         $outcome = Invoke-DsmtBulkAction -Session $session -Targets $targets -Action 'Move OU' `
-                            -Reason $reason -Category $category -DetailSuffix ('into ' + $ou) -Operation {
+                            -Reason $reason -Category $category -DetailSuffix ('into ' + $ou) `
+                            -DetailBuilder {
+                                param($target)
+                                # Read the source container before the move, so
+                                # the record can be reversed afterwards.
+                                $from = Get-DsmtObjectParent -Credential $session.Credential -Identity $target
+                                if ([string]::IsNullOrWhiteSpace($from)) { return ('into ' + $ou) }
+                                return ('from ' + $from + ' into ' + $ou)
+                            } -Operation {
                                 param($target)
                                 Move-DsmtObject -Credential $session.Credential -Identity $target -TargetOu $ou
                             }

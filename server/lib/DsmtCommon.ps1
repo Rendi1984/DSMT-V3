@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.10.0'
+$script:DsmtVersion = '1.11.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -54,6 +54,7 @@ $script:DsmtConfig = @{
     SessionMinutes = 15
     PageSize      = 500
     LogFile       = ''
+    StartedUtc    = $null
 }
 
 function Initialize-DsmtConfig {
@@ -113,6 +114,12 @@ function Initialize-DsmtConfig {
         New-Item -ItemType Directory -Path $script:DsmtConfig.DataPath -Force | Out-Null
     }
     $script:DsmtConfig.LogFile = Join-Path $script:DsmtConfig.DataPath ('dsmt-' + (Get-Date -Format 'yyyy-MM-dd') + '.log')
+
+    # Stamped once, here, so the health page can report uptime. It answers the
+    # question that matters after an unattended weekend: did the process stay
+    # up, or did something restart it? See the 72-hour scheduled-task default
+    # in CLAUDE.md for why that is not a theoretical concern.
+    $script:DsmtConfig.StartedUtc = (Get-Date).ToUniversalTime()
 }
 
 function Get-DsmtConfig {

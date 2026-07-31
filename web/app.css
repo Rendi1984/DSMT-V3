@@ -447,6 +447,12 @@ body { overflow: hidden; }
 .range-custom .field { flex: 0 1 220px; min-width: 160px; }
 .range-custom .form-error { flex: 1 1 100%; }
 
+/* Undo is a real directory write, so it is not styled as a quiet link - but
+   it is not a primary action either. Ghost, small, and only ever painted on a
+   row that can actually be reversed. */
+.btn-undo { padding: 2px var(--space-2); font-size: 12px; }
+.undo-no { font-size: 12px; cursor: help; }
+
 .res-success { color: var(--color-neutral-300); }
 .res-other   { color: var(--color-accent-200); }
 
@@ -540,6 +546,39 @@ body { overflow: hidden; }
   background: var(--color-accent); box-shadow: 0 0 8px var(--color-accent);
 }
 .set-state .detail-fields { margin: 0; }
+
+/* Health reuses the connection-state panel for its verdict. Three states, and
+   the colour is never the only signal - each one carries a word too. */
+.set-state-ok   { border-left-color: var(--color-accent-500); }
+.set-state-warn { border-left-color: var(--color-accent-300); }
+.set-state-bad  { border-left-color: var(--color-accent-500); }
+.set-state-ok .set-state-dot   { background: var(--color-accent); box-shadow: 0 0 8px var(--color-accent); }
+.set-state-warn .set-state-dot { background: var(--color-accent-300); }
+.set-state-bad .set-state-dot  { background: var(--color-accent-500); }
+
+.health-list { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
+.health-item {
+  border-left: 2px solid var(--color-neutral-700);
+  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.health-ok   { border-left-color: var(--color-accent-500); }
+.health-warn { border-left-color: var(--color-accent-300); }
+.health-bad  { border-left-color: var(--color-accent-500); }
+.health-item-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.health-ok .set-state-dot   { background: var(--color-accent); }
+.health-warn .set-state-dot { background: var(--color-accent-300); }
+.health-bad .set-state-dot  { background: var(--color-accent-500); }
+.health-name { font-size: 14px; color: var(--color-neutral-100); }
+.health-verdict {
+  font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--color-neutral-500); margin-left: auto;
+}
+.health-detail { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--color-neutral-300); word-break: break-word; }
+.health-fix {
+  margin: 0; font-size: 12.5px; line-height: 1.55;
+  color: var(--color-accent-200); word-break: break-word;
+}
 
 .set-good { margin: 0; font-size: 13px; color: var(--color-neutral-300); }
 .set-warn { margin: 0; font-size: 13px; color: var(--color-accent-200); }

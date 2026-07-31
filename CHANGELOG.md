@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.11.0** | 2026-07-31 | Undo a directory change from its audit entry; a Health section that says what is reachable and how to fix what is not | Restart + refresh |
 | **1.10.0** | 2026-07-31 | Refresh button on the Audit log, with a stamp saying how stale the table is | Refresh |
 | **1.9.2** | 2026-07-31 | Database section states the live server and database as fields; a 404 on a new route now names the cause | Refresh |
 | **1.9.1** | 2026-07-31 | Settings keeps only the section rail; the arrangement switch is gone | Refresh |
@@ -49,6 +50,92 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
+
+---
+
+## 1.11.0 — 2026-07-31
+
+Two features: **undo**, and a **health check**.
+
+### Undo, from the audit entry
+
+Every audit row that can be reversed now carries an **Undo** button; every row
+that cannot carries a dash whose tooltip says why.
+
+Reversible, using nothing but the record itself:
+
+| Original | Undo |
+| --- | --- |
+| Disable user | Enable user |
+| Enable user | Disable user |
+| Add to group | Remove from that group |
+| Remove from group | Add back to that group |
+| Move OU | Move back to the source OU |
+
+Refused **on purpose**, each with its reason shown:
+
+- **Reset password / Unlock account** — DSMT never knew the previous password,
+  and a lockout comes from failed sign-ins, not from an administrator. There
+  is no previous state to restore.
+- **Create / Delete, and CSV import** — a recreated object gets a **new SID**,
+  so every ACL, membership and profile that referenced the old one is still
+  broken. An "undo" that produces a same-named stranger is a lie. Use the AD
+  Recycle Bin.
+- **Anything that failed** — a Failed or Denied record changed nothing.
+
+Three properties that matter more than the feature:
+
+1. **The original entry is never touched.** The undo is a new audit record
+   (`Undo: Disable user`) with its own operator, its own timestamp and its own
+   **mandatory reason**. The log is append-only and stays that way.
+2. **It runs as the signed-in operator**, exactly like the button that would
+   make the same change by hand — so it can never do anything that operator is
+   not already permitted to do, and the DC records their name against it.
+3. **The server decides, not the browser.** `Get-DsmtUndoPlan` recomputes the
+   plan and refuses anything not on its own list. The copy in `app.js` only
+   decides whether to paint a button.
+
+**Move OU became undoable, which needed a change to what is recorded.** The
+audit detail said only `into <OU>`; the source was never captured, and after
+the move it is gone. `Invoke-DsmtBulkAction` gained `-DetailBuilder`, a
+scriptblock evaluated per target *before* the operation, and the move now
+records `from <A> into <B>`. A failure in the builder can never block the
+action. **Moves recorded before this version cannot be undone**, and the
+console says so rather than guessing at a container.
+
+### Health check
+
+**Settings -> Health**, first in the rail. One request, run live on demand:
+
+- **ActiveDirectory module** — is RSAT actually loaded.
+- **Domain** — which controller answered, and how many exist.
+- **Directory read** — a real search as the signed-in operator. Reaching the
+  domain and being *allowed* to read it are different things.
+- **SQL Server** — the instance, the database and the audit row count; or the
+  verbatim error; or a warning that none is configured.
+- **Data folder** — actually written to and deleted again. The JSONL audit
+  fallback lives there, and an unwritable folder loses records silently.
+- **Last successful write** — the newest non-session Success in the log.
+- **Uptime** — how long this process has been up. See the 72-hour scheduled
+  task default in `CLAUDE.md` for why that is not a theoretical question.
+- **Open sessions** — how many, and the idle window.
+
+Every check that is not green carries a **Fix** line with the actual command
+or the actual menu path. A red light with no instruction moves the problem
+rather than helping with it — and most "the server won't start" reports in
+this project were a known external step nobody had done yet. The overall
+verdict is the **worst** individual result: a page that averages its checks
+into a comfortable green is worse than no page.
+
+Colour is never the only signal — every check also carries a word (OK /
+Attention / Failing).
+
+Files: `server/lib/DsmtHttp.ps1` (undo plan, undo route, health, the detail
+builder), `server/lib/DsmtDirectory.ps1` (`Get-DsmtObjectParent`),
+`server/lib/DsmtSession.ps1` (`Get-DsmtSessionSummary`),
+`server/lib/DsmtCommon.ps1` (version, `StartedUtc`), `web/index.html`,
+`web/app.css`, `web/app.js`. **Copy `server/lib/*.ps1` and restart
+`Start-DSMT.ps1`**, then copy `web/*` and hard-refresh.
 
 ---
 

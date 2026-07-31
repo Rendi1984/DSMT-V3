@@ -525,6 +525,37 @@ function Set-DsmtAccountEnabled {
     }
 }
 
+function Get-DsmtObjectParent {
+    <#
+    .SYNOPSIS
+        The DN of the container an object currently sits in.
+    .DESCRIPTION
+        Read BEFORE a move so the audit record can say where the object came
+        from, which is the only thing that makes a move undoable later. A
+        failure here must never block the move itself - the caller treats an
+        empty string as "unknown" and simply records a less useful detail.
+    #>
+    param($Credential, [Parameter(Mandatory = $true)][string] $Identity)
+
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
+    $obj = Get-ADObject @ad -Filter { SamAccountName -eq $Identity } -Properties 'distinguishedName' -ErrorAction SilentlyContinue
+
+    if ($null -eq $obj) {
+        # Not every identity is a sAMAccountName - a DN was passed straight in.
+        try {
+            $obj = Get-ADObject @ad -Identity $Identity -Properties 'distinguishedName' -ErrorAction Stop
+        } catch {
+            return ''
+        }
+    }
+    if ($null -eq $obj) { return '' }
+
+    $dn = [string]$obj.DistinguishedName
+    $comma = $dn.IndexOf(',')
+    if ($comma -lt 0) { return '' }
+    return $dn.Substring($comma + 1)
+}
+
 function Move-DsmtObject {
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity, [Parameter(Mandatory = $true)][string] $TargetOu)
 

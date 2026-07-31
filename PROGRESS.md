@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.10.0` — matches the top entry of `CHANGELOG.md` and
+`1.11.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -189,6 +189,17 @@ its data is fabricated and every button is inert.
    check in before restarting that investigation.
 8. **Decide the fate of `prototype/`.** It is kept for reference; delete it
    once nobody needs the original design pass.
+9. **Verify 1.11.0 against LAB.LOCAL.** Undo and the health page have never
+   been executed — there is no PowerShell in the dev container. Specifically
+   worth watching on the first run:
+   - `Get-DsmtObjectParent` resolves an identity that is a sAMAccountName and
+     one that is a DN; the fallback branch has not been exercised.
+   - Undo of **Move OU** only works for moves recorded by 1.11.0 or later.
+     Older records legitimately show the dash — that is not a bug.
+   - The health **Data folder** check writes and deletes a probe file. Confirm
+     it leaves nothing behind if the delete fails.
+   - `Get-DsmtHealth` calls `Get-DsmtUsers -Limit 1` as the operator; on a very
+     large domain confirm this returns promptly.
 
 ---
 
@@ -205,11 +216,7 @@ Ordered by value for the effort, highest first.
    department and text. Saving a combination under a name ("Disabled in Sales",
    "No logon in 90 days") turns a repeated five-click task into one. Local to
    the browser is enough to start; SQL later would share them across operators.
-2. **Undo the last action, from the audit entry.** Every write is already
-   recorded with its target and what changed. Disable/enable, group add/remove
-   and department edits are all exactly reversible. This is the highest-value
-   safety feature the tool does not have — and note it must create a *new*
-   audit record with its own reason, never erase the original.
+2. ~~Undo the last action~~ — **built in 1.11.0.**
 3. **Bulk import from CSV.** Named in the project description and still not
    built. Requires a dry-run pass that reports what *would* happen before
    anything is written; an import that half-succeeds with no preview is the
@@ -228,10 +235,7 @@ Ordered by value for the effort, highest first.
    everything. A UI-level read-only mode is *not* security, but it is useful
    for a service desk that should look and not touch. Would need to be
    labelled honestly as a guard rail, not a control.
-8. **Health check page.** One screen answering: is AD reachable, is SQL
-   reachable, is the RSAT module present, when did the last write succeed,
-   how many sessions are open. Turns "the server won't start" into a
-   self-service answer — see the Shape 2 entries below.
+8. ~~Health check page~~ — **built in 1.11.0** as Settings -> Health.
 9. **Live session list with the ability to sign someone out.** DSMT already
    tracks sessions in `dbo.Sessions`. Useful with several operators, and
    necessary the day someone leaves mid-shift.
