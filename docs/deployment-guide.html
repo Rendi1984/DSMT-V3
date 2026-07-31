@@ -32,10 +32,25 @@
   --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 *, *::before, *::after { box-sizing: border-box; }
+html {
+  /* Safari on iOS inflates text when a page is rotated to landscape unless
+     this is set. Chromium on Android does not, but the property is harmless
+     there. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font-family: var(--font); font-size: 16px; line-height: 1.7;
 }
+/* Nothing may push the page sideways - but NOT by putting overflow-x:hidden
+   on body, which breaks position:sticky for the contents sidebar in Safari
+   and Chromium alike. The correct fix is letting the grid column shrink:
+   without min-width:0 a grid item refuses to go below its content's width,
+   and one long line widens the whole page. */
+.wrap > * { min-width: 0; }
+/* Long commands, paths and DNs must wrap rather than widen the page. */
+code { overflow-wrap: anywhere; word-break: break-word; }
 .wrap { display: grid; grid-template-columns: 300px 1fr; gap: 0; min-height: 100vh; }
 
 /* ---- table of contents ---- */
@@ -46,13 +61,17 @@ body {
 .toc-brand { font-size: 13px; letter-spacing: .12em; color: var(--accent-300); margin-bottom: 4px; }
 .toc-title { font-size: 19px; font-weight: 500; margin: 0 0 18px; }
 .toc ol { margin: 0; padding-inline-start: 20px; font-size: 14px; }
+/* On a wide screen the contents are simply always there; the disclosure
+   control only earns its place on a phone. */
+.toc summary { display: none; }
+.toc details > summary::-webkit-details-marker { color: var(--n-500); }
 .toc li { margin-bottom: 7px; }
 .toc a { color: var(--n-300); text-decoration: none; }
 .toc a:hover { color: var(--accent); }
 .toc .sub { list-style: none; padding-inline-start: 10px; margin-top: 5px; font-size: 13px; }
 .toc .sub a { color: var(--n-500); }
 
-main { padding: 40px 48px 90px; max-width: 1000px; }
+main { padding: 40px 48px 90px; max-width: 1000px; min-width: 0; }
 
 h1 { font-size: 34px; font-weight: 500; line-height: 1.2; margin: 0 0 10px; }
 h2 {
@@ -80,9 +99,15 @@ code {
 }
 pre {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   background: var(--n-900); border: 1px solid var(--n-800);
   border-radius: var(--radius); padding: 16px 18px; margin: 14px 0;
+  /* A command must stay on one line to remain copy-pasteable, so the block
+     scrolls rather than wrapping. max-width keeps that scroll inside the
+     column instead of stretching the page. */
+  max-width: 100%;
 }
+pre code { overflow-wrap: normal; word-break: normal; white-space: pre; }
 pre code { background: none; border: 0; padding: 0; color: var(--n-200); font-size: 13.5px; line-height: 1.65; }
 pre .c { color: var(--n-500); }
 
@@ -119,12 +144,78 @@ td code { font-size: 13px; }
 hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 .foot { margin-top: 60px; font-size: 13px; color: var(--n-500); }
 
+/* ==========================================================================
+   Phones and tablets.
+
+   Targets Safari on iOS and any Chromium browser on Android or iOS. Two rules
+   drive the whole thing:
+     - the page itself never scrolls sideways;
+     - no information is dropped to make it fit. Tables reflow into stacked
+       cards carrying their column names rather than hiding columns.
+   ========================================================================== */
+
 @media (max-width: 900px) {
   .wrap { grid-template-columns: 1fr; }
-  .toc { position: static; max-height: none; border-inline-end: 0; border-bottom: 1px solid var(--n-800); }
-  main { padding: 26px 20px 60px; }
+  .toc {
+    position: static; max-height: none;
+    border-inline-end: 0; border-bottom: 1px solid var(--n-800);
+    padding: 18px 20px;
+    /* Respect the notch and the home indicator on iPhones. */
+    padding-top: max(18px, env(safe-area-inset-top));
+  }
+  .toc summary { display: list-item; cursor: pointer; }
+  main {
+    padding: 24px 20px 60px;
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
+    padding-bottom: max(60px, env(safe-area-inset-bottom));
+  }
   h1 { font-size: 27px; }
-  h2 { font-size: 21px; }
+  h2 { font-size: 21px; margin-top: 40px; }
+  h3 { font-size: 17px; }
+}
+
+@media (max-width: 640px) {
+  body { font-size: 15.5px; line-height: 1.65; }
+  main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  h1 { font-size: 24px; }
+  h2 { font-size: 19px; }
+  pre { padding: 12px 14px; }
+  pre code { font-size: 12.5px; }
+  .note, .warn, .ok { padding: 12px 14px; font-size: 14.5px; }
+
+  /* Tables become stacked cards. Every value keeps the name of its column,
+     carried in data-label, so nothing is lost on a narrow screen - which is
+     the whole reason for not simply hiding columns. */
+  table.cols, table.cols tbody, table.cols tr, table.cols td { display: block; width: 100%; }
+  table.cols thead { display: none; }
+  table.cols tr {
+    border: 1px solid var(--n-800); border-radius: var(--radius);
+    padding: 10px 12px; margin-bottom: 12px;
+  }
+  table.cols td {
+    border: 0; padding: 4px 0;
+    display: grid; grid-template-columns: 40% 1fr; gap: 10px;
+    align-items: start;
+  }
+  table.cols td::before {
+    content: attr(data-label);
+    color: var(--n-500); font-size: 11.5px; line-height: 1.5;
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  table.cols td:empty { display: none; }
+
+  /* Two-column tables stay as tables; they only need room to wrap. */
+  table:not(.cols) td, table:not(.cols) th { padding: 8px 6px; }
+  table:not(.cols) td:first-child { width: 40%; }
+
+  .check li { padding-inline-start: 26px; }
+}
+
+/* Coarse pointers: comfortable tap targets in the contents list. */
+@media (pointer: coarse) {
+  .toc a { display: inline-block; padding: 4px 0; }
+  .toc li { margin-bottom: 10px; }
 }
 @media print {
   .toc { display: none; }
@@ -140,6 +231,8 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 <nav class="toc">
   <div class="toc-brand">DSMT</div>
   <p class="toc-title">Deployment Guide</p>
+  <details id="tocDetails" open>
+  <summary>Contents</summary>
   <ol>
     <li><a href="#intro">Before you start: is there an install process?</a></li>
     <li><a href="#auto">The fast path - the automated installer</a>
@@ -196,7 +289,20 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
     <li><a href="#trouble">Troubleshooting</a></li>
     <li><a href="#ref">Appendices</a></li>
   </ol>
+  </details>
 </nav>
+
+<script>
+/* The only script in this file, and it makes no requests: on a phone the
+   contents list is collapsed so the document itself starts at the top of the
+   screen. With scripting off it simply stays open, which is still usable. */
+(function () {
+  var toc = document.getElementById('tocDetails');
+  if (toc && window.matchMedia('(max-width: 900px)').matches) {
+    toc.removeAttribute('open');
+  }
+})();
+</script>
 
 <main>
 
@@ -222,12 +328,12 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 
 <p>What "installing" actually consists of is four things:</p>
 
-<table>
+<table class="cols">
   <tr><th>#</th><th>What</th><th>How often</th><th>Automated?</th></tr>
-  <tr><td>1</td><td>Copy the project folder to the machine</td><td>Every version update</td><td>Manual</td></tr>
-  <tr><td>2</td><td>Run <code>Install-DSMT.ps1</code>: RSAT, folders, database, port, firewall</td><td>Once</td><td><strong>Automated</strong></td></tr>
-  <tr><td>3</td><td>Delegate rights to the operators in AD</td><td>Once</td><td>Manual - <a href="#s4">step 4</a></td></tr>
-  <tr><td>4</td><td>Run <code>Start-DSMT.ps1</code></td><td>Every start</td><td>Or as a scheduled task</td></tr>
+  <tr><td data-label="#">1</td><td data-label="What">Copy the project folder to the machine</td><td data-label="How often">Every version update</td><td data-label="Automated?">Manual</td></tr>
+  <tr><td data-label="#">2</td><td data-label="What">Run <code>Install-DSMT.ps1</code>: RSAT, folders, database, port, firewall</td><td data-label="How often">Once</td><td data-label="Automated?"><strong>Automated</strong></td></tr>
+  <tr><td data-label="#">3</td><td data-label="What">Delegate rights to the operators in AD</td><td data-label="How often">Once</td><td data-label="Automated?">Manual - <a href="#s4">step 4</a></td></tr>
+  <tr><td data-label="#">4</td><td data-label="What">Run <code>Start-DSMT.ps1</code></td><td data-label="How often">Every start</td><td data-label="Automated?">Or as a scheduled task</td></tr>
 </table>
 
 <p>What you do <strong>not</strong> need to do, worth knowing so you do not go looking:</p>
@@ -289,20 +395,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 
 <h3 id="auto-does">What it does, step by step</h3>
 
-<table>
+<table class="cols">
   <tr><th>#</th><th>What the script does</th><th>Manual step</th></tr>
-  <tr><td>1</td><td>Checks for administrator rights, re-launching itself elevated if needed</td><td>-</td></tr>
-  <tr><td>2</td><td>Checks the PowerShell version</td><td><a href="#s1">1</a></td></tr>
-  <tr><td>3</td><td>Checks domain membership and the machine role</td><td><a href="#s1">1</a></td></tr>
-  <tr><td>4</td><td><strong>Installs the RSAT ActiveDirectory module</strong> - <code>Install-WindowsFeature</code> on Server, <code>Add-WindowsCapability</code> on client Windows</td><td><a href="#s2">2</a></td></tr>
-  <tr><td>5</td><td>Verifies the domain answers and reports how many DCs are visible</td><td><a href="#s2">2.2</a></td></tr>
-  <tr><td>6</td><td>Creates <code>data\</code> and <code>config\</code>, granting the service account write access</td><td><a href="#s3">3.1</a></td></tr>
-  <tr><td>7</td><td>Finds a local SQL instance (or uses the one you named), <strong>creates the database and all tables</strong> and verifies they exist</td><td><a href="#s5">5</a></td></tr>
-  <tr><td>8</td><td>Runs <code>netsh http add urlacl</code> so the console can listen without elevation</td><td><a href="#s6">6.2</a></td></tr>
-  <tr><td>9</td><td>Opens a firewall rule for the port (Domain profile)</td><td><a href="#s6">6.3</a></td></tr>
-  <tr><td>10</td><td>With <code>-InstallScheduledTask</code>: registers a task that starts DSMT at boot</td><td><a href="#s11">11</a></td></tr>
-  <tr><td>11</td><td>Saves <code>config\dsmt.config.json</code> with all the settings</td><td>-</td></tr>
-  <tr><td>12</td><td>Prints a summary and a numbered list of anything still outstanding</td><td>-</td></tr>
+  <tr><td data-label="#">1</td><td data-label="What the script does">Checks for administrator rights, re-launching itself elevated if needed</td><td data-label="Manual step">-</td></tr>
+  <tr><td data-label="#">2</td><td data-label="What the script does">Checks the PowerShell version</td><td data-label="Manual step"><a href="#s1">1</a></td></tr>
+  <tr><td data-label="#">3</td><td data-label="What the script does">Checks domain membership and the machine role</td><td data-label="Manual step"><a href="#s1">1</a></td></tr>
+  <tr><td data-label="#">4</td><td data-label="What the script does"><strong>Installs the RSAT ActiveDirectory module</strong> - <code>Install-WindowsFeature</code> on Server, <code>Add-WindowsCapability</code> on client Windows</td><td data-label="Manual step"><a href="#s2">2</a></td></tr>
+  <tr><td data-label="#">5</td><td data-label="What the script does">Verifies the domain answers and reports how many DCs are visible</td><td data-label="Manual step"><a href="#s2">2.2</a></td></tr>
+  <tr><td data-label="#">6</td><td data-label="What the script does">Creates <code>data\</code> and <code>config\</code>, granting the service account write access</td><td data-label="Manual step"><a href="#s3">3.1</a></td></tr>
+  <tr><td data-label="#">7</td><td data-label="What the script does">Finds a local SQL instance (or uses the one you named), <strong>creates the database and all tables</strong> and verifies they exist</td><td data-label="Manual step"><a href="#s5">5</a></td></tr>
+  <tr><td data-label="#">8</td><td data-label="What the script does">Runs <code>netsh http add urlacl</code> so the console can listen without elevation</td><td data-label="Manual step"><a href="#s6">6.2</a></td></tr>
+  <tr><td data-label="#">9</td><td data-label="What the script does">Opens a firewall rule for the port (Domain profile)</td><td data-label="Manual step"><a href="#s6">6.3</a></td></tr>
+  <tr><td data-label="#">10</td><td data-label="What the script does">With <code>-InstallScheduledTask</code>: registers a task that starts DSMT at boot</td><td data-label="Manual step"><a href="#s11">11</a></td></tr>
+  <tr><td data-label="#">11</td><td data-label="What the script does">Saves <code>config\dsmt.config.json</code> with all the settings</td><td data-label="Manual step">-</td></tr>
+  <tr><td data-label="#">12</td><td data-label="What the script does">Prints a summary and a numbered list of anything still outstanding</td><td data-label="Manual step">-</td></tr>
 </table>
 
 <h4>The saved settings file</h4>
@@ -340,22 +446,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 
 <p>Three things the script deliberately does <strong>not</strong> do, and why:</p>
 
-<table>
+<table class="cols">
   <tr><th>What</th><th>Why not</th><th>What to do instead</th></tr>
   <tr>
-    <td>Download RSAT from the internet on a disconnected Windows 10/11 client</td>
-    <td><code>Add-WindowsCapability</code> fetches the component from Windows Update; on a disconnected network there is no source</td>
-    <td>Run with <code>-FeatureSource</code> pointing at Feature-on-Demand media or <code>\sources\sxs</code> from an ISO</td>
+    <td data-label="What">Download RSAT from the internet on a disconnected Windows 10/11 client</td>
+    <td data-label="Why not"><code>Add-WindowsCapability</code> fetches the component from Windows Update; on a disconnected network there is no source</td>
+    <td data-label="What to do instead">Run with <code>-FeatureSource</code> pointing at Feature-on-Demand media or <code>\sources\sxs</code> from an ISO</td>
   </tr>
   <tr>
-    <td>Download SQL Server Express</td>
-    <td>DSMT hosts usually sit on a network with no internet route, and a silent download would contradict the tool's disconnected-by-design principle</td>
-    <td>If there is no SQL instance: fetch the media in advance and run with <code>-SqlExpressSetup &lt;path&gt;</code> - the install itself then runs unattended. Or simply <code>-SkipSql</code></td>
+    <td data-label="What">Download SQL Server Express</td>
+    <td data-label="Why not">DSMT hosts usually sit on a network with no internet route, and a silent download would contradict the tool's disconnected-by-design principle</td>
+    <td data-label="What to do instead">If there is no SQL instance: fetch the media in advance and run with <code>-SqlExpressSetup &lt;path&gt;</code> - the install itself then runs unattended. Or simply <code>-SkipSql</code></td>
   </tr>
   <tr>
-    <td>Delegate rights to operators in AD</td>
-    <td>A security decision that depends on your OU structure and organisational policy - not something an install script should decide</td>
-    <td><a href="#s4">Step 4.5</a> - delegate exactly what is needed, at OU level</td>
+    <td data-label="What">Delegate rights to operators in AD</td>
+    <td data-label="Why not">A security decision that depends on your OU structure and organisational policy - not something an install script should decide</td>
+    <td data-label="What to do instead"><a href="#s4">Step 4.5</a> - delegate exactly what is needed, at OU level</td>
   </tr>
 </table>
 
@@ -385,58 +491,58 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 
 <h3 id="forms-run">A. How DSMT stays running</h3>
 
-<table>
+<table class="cols">
   <tr><th>Form</th><th>Switch</th><th>Starts at boot</th><th>Managed with</th><th>Needs</th></tr>
   <tr>
-    <td><strong>Console window</strong></td>
-    <td><em>none</em></td>
-    <td>No - dies with the window</td>
-    <td>Ctrl+C</td>
-    <td>Nothing</td>
+    <td data-label="Form"><strong>Console window</strong></td>
+    <td data-label="Switch"><em>none</em></td>
+    <td data-label="Starts at boot">No - dies with the window</td>
+    <td data-label="Managed with">Ctrl+C</td>
+    <td data-label="Needs">Nothing</td>
   </tr>
   <tr>
-    <td><strong>Scheduled task</strong><br><em>recommended</em></td>
-    <td><code>-InstallScheduledTask</code></td>
-    <td>Yes</td>
-    <td><code>Get-ScheduledTask "DSMT Console"</code></td>
-    <td>Administrator once</td>
+    <td data-label="Form"><strong>Scheduled task</strong><br><em>recommended</em></td>
+    <td data-label="Switch"><code>-InstallScheduledTask</code></td>
+    <td data-label="Starts at boot">Yes</td>
+    <td data-label="Managed with"><code>Get-ScheduledTask "DSMT Console"</code></td>
+    <td data-label="Needs">Administrator once</td>
   </tr>
   <tr>
-    <td><strong>Windows service</strong></td>
-    <td><code>-InstallAsService</code></td>
-    <td>Yes</td>
-    <td><code>Get-Service DSMT</code></td>
-    <td>Administrator once; compiles a small host - see <a href="#s11">11.2</a></td>
+    <td data-label="Form"><strong>Windows service</strong></td>
+    <td data-label="Switch"><code>-InstallAsService</code></td>
+    <td data-label="Starts at boot">Yes</td>
+    <td data-label="Managed with"><code>Get-Service DSMT</code></td>
+    <td data-label="Needs">Administrator once; compiles a small host - see <a href="#s11">11.2</a></td>
   </tr>
 </table>
 
 <h3 id="forms-account">B. Which account it runs as</h3>
 
-<table>
+<table class="cols">
   <tr><th>Form</th><th>How to ask for it</th><th>Password</th><th>Must be prepared first</th></tr>
   <tr>
-    <td><strong>The installing user</strong><br><em>default</em></td>
-    <td><em>omit <code>-ServiceAccount</code></em></td>
-    <td>Asked once</td>
-    <td><strong>Nothing</strong></td>
+    <td data-label="Form"><strong>The installing user</strong><br><em>default</em></td>
+    <td data-label="How to ask for it"><em>omit <code>-ServiceAccount</code></em></td>
+    <td data-label="Password">Asked once</td>
+    <td data-label="Must be prepared first"><strong>Nothing</strong></td>
   </tr>
   <tr>
-    <td><strong>Dedicated account</strong></td>
-    <td><code>-ServiceAccount "LAB\svc-dsmt"</code></td>
-    <td>Asked once</td>
-    <td>Create the account; set its password not to expire</td>
+    <td data-label="Form"><strong>Dedicated account</strong></td>
+    <td data-label="How to ask for it"><code>-ServiceAccount "LAB\svc-dsmt"</code></td>
+    <td data-label="Password">Asked once</td>
+    <td data-label="Must be prepared first">Create the account; set its password not to expire</td>
   </tr>
   <tr>
-    <td><strong>gMSA</strong></td>
-    <td><code>-ServiceAccount "LAB\gmsa-dsmt$"</code></td>
-    <td><strong>None ever</strong></td>
-    <td>KDS root key, <code>New-ADServiceAccount</code>, <code>Install-ADServiceAccount</code> - see <a href="#s4-account">4.2</a></td>
+    <td data-label="Form"><strong>gMSA</strong></td>
+    <td data-label="How to ask for it"><code>-ServiceAccount "LAB\gmsa-dsmt$"</code></td>
+    <td data-label="Password"><strong>None ever</strong></td>
+    <td data-label="Must be prepared first">KDS root key, <code>New-ADServiceAccount</code>, <code>Install-ADServiceAccount</code> - see <a href="#s4-account">4.2</a></td>
   </tr>
   <tr>
-    <td><strong>Machine account</strong></td>
-    <td><code>-ServiceAccount LocalSystem</code></td>
-    <td><strong>None</strong></td>
-    <td>Grant <code>LAB\HOSTNAME$</code> rights on SQL</td>
+    <td data-label="Form"><strong>Machine account</strong></td>
+    <td data-label="How to ask for it"><code>-ServiceAccount LocalSystem</code></td>
+    <td data-label="Password"><strong>None</strong></td>
+    <td data-label="Must be prepared first">Grant <code>LAB\HOSTNAME$</code> rights on SQL</td>
   </tr>
 </table>
 
@@ -447,27 +553,27 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 
 <h3 id="forms-storage">C. Where records are stored</h3>
 
-<table>
+<table class="cols">
   <tr><th>Form</th><th>How to ask for it</th><th>What you get</th></tr>
   <tr>
-    <td><strong>SQL, auto-detected</strong></td>
-    <td><em>omit <code>-SqlServer</code></em></td>
-    <td>Uses a local SQL instance if one exists, otherwise reports that none was found</td>
+    <td data-label="Form"><strong>SQL, auto-detected</strong></td>
+    <td data-label="How to ask for it"><em>omit <code>-SqlServer</code></em></td>
+    <td data-label="What you get">Uses a local SQL instance if one exists, otherwise reports that none was found</td>
   </tr>
   <tr>
-    <td><strong>SQL, named</strong></td>
-    <td><code>-SqlServer SQL01</code></td>
-    <td>Creates the <code>DSMT</code> database and tables there</td>
+    <td data-label="Form"><strong>SQL, named</strong></td>
+    <td data-label="How to ask for it"><code>-SqlServer SQL01</code></td>
+    <td data-label="What you get">Creates the <code>DSMT</code> database and tables there</td>
   </tr>
   <tr>
-    <td><strong>SQL Express, installed for you</strong></td>
-    <td><code>-SqlExpressSetup &lt;path&gt;</code></td>
-    <td>Unattended install from media <em>you</em> supply - nothing is downloaded</td>
+    <td data-label="Form"><strong>SQL Express, installed for you</strong></td>
+    <td data-label="How to ask for it"><code>-SqlExpressSetup &lt;path&gt;</code></td>
+    <td data-label="What you get">Unattended install from media <em>you</em> supply - nothing is downloaded</td>
   </tr>
   <tr>
-    <td><strong>No database</strong></td>
-    <td><code>-SkipSql</code></td>
-    <td>Audit log to JSONL files. Operators, sessions and the snapshot are <strong>not</strong> stored</td>
+    <td data-label="Form"><strong>No database</strong></td>
+    <td data-label="How to ask for it"><code>-SkipSql</code></td>
+    <td data-label="What you get">Audit log to JSONL files. Operators, sessions and the snapshot are <strong>not</strong> stored</td>
   </tr>
 </table>
 
@@ -478,19 +584,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 
 <h3 id="forms-identity">D. Which identity performs directory operations</h3>
 
-<table>
+<table class="cols">
   <tr><th>Form</th><th>How to ask for it</th><th>Reads</th><th>Writes</th></tr>
   <tr>
-    <td><strong>Operator</strong><br><em>default</em></td>
-    <td><em>omit <code>-IdentityMode</code></em></td>
-    <td>The signed-in operator</td>
-    <td>The signed-in operator</td>
+    <td data-label="Form"><strong>Operator</strong><br><em>default</em></td>
+    <td data-label="How to ask for it"><em>omit <code>-IdentityMode</code></em></td>
+    <td data-label="Reads">The signed-in operator</td>
+    <td data-label="Writes">The signed-in operator</td>
   </tr>
   <tr>
-    <td><strong>Hybrid</strong></td>
-    <td><code>-IdentityMode hybrid</code></td>
-    <td>The service account</td>
-    <td><strong>The signed-in operator</strong></td>
+    <td data-label="Form"><strong>Hybrid</strong></td>
+    <td data-label="How to ask for it"><code>-IdentityMode hybrid</code></td>
+    <td data-label="Reads">The service account</td>
+    <td data-label="Writes"><strong>The signed-in operator</strong></td>
   </tr>
 </table>
 
@@ -566,62 +672,62 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
   shows up later as a failure that looks like a bug:
 </p>
 
-<table>
+<table class="cols">
   <tr><th>If you choose</th><th>You additionally need</th><th>Prepared by</th></tr>
   <tr>
-    <td><code>-ListenAddress any</code></td>
-    <td>An administrative shell for the install, so the URL can be reserved</td>
-    <td>The installer, step 8</td>
+    <td data-label="If you choose"><code>-ListenAddress any</code></td>
+    <td data-label="You additionally need">An administrative shell for the install, so the URL can be reserved</td>
+    <td data-label="Prepared by">The installer, step 8</td>
   </tr>
   <tr>
-    <td><code>-InstallScheduledTask</code> with a domain account</td>
-    <td>The account's password (Task Scheduler stores it), or the <em>Log on as a batch job</em> right</td>
-    <td>You, at the prompt</td>
+    <td data-label="If you choose"><code>-InstallScheduledTask</code> with a domain account</td>
+    <td data-label="You additionally need">The account's password (Task Scheduler stores it), or the <em>Log on as a batch job</em> right</td>
+    <td data-label="Prepared by">You, at the prompt</td>
   </tr>
   <tr>
-    <td><code>-InstallAsService</code></td>
-    <td>The .NET Framework <code>csc.exe</code> - present on any supported Windows. Nothing to install</td>
-    <td>Already there</td>
+    <td data-label="If you choose"><code>-InstallAsService</code></td>
+    <td data-label="You additionally need">The .NET Framework <code>csc.exe</code> - present on any supported Windows. Nothing to install</td>
+    <td data-label="Prepared by">Already there</td>
   </tr>
   <tr>
-    <td><code>-ServiceAccount "LAB\gmsa-dsmt$"</code></td>
-    <td>A KDS root key in the forest (<strong>10 hour propagation</strong>), the gMSA object, and <code>Install-ADServiceAccount</code> on this host</td>
-    <td><strong>You, in advance</strong> - see <a href="#s4-account">4.2</a></td>
+    <td data-label="If you choose"><code>-ServiceAccount "LAB\gmsa-dsmt$"</code></td>
+    <td data-label="You additionally need">A KDS root key in the forest (<strong>10 hour propagation</strong>), the gMSA object, and <code>Install-ADServiceAccount</code> on this host</td>
+    <td data-label="Prepared by"><strong>You, in advance</strong> - see <a href="#s4-account">4.2</a></td>
   </tr>
   <tr>
-    <td><code>-ServiceAccount LocalSystem</code></td>
-    <td>SQL rights for <code>LAB\HOSTNAME$</code>, the computer account</td>
-    <td>Your DBA</td>
+    <td data-label="If you choose"><code>-ServiceAccount LocalSystem</code></td>
+    <td data-label="You additionally need">SQL rights for <code>LAB\HOSTNAME$</code>, the computer account</td>
+    <td data-label="Prepared by">Your DBA</td>
   </tr>
   <tr>
-    <td>Letting DSMT create the database</td>
-    <td><code>dbcreator</code> on the instance</td>
-    <td>Your DBA, once - see <a href="#s5">5.3</a></td>
+    <td data-label="If you choose">Letting DSMT create the database</td>
+    <td data-label="You additionally need"><code>dbcreator</code> on the instance</td>
+    <td data-label="Prepared by">Your DBA, once - see <a href="#s5">5.3</a></td>
   </tr>
   <tr>
-    <td>Using a database that already exists</td>
-    <td><code>db_datareader</code> + <code>db_datawriter</code> for the run account</td>
-    <td>Your DBA</td>
+    <td data-label="If you choose">Using a database that already exists</td>
+    <td data-label="You additionally need"><code>db_datareader</code> + <code>db_datawriter</code> for the run account</td>
+    <td data-label="Prepared by">Your DBA</td>
   </tr>
   <tr>
-    <td><code>-SqlExpressSetup</code></td>
-    <td>The SQL Express installer downloaded in advance onto this machine</td>
-    <td><strong>You</strong> - DSMT never downloads</td>
+    <td data-label="If you choose"><code>-SqlExpressSetup</code></td>
+    <td data-label="You additionally need">The SQL Express installer downloaded in advance onto this machine</td>
+    <td data-label="Prepared by"><strong>You</strong> - DSMT never downloads</td>
   </tr>
   <tr>
-    <td>RSAT on an <strong>offline</strong> Windows 10/11 client</td>
-    <td>Feature-on-Demand media, passed as <code>-FeatureSource</code></td>
-    <td><strong>You</strong> - see <a href="#auto-limits">the fast path limits</a></td>
+    <td data-label="If you choose">RSAT on an <strong>offline</strong> Windows 10/11 client</td>
+    <td data-label="You additionally need">Feature-on-Demand media, passed as <code>-FeatureSource</code></td>
+    <td data-label="Prepared by"><strong>You</strong> - see <a href="#auto-limits">the fast path limits</a></td>
   </tr>
   <tr>
-    <td>Operators performing writes</td>
-    <td>AD delegation per OU, per action</td>
-    <td><strong>You</strong> - see <a href="#s4">4.5</a>. Never automated</td>
+    <td data-label="If you choose">Operators performing writes</td>
+    <td data-label="You additionally need">AD delegation per OU, per action</td>
+    <td data-label="Prepared by"><strong>You</strong> - see <a href="#s4">4.5</a>. Never automated</td>
   </tr>
   <tr>
-    <td>Any real network use</td>
-    <td>A server certificate bound to the port</td>
-    <td>You - see <a href="#s10">step 10</a></td>
+    <td data-label="If you choose">Any real network use</td>
+    <td data-label="You additionally need">A server certificate bound to the port</td>
+    <td data-label="Prepared by">You - see <a href="#s10">step 10</a></td>
   </tr>
 </table>
 
@@ -720,17 +826,17 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 <h3>4.1 Two separate identities - understand the distinction</h3>
 <p>This is the part of a rollout that confuses people most, so it is worth pausing here:</p>
 
-<table>
+<table class="cols">
   <tr><th>Identity</th><th>Who it is</th><th>What it is used for</th></tr>
   <tr>
-    <td><strong>The run account</strong></td>
-    <td>The user that runs <code>Start-DSMT.ps1</code></td>
-    <td>Locating a DC, reading/writing SQL, writing to <code>data\</code></td>
+    <td data-label="Identity"><strong>The run account</strong></td>
+    <td data-label="Who it is">The user that runs <code>Start-DSMT.ps1</code></td>
+    <td data-label="What it is used for">Locating a DC, reading/writing SQL, writing to <code>data\</code></td>
   </tr>
   <tr>
-    <td><strong>The operator</strong></td>
-    <td>Whoever signs in through the browser</td>
-    <td><strong>Every</strong> directory operation runs with their rights</td>
+    <td data-label="Identity"><strong>The operator</strong></td>
+    <td data-label="Who it is">Whoever signs in through the browser</td>
+    <td data-label="What it is used for"><strong>Every</strong> directory operation runs with their rights</td>
   </tr>
 </table>
 
@@ -750,31 +856,31 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 
 <p>Four forms are accepted, and the installer works out which is which:</p>
 
-<table>
+<table class="cols">
   <tr><th>Form</th><th>Password</th><th>Needs preparing</th><th>Use it when</th></tr>
   <tr>
-    <td><em>omitted</em> - the installing user</td>
-    <td>Asked once</td>
-    <td><strong>Nothing</strong></td>
-    <td>Default. First install, lab, proof of concept</td>
+    <td data-label="Form"><em>omitted</em> - the installing user</td>
+    <td data-label="Password">Asked once</td>
+    <td data-label="Needs preparing"><strong>Nothing</strong></td>
+    <td data-label="Use it when">Default. First install, lab, proof of concept</td>
   </tr>
   <tr>
-    <td><code>LAB\svc-dsmt</code></td>
-    <td>Asked once</td>
-    <td>Create the account, set the password not to expire</td>
-    <td>Production, where gMSA is not available</td>
+    <td data-label="Form"><code>LAB\svc-dsmt</code></td>
+    <td data-label="Password">Asked once</td>
+    <td data-label="Needs preparing">Create the account, set the password not to expire</td>
+    <td data-label="Use it when">Production, where gMSA is not available</td>
   </tr>
   <tr>
-    <td><code>LAB\gmsa-dsmt$</code></td>
-    <td><strong>None</strong></td>
-    <td>KDS root key, <code>New-ADServiceAccount</code>, <code>Install-ADServiceAccount</code></td>
-    <td>Production. The best answer if the forest supports it</td>
+    <td data-label="Form"><code>LAB\gmsa-dsmt$</code></td>
+    <td data-label="Password"><strong>None</strong></td>
+    <td data-label="Needs preparing">KDS root key, <code>New-ADServiceAccount</code>, <code>Install-ADServiceAccount</code></td>
+    <td data-label="Use it when">Production. The best answer if the forest supports it</td>
   </tr>
   <tr>
-    <td><code>LocalSystem</code></td>
-    <td><strong>None</strong></td>
-    <td>Grant <code>LAB\HOSTNAME$</code> rights on SQL</td>
-    <td>No account may be created</td>
+    <td data-label="Form"><code>LocalSystem</code></td>
+    <td data-label="Password"><strong>None</strong></td>
+    <td data-label="Needs preparing">Grant <code>LAB\HOSTNAME$</code> rights on SQL</td>
+    <td data-label="Use it when">No account may be created</td>
   </tr>
 </table>
 
@@ -814,13 +920,13 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
 
 <pre><code>.\server\Install-DSMT.ps1 -ChangeServiceAccount "LAB\gmsa-dsmt$"</code></pre>
 
-<table>
+<table class="cols">
   <tr><th>#</th><th>What it updates</th><th>Why it matters</th></tr>
-  <tr><td>1</td><td>Service logon account, or scheduled task principal</td><td>The obvious one</td></tr>
-  <tr><td>2</td><td><strong>The URL reservation</strong></td><td><strong>The reservation names an account.</strong> Miss it and the new account cannot listen - and the failure looks like an unrelated bug weeks later</td></tr>
-  <tr><td>3</td><td><code>data\</code> permissions</td><td>Otherwise no logs and no file audit</td></tr>
-  <tr><td>4</td><td>SQL login</td><td>Printed as a script to run - the installer may not hold rights on the instance</td></tr>
-  <tr><td>5</td><td><code>config\dsmt.config.json</code></td><td>So the record matches reality</td></tr>
+  <tr><td data-label="#">1</td><td data-label="What it updates">Service logon account, or scheduled task principal</td><td data-label="Why it matters">The obvious one</td></tr>
+  <tr><td data-label="#">2</td><td data-label="What it updates"><strong>The URL reservation</strong></td><td data-label="Why it matters"><strong>The reservation names an account.</strong> Miss it and the new account cannot listen - and the failure looks like an unrelated bug weeks later</td></tr>
+  <tr><td data-label="#">3</td><td data-label="What it updates"><code>data\</code> permissions</td><td data-label="Why it matters">Otherwise no logs and no file audit</td></tr>
+  <tr><td data-label="#">4</td><td data-label="What it updates">SQL login</td><td data-label="Why it matters">Printed as a script to run - the installer may not hold rights on the instance</td></tr>
+  <tr><td data-label="#">5</td><td data-label="What it updates"><code>config\dsmt.config.json</code></td><td data-label="Why it matters">So the record matches reality</td></tr>
 </table>
 
 <p>
@@ -840,10 +946,10 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
 
 <h3 id="s4-identity">4.4 Identity mode - who performs each operation</h3>
 
-<table>
+<table class="cols">
   <tr><th>Mode</th><th>Reads</th><th>Writes</th></tr>
-  <tr><td><code>operator</code> (default)</td><td>The signed-in operator</td><td>The signed-in operator</td></tr>
-  <tr><td><code>hybrid</code></td><td>The service account</td><td><strong>The signed-in operator</strong></td></tr>
+  <tr><td data-label="Mode"><code>operator</code> (default)</td><td data-label="Reads">The signed-in operator</td><td data-label="Writes">The signed-in operator</td></tr>
+  <tr><td data-label="Mode"><code>hybrid</code></td><td data-label="Reads">The service account</td><td data-label="Writes"><strong>The signed-in operator</strong></td></tr>
 </table>
 
 <p>
@@ -992,10 +1098,10 @@ ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];</code></pre>
 </div>
 
 <h3>6.1 The two listen modes</h3>
-<table>
+<table class="cols">
   <tr><th>Value</th><th>Who can reach it</th><th>Requirements</th></tr>
-  <tr><td><code>-ListenAddress localhost</code> (default)</td><td>Only this machine</td><td>None. Works immediately</td></tr>
-  <tr><td><code>-ListenAddress any</code></td><td>Any machine on the network</td><td>A reservation - see 6.2</td></tr>
+  <tr><td data-label="Value"><code>-ListenAddress localhost</code> (default)</td><td data-label="Who can reach it">Only this machine</td><td data-label="Requirements">None. Works immediately</td></tr>
+  <tr><td data-label="Value"><code>-ListenAddress any</code></td><td data-label="Who can reach it">Any machine on the network</td><td data-label="Requirements">A reservation - see 6.2</td></tr>
 </table>
 
 <h3>6.2 Reserving the URL for all interfaces</h3>
@@ -1294,14 +1400,14 @@ jdoe</code></pre>
 
 <h3>11.1 Choosing between them</h3>
 
-<table>
+<table class="cols">
   <tr><th></th><th>Scheduled task</th><th>Windows service</th></tr>
-  <tr><td>Installer switch</td><td><code>-InstallScheduledTask</code></td><td><code>-InstallAsService</code></td></tr>
-  <tr><td>In <code>Install-DSMT.cmd</code></td><td><code>set DSMT_AUTOSTART=1</code></td><td><code>set DSMT_SERVICE=1</code></td></tr>
-  <tr><td>Starts at boot</td><td>Yes</td><td>Yes</td></tr>
-  <tr><td>Restarts on failure</td><td>Yes (3 attempts, 1 min apart)</td><td>Yes (5s, 10s, then every 30s)</td></tr>
-  <tr><td>Managed with</td><td><code>Get-ScheduledTask "DSMT Console"</code></td><td><code>Get-Service DSMT</code></td></tr>
-  <tr><td>Extra moving parts</td><td>None</td><td>A compiled host executable</td></tr>
+  <tr><td data-label="">Installer switch</td><td data-label="Scheduled task"><code>-InstallScheduledTask</code></td><td data-label="Windows service"><code>-InstallAsService</code></td></tr>
+  <tr><td data-label="">In <code>Install-DSMT.cmd</code></td><td data-label="Scheduled task"><code>set DSMT_AUTOSTART=1</code></td><td data-label="Windows service"><code>set DSMT_SERVICE=1</code></td></tr>
+  <tr><td data-label="">Starts at boot</td><td data-label="Scheduled task">Yes</td><td data-label="Windows service">Yes</td></tr>
+  <tr><td data-label="">Restarts on failure</td><td data-label="Scheduled task">Yes (3 attempts, 1 min apart)</td><td data-label="Windows service">Yes (5s, 10s, then every 30s)</td></tr>
+  <tr><td data-label="">Managed with</td><td data-label="Scheduled task"><code>Get-ScheduledTask "DSMT Console"</code></td><td data-label="Windows service"><code>Get-Service DSMT</code></td></tr>
+  <tr><td data-label="">Extra moving parts</td><td data-label="Scheduled task">None</td><td data-label="Windows service">A compiled host executable</td></tr>
 </table>
 
 <p>
@@ -1413,57 +1519,57 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 <!-- ==================================================================== -->
 <h2 id="trouble">Troubleshooting</h2>
 
-<table>
+<table class="cols">
   <tr><th>Symptom</th><th>Likely cause</th><th>What to do</th></tr>
   <tr>
-    <td><code>[FAIL] ActiveDirectory module</code></td>
-    <td>RSAT is not installed</td>
-    <td><a href="#s2">Step 2.1</a>, or run the installer</td>
+    <td data-label="Symptom"><code>[FAIL] ActiveDirectory module</code></td>
+    <td data-label="Likely cause">RSAT is not installed</td>
+    <td data-label="What to do"><a href="#s2">Step 2.1</a>, or run the installer</td>
   </tr>
   <tr>
-    <td><code>[FAIL] Cannot reach domain</code></td>
-    <td>The machine is not domain-joined, or no DC is reachable</td>
-    <td>Test <code>Get-ADDomain</code> by hand, and check network blocks</td>
+    <td data-label="Symptom"><code>[FAIL] Cannot reach domain</code></td>
+    <td data-label="Likely cause">The machine is not domain-joined, or no DC is reachable</td>
+    <td data-label="What to do">Test <code>Get-ADDomain</code> by hand, and check network blocks</td>
   </tr>
   <tr>
-    <td><code>[FAIL] SQL Server ...</code></td>
-    <td>Wrong instance name, firewall, or missing permission</td>
-    <td><a href="#s5">Step 5.3</a>, or drop <code>-SqlServer</code> temporarily</td>
+    <td data-label="Symptom"><code>[FAIL] SQL Server ...</code></td>
+    <td data-label="Likely cause">Wrong instance name, firewall, or missing permission</td>
+    <td data-label="What to do"><a href="#s5">Step 5.3</a>, or drop <code>-SqlServer</code> temporarily</td>
   </tr>
   <tr>
-    <td><code>Could not listen on http://+:8080/</code></td>
-    <td>No listener reservation, or the port is taken</td>
-    <td><a href="#s6">Step 6.2</a>; <code>netstat -ano | findstr :8080</code></td>
+    <td data-label="Symptom"><code>Could not listen on http://+:8080/</code></td>
+    <td data-label="Likely cause">No listener reservation, or the port is taken</td>
+    <td data-label="What to do"><a href="#s6">Step 6.2</a>; <code>netstat -ano | findstr :8080</code></td>
   </tr>
   <tr>
-    <td>The page loads but no version appears at the bottom</td>
-    <td>The API is not answering</td>
-    <td>Check the server window and <code>data\dsmt-*.log</code></td>
+    <td data-label="Symptom">The page loads but no version appears at the bottom</td>
+    <td data-label="Likely cause">The API is not answering</td>
+    <td data-label="What to do">Check the server window and <code>data\dsmt-*.log</code></td>
   </tr>
   <tr>
-    <td>"The user name or password is incorrect"</td>
-    <td>Wrong credentials, or a locked account</td>
-    <td>A <code>Denied</code> row in the audit confirms the request reached the server</td>
+    <td data-label="Symptom">"The user name or password is incorrect"</td>
+    <td data-label="Likely cause">Wrong credentials, or a locked account</td>
+    <td data-label="What to do">A <code>Denied</code> row in the audit confirms the request reached the server</td>
   </tr>
   <tr>
-    <td>An action fails with Access Denied</td>
-    <td>The operator lacks the delegation in AD</td>
-    <td><a href="#s4">Step 4.5</a> - fix it in AD, not in code</td>
+    <td data-label="Symptom">An action fails with Access Denied</td>
+    <td data-label="Likely cause">The operator lacks the delegation in AD</td>
+    <td data-label="What to do"><a href="#s4">Step 4.5</a> - fix it in AD, not in code</td>
   </tr>
   <tr>
-    <td>Everyone was signed out at once</td>
-    <td>The server was restarted</td>
-    <td>Intended behaviour - <a href="#s8">step 8.3</a></td>
+    <td data-label="Symptom">Everyone was signed out at once</td>
+    <td data-label="Likely cause">The server was restarted</td>
+    <td data-label="What to do">Intended behaviour - <a href="#s8">step 8.3</a></td>
   </tr>
   <tr>
-    <td>Text renders in a default font</td>
-    <td>Inter is not vendored locally, on purpose</td>
-    <td>Correct. Do not add a CDN - see below</td>
+    <td data-label="Symptom">Text renders in a default font</td>
+    <td data-label="Likely cause">Inter is not vendored locally, on purpose</td>
+    <td data-label="What to do">Correct. Do not add a CDN - see below</td>
   </tr>
   <tr>
-    <td>A list is cut off at 500</td>
-    <td>The search result cap</td>
-    <td>Narrow the search, or raise <code>-PageSize</code></td>
+    <td data-label="Symptom">A list is cut off at 500</td>
+    <td data-label="Likely cause">The search result cap</td>
+    <td data-label="What to do">Narrow the search, or raise <code>-PageSize</code></td>
   </tr>
 </table>
 
@@ -1489,21 +1595,21 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 <h2 id="ref">Appendices</h2>
 
 <h3>A. Install-DSMT.ps1 parameters</h3>
-<table>
+<table class="cols">
   <tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>-Domain</code></td><td><code>LAB.LOCAL</code></td><td>The domain to manage</td></tr>
-  <tr><td><code>-Port</code></td><td><code>8080</code></td><td>Port to reserve and open in the firewall</td></tr>
-  <tr><td><code>-ListenAddress</code></td><td><code>any</code></td><td><code>localhost</code> skips the reservation and the firewall rule</td></tr>
-  <tr><td><code>-ServiceAccount</code></td><td>Current user</td><td>The account that will run it. Accepts a user, a gMSA (trailing <code>$</code>) or <code>LocalSystem</code> - see <a href="#s4-account">4.2</a></td></tr>
-  <tr><td><code>-ChangeServiceAccount</code></td><td>-</td><td>Move an existing install to another account, updating all five dependent things - see <a href="#s4-change">4.3</a></td></tr>
-  <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code> - see <a href="#s4-identity">4.4</a></td></tr>
-  <tr><td><code>-SqlServer</code></td><td>Auto-detect</td><td>SQL instance to use</td></tr>
-  <tr><td><code>-SqlDatabase</code></td><td><code>DSMT</code></td><td>Database name to create</td></tr>
-  <tr><td><code>-SkipSql</code></td><td>Off</td><td>Install without any database</td></tr>
-  <tr><td><code>-SqlExpressSetup</code></td><td>(empty)</td><td>Path to SQL Express media for an unattended install. Never downloads</td></tr>
-  <tr><td><code>-FeatureSource</code></td><td>(empty)</td><td>Feature-on-Demand source for installing RSAT on a disconnected host</td></tr>
-  <tr><td><code>-InstallScheduledTask</code></td><td>Off</td><td>Register a task that starts DSMT at boot</td></tr>
-  <tr><td><code>-NoElevate</code></td><td>Off</td><td>Do not attempt to self-elevate</td></tr>
+  <tr><td data-label="Parameter"><code>-Domain</code></td><td data-label="Default"><code>LAB.LOCAL</code></td><td data-label="Description">The domain to manage</td></tr>
+  <tr><td data-label="Parameter"><code>-Port</code></td><td data-label="Default"><code>8080</code></td><td data-label="Description">Port to reserve and open in the firewall</td></tr>
+  <tr><td data-label="Parameter"><code>-ListenAddress</code></td><td data-label="Default"><code>any</code></td><td data-label="Description"><code>localhost</code> skips the reservation and the firewall rule</td></tr>
+  <tr><td data-label="Parameter"><code>-ServiceAccount</code></td><td data-label="Default">Current user</td><td data-label="Description">The account that will run it. Accepts a user, a gMSA (trailing <code>$</code>) or <code>LocalSystem</code> - see <a href="#s4-account">4.2</a></td></tr>
+  <tr><td data-label="Parameter"><code>-ChangeServiceAccount</code></td><td data-label="Default">-</td><td data-label="Description">Move an existing install to another account, updating all five dependent things - see <a href="#s4-change">4.3</a></td></tr>
+  <tr><td data-label="Parameter"><code>-IdentityMode</code></td><td data-label="Default"><code>operator</code></td><td data-label="Description"><code>operator</code> or <code>hybrid</code> - see <a href="#s4-identity">4.4</a></td></tr>
+  <tr><td data-label="Parameter"><code>-SqlServer</code></td><td data-label="Default">Auto-detect</td><td data-label="Description">SQL instance to use</td></tr>
+  <tr><td data-label="Parameter"><code>-SqlDatabase</code></td><td data-label="Default"><code>DSMT</code></td><td data-label="Description">Database name to create</td></tr>
+  <tr><td data-label="Parameter"><code>-SkipSql</code></td><td data-label="Default">Off</td><td data-label="Description">Install without any database</td></tr>
+  <tr><td data-label="Parameter"><code>-SqlExpressSetup</code></td><td data-label="Default">(empty)</td><td data-label="Description">Path to SQL Express media for an unattended install. Never downloads</td></tr>
+  <tr><td data-label="Parameter"><code>-FeatureSource</code></td><td data-label="Default">(empty)</td><td data-label="Description">Feature-on-Demand source for installing RSAT on a disconnected host</td></tr>
+  <tr><td data-label="Parameter"><code>-InstallScheduledTask</code></td><td data-label="Default">Off</td><td data-label="Description">Register a task that starts DSMT at boot</td></tr>
+  <tr><td data-label="Parameter"><code>-NoElevate</code></td><td data-label="Default">Off</td><td data-label="Description">Do not attempt to self-elevate</td></tr>
 </table>
 
 <h3>B. Start-DSMT.ps1 parameters</h3>
@@ -1512,19 +1618,19 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <code>config\dsmt.config.json</code> and none of them need to be passed. An
   explicit parameter overrides the file.
 </p>
-<table>
+<table class="cols">
   <tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>-Domain</code></td><td><code>LAB.LOCAL</code></td><td>The domain to manage</td></tr>
-  <tr><td><code>-Server</code></td><td>Auto-discover</td><td>Pin to a specific DC (FQDN)</td></tr>
-  <tr><td><code>-Port</code></td><td><code>8080</code></td><td>Listening port</td></tr>
-  <tr><td><code>-ListenAddress</code></td><td><code>localhost</code></td><td><code>localhost</code> or <code>any</code></td></tr>
-  <tr><td><code>-SessionMinutes</code></td><td><code>15</code></td><td>Idle timeout in minutes. Maximum 480 (8 hours). Changeable at runtime in Settings. Out-of-range values are clamped, not rejected</td></tr>
-  <tr><td><code>-SessionHours</code></td><td>-</td><td>The same setting in hours, kept for compatibility. <code>-SessionMinutes</code> wins if both are given</td></tr>
-  <tr><td><code>-PageSize</code></td><td><code>500</code></td><td>Search result cap</td></tr>
-  <tr><td><code>-IdentityMode</code></td><td><code>operator</code></td><td><code>operator</code> or <code>hybrid</code></td></tr>
-  <tr><td><code>-SqlServer</code></td><td>(empty)</td><td>SQL instance. Empty = no SQL</td></tr>
-  <tr><td><code>-SqlDatabase</code></td><td><code>DSMT</code></td><td>Database name</td></tr>
-  <tr><td><code>-SqlUsername</code> / <code>-SqlPassword</code></td><td>(empty)</td><td>SQL auth. Empty = Windows auth</td></tr>
+  <tr><td data-label="Parameter"><code>-Domain</code></td><td data-label="Default"><code>LAB.LOCAL</code></td><td data-label="Description">The domain to manage</td></tr>
+  <tr><td data-label="Parameter"><code>-Server</code></td><td data-label="Default">Auto-discover</td><td data-label="Description">Pin to a specific DC (FQDN)</td></tr>
+  <tr><td data-label="Parameter"><code>-Port</code></td><td data-label="Default"><code>8080</code></td><td data-label="Description">Listening port</td></tr>
+  <tr><td data-label="Parameter"><code>-ListenAddress</code></td><td data-label="Default"><code>localhost</code></td><td data-label="Description"><code>localhost</code> or <code>any</code></td></tr>
+  <tr><td data-label="Parameter"><code>-SessionMinutes</code></td><td data-label="Default"><code>15</code></td><td data-label="Description">Idle timeout in minutes. Maximum 480 (8 hours). Changeable at runtime in Settings. Out-of-range values are clamped, not rejected</td></tr>
+  <tr><td data-label="Parameter"><code>-SessionHours</code></td><td data-label="Default">-</td><td data-label="Description">The same setting in hours, kept for compatibility. <code>-SessionMinutes</code> wins if both are given</td></tr>
+  <tr><td data-label="Parameter"><code>-PageSize</code></td><td data-label="Default"><code>500</code></td><td data-label="Description">Search result cap</td></tr>
+  <tr><td data-label="Parameter"><code>-IdentityMode</code></td><td data-label="Default"><code>operator</code></td><td data-label="Description"><code>operator</code> or <code>hybrid</code></td></tr>
+  <tr><td data-label="Parameter"><code>-SqlServer</code></td><td data-label="Default">(empty)</td><td data-label="Description">SQL instance. Empty = no SQL</td></tr>
+  <tr><td data-label="Parameter"><code>-SqlDatabase</code></td><td data-label="Default"><code>DSMT</code></td><td data-label="Description">Database name</td></tr>
+  <tr><td data-label="Parameter"><code>-SqlUsername</code> / <code>-SqlPassword</code></td><td data-label="Default">(empty)</td><td data-label="Description">SQL auth. Empty = Windows auth</td></tr>
 </table>
 
 <h3>C. CSV format for bulk import</h3>

@@ -13,6 +13,34 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## 1.7.1 — 2026-07-30
+`docs/deployment-guide.html` made usable on a phone — Safari on iOS, and any
+Chromium browser on Android or iOS.
+
+- **Tables reflow into stacked cards below 640px.** Every data cell carries
+  its column name in `data-label`, added to all 17 multi-column tables, so a
+  narrow screen loses no information. Hiding columns would have been easier
+  and would have hidden exactly the prerequisites people miss.
+- **The contents list collapses on a phone**, so the document starts at the
+  top of the screen instead of below a full-page index. Four lines of inline
+  script, no requests; with scripting off it simply stays open.
+- **iOS specifics**: `-webkit-text-size-adjust: 100%` stops Safari inflating
+  text on rotation to landscape; `env(safe-area-inset-*)` keeps content clear
+  of the notch and the home indicator; `-webkit-overflow-scrolling: touch` on
+  scrollable blocks.
+- **Nothing scrolls the page sideways.** Code blocks scroll inside themselves
+  and keep their lines unwrapped so commands stay copy-pasteable; inline code
+  wraps instead of widening the page.
+- Deliberately **not** `overflow-x: hidden` on `body`, which is the usual
+  quick fix and breaks `position: sticky` for the desktop sidebar in both
+  Safari and Chromium. The real cause is a grid item refusing to shrink below
+  its content, so `min-width: 0` fixes it without side effects.
+- Larger tap targets in the contents under `@media (pointer: coarse)`, and a
+  second type scale at 640px.
+
+Deploy: replace `docs\deployment-guide.html`. Documentation only, no runtime
+impact.
+
 ## 1.7.0 — 2026-07-30
 Idle timeout defaults tightened.
 
