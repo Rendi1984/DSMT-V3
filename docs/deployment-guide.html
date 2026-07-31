@@ -690,7 +690,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 
 <p>
   A database can also be added later from the console itself, with no restart -
-  <strong>Menu &rarr; Settings</strong>, see <a href="#s8-db">8.6</a>.
+  the <strong>Settings</strong> tab, see <a href="#s8-db">8.6</a>.
 </p>
 
 <h3 id="forms-identity">D. Which identity performs directory operations</h3>
@@ -1139,7 +1139,7 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
 
 <p>
   You can skip this step entirely and run without SQL - see <a href="#s1">1.2</a>
-  - and add it later from <strong>Menu &rarr; Settings</strong> in the console
+  - and add it later from the <strong>Settings</strong> tab in the console
   itself, without restarting. If you do use it:
 </p>
 
@@ -1386,14 +1386,15 @@ jdoe</code></pre>
   <tr><td>Users / Groups tabs</td><td>Live lists from the directory. Search runs against AD, it does not filter a preloaded table</td></tr>
   <tr><td>Bell icon</td><td>Notifications raised from real server state - for example, that no SQL database is configured, with a button to create one</td></tr>
   <tr><td><strong>About</strong> button</td><td>Version, domain, forest, DC list, and where records are stored</td></tr>
-  <tr><td>Menu (three lines)</td><td>Navigation, <strong>Settings</strong>, About, refresh from the directory, and sign out</td></tr>
+  <tr><td><strong>Settings</strong> tab</td><td>System information, the database, the identity mode, the service account and the idle timeout - a full screen, not a dialog</td></tr>
+  <tr><td>Menu (three lines)</td><td>Navigation, About, refresh from the directory, and sign out</td></tr>
   <tr><td>Audit log</td><td>Every write performed through the tool, filterable by category and by date range</td></tr>
 </table>
 
 <h3 id="s8-db">8.6 Creating the database from the console</h3>
 <p>
   If DSMT was started without SQL, the bell shows a notification saying so.
-  <strong>Menu &rarr; Settings</strong> lets you enter a SQL Server instance and
+  the <strong>Settings</strong> tab lets you enter a SQL Server instance and
   create the DSMT database and its tables without restarting the server. The
   setting is saved to <code>config\dsmt.config.json</code>, so it survives a
   restart, and the change is written to the audit log.

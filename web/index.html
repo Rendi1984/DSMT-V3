@@ -70,6 +70,7 @@
       <button class="tab" data-tab="users"  role="tab">Users</button>
       <button class="tab" data-tab="groups" role="tab">Groups</button>
       <button class="tab tab-audit" data-tab="audit" role="tab">Audit log</button>
+      <button class="tab" data-tab="settings" role="tab">Settings</button>
     </nav>
 
     <div class="head-right">
@@ -104,8 +105,8 @@
     <button class="menu-item" data-tab="users">Users</button>
     <button class="menu-item" data-tab="groups">Groups</button>
     <button class="menu-item" data-tab="audit">Audit log</button>
+    <button class="menu-item" data-tab="settings">Settings</button>
     <div class="menu-sep"></div>
-    <button class="menu-item" id="menuSettings">Settings</button>
     <button class="menu-item" id="menuAbout">About DSMT</button>
     <button class="menu-item" id="menuRefresh">Refresh from directory</button>
     <div class="menu-sep"></div>
@@ -154,6 +155,18 @@
       <div id="detailBody"></div>
     </aside>
     <div class="detail-backdrop" id="detailBackdrop" hidden></div>
+  </div>
+
+  <!-- ---------- Settings ----------
+       A full view, not a dialog: it has to stay reachable even when an
+       overlay does not render, which is exactly what happened in 1.7.5. -->
+  <div class="settings" id="settingsView" hidden>
+    <div class="settings-head">
+      <span class="kicker">Settings</span>
+      <h1 class="settings-title">Server configuration</h1>
+      <p class="muted-sm">Read live from the server this console is served by.</p>
+    </div>
+    <div class="settings-body" id="settingsBody"></div>
   </div>
 
   <!-- ---------- Audit ---------- -->

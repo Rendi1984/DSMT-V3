@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.8.0** | 2026-07-31 | Settings becomes a full tab; shows the verbatim SQL error; builds the service-account command | Refresh |
 | **1.7.5** | 2026-07-31 | **Fixes the first-run blocker** - no dialog, toast or notification panel was visible | Refresh |
 | **1.7.4** | 2026-07-31 | Guide's contents sidebar collapses by group; 1.7.3's body-section collapsing reverted | Docs only |
 | **1.7.3** | 2026-07-31 | Deployment guide sections collapse (superseded by 1.7.4) | Docs only |
@@ -45,6 +46,42 @@ The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
 
 ---
+
+## 1.8.0 — 2026-07-31
+Settings becomes a screen, and it is now the place to diagnose SQL.
+
+**Settings is a tab, not a dialog** (`web/*`):
+- It sits alongside Users, Groups and Audit log, and renders inline. Nothing
+  in it depends on an overlay being able to display - which matters, because
+  1.7.5 was an incident where no overlay displayed and the settings screen was
+  therefore unreachable exactly when it was needed.
+- Five sections: **System** (version, publisher, domain, controller, listen
+  address, result cap, data folder), **Database**, **Identity**, **Service
+  account**, **Sessions**.
+- Every action reports **inline, next to the control that produced it**, not
+  in a toast.
+
+**Database section** — the fastest way to find out why SQL is not recording
+anything. Enter the instance, press Connect, and the **exact error SQL Server
+returned is shown verbatim** rather than being reduced to "it failed". On
+success the database and tables are created and the setting persisted.
+
+**Service account section** — pick gMSA, a dedicated account or LocalSystem,
+type the name, and DSMT builds the exact `-ChangeServiceAccount` command, with
+a Copy button and a per-type hint (a gMSA gets its trailing `$` added for you).
+
+It builds the command rather than running it, and says why: changing the
+account rewrites the service or scheduled task, the URL reservation, the data
+folder permissions and the SQL login, which need administrator rights on the
+host that this process deliberately does not have. A button that pretended
+otherwise would fail halfway and leave the installation in a worse state than
+it started.
+
+**Also**: the Settings entry moved out of the menu into the tab strip; the
+identity-mode warning and the idle-timeout controls moved into the new screen;
+the deployment guide updated to match.
+
+Deploy: `web\*` — hard refresh (Ctrl+F5). No server restart needed.
 
 ## 1.7.5 — 2026-07-31
 **Fixes the first-run blocker: no overlay in the console was visible.**

@@ -47,6 +47,7 @@ var state = {
   pageLimitHit: false,
   storage: null,
   identity: null,
+  settings: null,
   sessionMinutes: 0,
   publisher: '',
   busy: 0
@@ -589,10 +590,21 @@ function setTab(tab, force) {
     b.setAttribute('aria-selected', String(b.getAttribute('data-tab') === tab));
   });
 
-  var isAudit = (tab === 'audit');
-  $('directoryView').hidden = isAudit;
-  $('auditView').hidden = !isAudit;
+  var isAudit    = (tab === 'audit');
+  var isSettings = (tab === 'settings');
+
+  $('directoryView').hidden = (isAudit || isSettings);
+  $('auditView').hidden     = !isAudit;
+  $('settingsView').hidden  = !isSettings;
+
+  // The detail pane belongs to the directory views only.
+  $('detailPane').hidden = (isAudit || isSettings);
   closeDetail();
+
+  if (isSettings) {
+    loadSettings();
+    return;
+  }
 
   if (isAudit) {
     renderAuditFilters();
@@ -1475,197 +1487,331 @@ function storageLine() {
   return 'No SQL Server configured - audit log written to files on the server only';
 }
 
-/* Settings: shows what the server is actually running with, and lets an
-   operator point it at a SQL Server and create the DSMT database from here
-   instead of restarting with -SqlServer. */
-function actionSettings() {
+// ---------------------------------------------------------------------------
+// Settings - a full view, not a dialog
+//
+// It renders inline and reports inline. Nothing here depends on an overlay
+// being able to display, because the one thing an operator needs when the
+// console is misbehaving is the settings screen.
+// ---------------------------------------------------------------------------
+
+function actionSettings() { setTab('settings'); }
+
+function settingsRow(label, value) {
+  if (!value) { return ''; }
+  return '<div class="detail-row"><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>';
+}
+
+function loadSettings() {
+  $('settingsBody').innerHTML = '<p class="muted-sm">Loading...</p>';
+
   api('/api/settings').then(function (data) {
-    var s = data.settings;
+    state.settings = data.settings;
+    renderSettings();
+  }).catch(function (err) {
+    $('settingsBody').innerHTML = '<div class="error-box"><strong>Could not read the settings.</strong>' +
+                                  esc(err.message) + '</div>';
+  });
+}
 
-    // The allowed range comes from the server, so this form validates against
-    // exactly the numbers the server enforces rather than its own copy.
-    var b = s.sessionBounds || {};
-    var bounds = {
-      min: b.Min || b.min || 1,
-      max: b.Max || b.max || 480,
-      def: b.Default || b.def || 15
-    };
+function renderSettings() {
+  var s = state.settings;
+  if (!s) { return; }
 
-    var readOnly = [
-      ['Version', s.version],
-      ['Published by', s.publisher],
-      ['Domain', s.domain],
-      ['Domain controller', s.server || 'Auto-discovered'],
-      ['Listening on', s.listenAddress + ':' + s.port],
-      ['Running as', s.serviceUser],
-      ['Search result cap', String(s.pageSize)],
-      ['Data folder', s.dataPath]
-    ].filter(function (r) { return r[1]; }).map(function (r) {
-      return '<div class="detail-row"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>';
-    }).join('');
+  var b = s.sessionBounds || {};
+  var bounds = { min: b.Min || b.min || 1, max: b.Max || b.max || 480, def: b.Default || b.def || 15 };
 
-    var status = s.sqlEnabled
-      ? '<p class="dialog-note">Connected to <strong>' + esc(s.sqlServer) + '</strong>, database ' +
-        '<strong>' + esc(s.sqlDatabase) + '</strong>. Operators, sessions, the directory snapshot ' +
-        'and the audit log are stored there.</p>'
-      : '<p class="dialog-note">No database is configured. The audit log is written to files under ' +
-        'the data folder, and operators, sessions and the directory snapshot are <strong>not stored ' +
-        'at all</strong>. Fill in a SQL Server below to create the database.</p>';
+  var storage = s.sqlEnabled
+    ? '<p class="set-good">Connected to <strong>' + esc(s.sqlServer) + '</strong>, database ' +
+      '<strong>' + esc(s.sqlDatabase) + '</strong>. Operators, sessions, the directory snapshot and ' +
+      'the audit log are stored there.</p>'
+    : '<p class="set-warn"><strong>No database is configured.</strong> The audit log is written to ' +
+      'files under the data folder, and operators, sessions and the directory snapshot are ' +
+      '<strong>not stored at all</strong>.</p>';
 
-    if (s.sqlEnabled && s.sqlError) {
-      status += '<p class="form-error">' + esc(s.sqlError) + '</p>';
-    }
+  if (s.sqlError) {
+    storage += '<div class="error-box"><strong>The last SQL attempt failed with:</strong>' +
+               esc(s.sqlError) + '</div>';
+  }
 
-    openDialog({
-      title: 'Settings',
-      confirmLabel: s.sqlEnabled ? 'Reconnect' : 'Create database',
-      body:
-        '<div class="detail-fields"><span class="detail-section-label">Server</span>' + readOnly + '</div>' +
-        '<hr class="rule">' +
-        '<span class="detail-section-label">Idle timeout</span>' +
-        '<p class="dialog-note">An operator who does not touch the console for this long is signed ' +
-        'out. The browser warns them a minute beforehand. Applies to sessions that are already ' +
-        'open, not just new ones. The maximum is ' + bounds.max + ' minutes (' +
-        Math.round(bounds.max / 60) + ' hours) - a session that can outlive a working day is not ' +
-        'an idle control.</p>' +
-        '<div class="row-2">' +
-          '<div class="field"><label for="setIdle">Minutes of inactivity (' +
-          bounds.min + '-' + bounds.max + ')</label>' +
-          '<input class="input" id="setIdle" type="number" min="' + bounds.min + '" max="' + bounds.max +
-          '" step="1" value="' + esc(String(s.sessionMinutes || bounds.def)) + '"></div>' +
-          '<div class="field"><label for="setIdlePreset">Common values</label>' +
-          '<select class="input" id="setIdlePreset">' +
-            '<option value="">Choose</option>' +
-            '<option value="5">5 minutes</option>' +
-            '<option value="15">15 minutes (default)</option>' +
-            '<option value="30">30 minutes</option>' +
-            '<option value="60">1 hour</option>' +
-            '<option value="240">4 hours</option>' +
-            '<option value="480">8 hours (maximum)</option>' +
-          '</select></div>' +
-        '</div>' +
-        '<button class="btn btn-secondary" type="button" id="applyIdle">Apply idle timeout</button>' +
-        '<hr class="rule">' +
-        '<span class="detail-section-label">Identity mode</span>' +
-        '<p class="dialog-note">Which account performs directory operations. ' +
-        '<strong>Writes always run as the signed-in operator</strong> in either mode, so the domain ' +
-        'controller records who made each change.</p>' +
-        '<div class="field"><label for="setIdentity">Mode</label>' +
+  $('settingsBody').innerHTML =
+    // ---- system ----
+    '<section class="set-card">' +
+      '<h2 class="set-h">System</h2>' +
+      '<dl class="detail-fields">' +
+        settingsRow('Version', s.version) +
+        settingsRow('Published by', s.publisher) +
+        settingsRow('Domain', s.domain) +
+        settingsRow('Domain controller', s.server || 'Auto-discovered') +
+        settingsRow('Listening on', s.listenAddress + ':' + s.port) +
+        settingsRow('Search result cap', String(s.pageSize)) +
+        settingsRow('Data folder', s.dataPath) +
+      '</dl>' +
+    '</section>' +
+
+    // ---- SQL ----
+    '<section class="set-card">' +
+      '<h2 class="set-h">Database</h2>' +
+      storage +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setSqlServer">SQL Server instance</label>' +
+        '<input class="input" id="setSqlServer" placeholder="SQL01 or SQL01\\INSTANCE" autocomplete="off" value="' +
+        esc(s.sqlServer || '') + '"></div>' +
+        '<div class="field"><label for="setSqlDb">Database name</label>' +
+        '<input class="input" id="setSqlDb" autocomplete="off" value="' + esc(s.sqlDatabase || 'DSMT') + '"></div>' +
+        '<div class="field"><label for="setSqlUser">SQL user (blank = Windows auth)</label>' +
+        '<input class="input" id="setSqlUser" autocomplete="off"></div>' +
+        '<div class="field"><label for="setSqlPass">SQL password</label>' +
+        '<input class="input" id="setSqlPass" type="password" autocomplete="new-password"></div>' +
+      '</div>' +
+      '<p class="dialog-note">The database and its tables are created if they do not exist, and the ' +
+      'setting is saved so it survives a restart. Creating a database needs the <code>dbcreator</code> ' +
+      'right on the instance; using one that already exists needs only read and write.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-primary" type="button" id="applySql">' +
+        (s.sqlEnabled ? 'Reconnect' : 'Connect and create database') + '</button>' +
+      '</div>' +
+      '<div class="set-result" id="sqlResult"></div>' +
+    '</section>' +
+
+    // ---- identity ----
+    '<section class="set-card">' +
+      '<h2 class="set-h">Identity</h2>' +
+      '<dl class="detail-fields">' +
+        settingsRow('DSMT runs as', s.serviceUser) +
+        settingsRow('Registered account', s.serviceAccount) +
+        settingsRow('Account type', accountKindLabel(s.accountKind)) +
+      '</dl>' +
+      '<p class="dialog-note">Which account performs directory operations. ' +
+      '<strong>Writes always run as the signed-in operator</strong> in either mode, so the domain ' +
+      'controller records who made each change.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setIdentity">Identity mode</label>' +
         '<select class="input" id="setIdentity">' +
           '<option value="operator"' + (s.identityMode === 'operator' ? ' selected' : '') + '>' +
             'Operator - reads and writes both run as the signed-in operator</option>' +
           '<option value="hybrid"' + (s.identityMode === 'hybrid' ? ' selected' : '') + '>' +
             'Hybrid - reads run as the service account</option>' +
         '</select></div>' +
-        '<p class="dialog-note" id="identityWarning"></p>' +
+      '</div>' +
+      '<p class="dialog-note" id="identityWarning"></p>' +
+      '<div class="set-actions">' +
         '<button class="btn btn-secondary" type="button" id="applyIdentity">Apply identity mode</button>' +
-        '<hr class="rule">' +
-        '<span class="detail-section-label">SQL Server storage</span>' +
-        status +
-        '<div class="field"><label for="setSqlServer">SQL Server instance</label>' +
-        '<input class="input" id="setSqlServer" placeholder="SQL01 or SQL01\\INSTANCE" autocomplete="off" value="' +
-        esc(s.sqlServer || '') + '"></div>' +
-        '<div class="field"><label for="setSqlDb">Database name</label>' +
-        '<input class="input" id="setSqlDb" autocomplete="off" value="' + esc(s.sqlDatabase || 'DSMT') + '"></div>' +
-        '<div class="row-2">' +
-          '<div class="field"><label for="setSqlUser">SQL user (blank = Windows auth)</label>' +
-          '<input class="input" id="setSqlUser" autocomplete="off"></div>' +
-          '<div class="field"><label for="setSqlPass">SQL password</label>' +
-          '<input class="input" id="setSqlPass" type="password" autocomplete="new-password"></div>' +
-        '</div>' +
-        '<p class="dialog-note">The database and its tables are created if they do not exist, and the ' +
-        'setting is saved so it survives a restart. Creating a database needs the <code>dbcreator</code> ' +
-        'right on the instance; connecting to one that already exists needs only read and write.</p>',
-      onOpen: function () {
-        // ---- idle timeout ----
-        $('setIdlePreset').addEventListener('change', function (e) {
-          if (e.target.value) { $('setIdle').value = e.target.value; }
-        });
+      '</div>' +
+      '<div class="set-result" id="identityResult"></div>' +
+    '</section>' +
 
-        $('applyIdle').addEventListener('click', function () {
-          var minutes = parseInt($('setIdle').value, 10);
-          if (isNaN(minutes) || minutes < bounds.min || minutes > bounds.max) {
-            dialogError('The idle timeout must be between ' + bounds.min + ' and ' + bounds.max +
-                        ' minutes (' + Math.round(bounds.max / 60) + ' hours).');
-            return;
-          }
+    // ---- service account ----
+    '<section class="set-card">' +
+      '<h2 class="set-h">Service account</h2>' +
+      '<p class="dialog-note">Move DSMT onto a dedicated account, a group managed service account ' +
+      '(gMSA) or the machine account. Pick the target below and DSMT builds the exact command.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setAcctKind">Account type</label>' +
+        '<select class="input" id="setAcctKind">' +
+          '<option value="gmsa">gMSA - no password, recommended</option>' +
+          '<option value="user">Dedicated account - you are prompted for its password</option>' +
+          '<option value="machine">LocalSystem - the machine account, no password</option>' +
+        '</select></div>' +
+        '<div class="field" id="acctNameField"><label for="setAcctName">Account name</label>' +
+        '<input class="input" id="setAcctName" placeholder="LAB\\gmsa-dsmt$" autocomplete="off"></div>' +
+      '</div>' +
+      '<p class="dialog-note" id="acctHint"></p>' +
+      '<label class="set-cmd-label" for="acctCmd">Run this on the DSMT host, in an elevated PowerShell:</label>' +
+      '<div class="secret" id="acctCmd"></div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="copyAcctCmd">Copy command</button>' +
+      '</div>' +
+      '<p class="dialog-note"><strong>Why this is not a button that just does it:</strong> changing ' +
+      'the account rewrites the Windows service or scheduled task, the HTTP URL reservation, the ' +
+      'data folder permissions and the SQL login. Those need administrator rights on the host, which ' +
+      'this process deliberately does not have. The command does all five as one operation and ' +
+      'verifies the account before touching anything.</p>' +
+    '</section>' +
 
-          api('/api/settings/session', { method: 'POST', body: { sessionMinutes: minutes } })
-            .then(function (res) {
-              state.sessionMinutes = res.sessionMinutes;
-              // Restart the local countdown against the new value straight
-              // away, so the browser and the server do not disagree.
-              startIdleWatch(res.sessionMinutes);
-              toast('Idle timeout set to ' + res.sessionMinutes + ' minutes.');
-              if (!res.persisted) {
-                toast('Applied, but not saved: ' + res.persistError + ' It will revert on restart.', 'bad');
-              }
-            })
-            .catch(function (err) { dialogError(err.message); });
-        });
+    // ---- sessions ----
+    '<section class="set-card">' +
+      '<h2 class="set-h">Sessions</h2>' +
+      '<p class="dialog-note">An operator who does not touch the console for this long is signed ' +
+      'out; the browser warns a minute beforehand. Applies to sessions already open. Maximum ' +
+      bounds.max + ' minutes (' + Math.round(bounds.max / 60) + ' hours).</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setIdle">Minutes of inactivity (' + bounds.min + '-' + bounds.max + ')</label>' +
+        '<input class="input" id="setIdle" type="number" min="' + bounds.min + '" max="' + bounds.max +
+        '" step="1" value="' + esc(String(s.sessionMinutes || bounds.def)) + '"></div>' +
+        '<div class="field"><label for="setIdlePreset">Common values</label>' +
+        '<select class="input" id="setIdlePreset">' +
+          '<option value="">Choose</option>' +
+          '<option value="5">5 minutes</option>' +
+          '<option value="15">15 minutes (default)</option>' +
+          '<option value="30">30 minutes</option>' +
+          '<option value="60">1 hour</option>' +
+          '<option value="240">4 hours</option>' +
+          '<option value="480">8 hours (maximum)</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyIdle">Apply idle timeout</button>' +
+      '</div>' +
+      '<div class="set-result" id="idleResult"></div>' +
+    '</section>';
 
-        // ---- identity mode ----
-        var select = $('setIdentity');
-        var warning = $('identityWarning');
+  wireSettings(bounds);
+}
 
-        // The consequence of hybrid is stated where the choice is made, not
-        // buried in documentation: it changes who can see what.
-        function describe() {
-          if (select.value === 'hybrid') {
-            warning.innerHTML = '<strong>Every operator will be able to see everything ' +
-              esc(s.serviceUser || 'the service account') + ' can see</strong>, whether or not they ' +
-              'have read rights of their own in the directory.';
-          } else {
-            warning.textContent = 'Each operator sees only what the directory lets them see.';
-          }
-        }
-        select.addEventListener('change', describe);
-        describe();
+function accountKindLabel(kind) {
+  if (kind === 'gmsa') { return 'Group managed service account (no password)'; }
+  if (kind === 'machine') { return 'Machine account (LocalSystem)'; }
+  if (kind === 'user') { return 'Ordinary account'; }
+  return '';
+}
 
-        $('applyIdentity').addEventListener('click', function () {
-          api('/api/settings/identity', { method: 'POST', body: { mode: select.value } })
-            .then(function (res) {
-              if (state.identity) { state.identity.mode = res.identityMode; }
-              renderNotifications();
-              toast('Identity mode set to ' + res.identityMode + '.');
-              if (!res.persisted) {
-                toast('Applied, but not saved: ' + res.persistError + ' It will revert on restart.', 'bad');
-              }
-              if (state.tab !== 'audit') { loadRows(); }
-            })
-            .catch(function (err) { dialogError(err.message); });
-        });
-      },
-      onConfirm: function () {
-        var server = $('setSqlServer').value.trim();
-        if (!server) { dialogError('Enter the SQL Server instance.'); return; }
+/* Inline result, shown next to the control that produced it - so a failure is
+   readable even if no overlay renders. */
+function setResult(id, message, ok) {
+  var box = $(id);
+  if (!box) { return; }
+  box.className = 'set-result ' + (ok ? 'set-result-ok' : 'set-result-bad');
+  box.textContent = message;
+}
 
-        api('/api/settings/sql', {
-          method: 'POST',
-          body: {
-            server: server,
-            database: $('setSqlDb').value.trim() || 'DSMT',
-            username: $('setSqlUser').value.trim(),
-            password: $('setSqlPass').value
-          }
-        }).then(function (res) {
-          state.storage = res.storage;
-          renderNotifications();
-          closeDialog();
+function wireSettings(bounds) {
 
-          toast('Database ready on ' + res.storage.sqlServer + ' (' + res.storage.sqlDatabase + ').');
-          if (!res.persisted) {
-            toast('The database works, but the setting could not be saved: ' + res.persistError +
-                  ' It will be lost on restart.', 'bad');
-          }
-          if (state.tab === 'audit') { loadAudit(); }
-        }).catch(function (err) {
-          dialogError(err.message);
-        });
+  // ---- SQL ----
+  $('applySql').addEventListener('click', function () {
+    var server = $('setSqlServer').value.trim();
+    if (!server) { setResult('sqlResult', 'Enter the SQL Server instance.', false); return; }
+
+    setResult('sqlResult', 'Connecting to ' + server + '...', true);
+
+    api('/api/settings/sql', {
+      method: 'POST',
+      body: {
+        server: server,
+        database: $('setSqlDb').value.trim() || 'DSMT',
+        username: $('setSqlUser').value.trim(),
+        password: $('setSqlPass').value
       }
+    }).then(function (res) {
+      state.storage = res.storage;
+      renderNotifications();
+      var message = 'Connected. Database ' + res.storage.sqlDatabase + ' on ' +
+                    res.storage.sqlServer + ' is ready.';
+      if (!res.persisted) {
+        message += ' NOTE: the setting could not be saved (' + res.persistError +
+                   '), so it will be lost on restart.';
+      }
+      setResult('sqlResult', message, true);
+      loadSettings();
+    }).catch(function (err) {
+      // The server returns the real SQL error - show it verbatim, it is the
+      // whole point of this control.
+      setResult('sqlResult', err.message, false);
     });
-  }).catch(function (err) {
-    toast('Could not read the settings: ' + err.message, 'bad');
+  });
+
+  // ---- identity mode ----
+  var identity = $('setIdentity');
+  var warning = $('identityWarning');
+  function describeIdentity() {
+    if (identity.value === 'hybrid') {
+      warning.innerHTML = '<strong>Every operator will be able to see everything ' +
+        esc(state.settings.serviceUser || 'the service account') + ' can see</strong>, whether or ' +
+        'not they have read rights of their own in the directory.';
+    } else {
+      warning.textContent = 'Each operator sees only what the directory lets them see.';
+    }
+  }
+  identity.addEventListener('change', describeIdentity);
+  describeIdentity();
+
+  $('applyIdentity').addEventListener('click', function () {
+    api('/api/settings/identity', { method: 'POST', body: { mode: identity.value } })
+      .then(function (res) {
+        if (state.identity) { state.identity.mode = res.identityMode; }
+        renderNotifications();
+        setResult('identityResult', 'Identity mode set to ' + res.identityMode + '.' +
+                  (res.persisted ? '' : ' Not saved: ' + res.persistError), res.persisted);
+        if (state.tab !== 'settings') { loadRows(); }
+      })
+      .catch(function (err) { setResult('identityResult', err.message, false); });
+  });
+
+  // ---- service account command builder ----
+  var kind = $('setAcctKind');
+  var name = $('setAcctName');
+  var hint = $('acctHint');
+
+  function buildCommand() {
+    var target = name.value.trim();
+    var show = (kind.value !== 'machine');
+    $('acctNameField').hidden = !show;
+
+    if (kind.value === 'gmsa') {
+      hint.textContent = 'End the name with a dollar sign. The gMSA must already exist and be ' +
+                         'installed on this host (Install-ADServiceAccount). No password is asked for.';
+      if (target && target.charAt(target.length - 1) !== '$') { target = target + '$'; }
+    } else if (kind.value === 'user') {
+      hint.textContent = 'You are prompted for the password once - Windows has to store it to log ' +
+                         'on at boot. Set the password not to expire, or use a gMSA.';
+    } else {
+      hint.textContent = 'Reaches AD and SQL as the computer account. Grant that account rights on ' +
+                         'the SQL instance.';
+      target = 'LocalSystem';
+    }
+
+    var arg = target || (kind.value === 'gmsa' ? 'DOMAIN\\gmsa-dsmt$' : 'DOMAIN\\svc-dsmt');
+    $('acctCmd').textContent = '.\\server\\Install-DSMT.ps1 -ChangeServiceAccount "' + arg + '"';
+  }
+
+  kind.addEventListener('change', buildCommand);
+  name.addEventListener('input', buildCommand);
+  buildCommand();
+
+  $('copyAcctCmd').addEventListener('click', function () {
+    var text = $('acctCmd').textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        toast('Command copied.');
+      }).catch(function () { selectCommand(); });
+    } else {
+      selectCommand();
+    }
+  });
+
+  function selectCommand() {
+    // Clipboard API needs a secure context; over plain HTTP it is absent, so
+    // fall back to selecting the text for the operator to copy.
+    var node = $('acctCmd');
+    if (window.getSelection && document.createRange) {
+      var range = document.createRange();
+      range.selectNodeContents(node);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
+  // ---- idle timeout ----
+  $('setIdlePreset').addEventListener('change', function (e) {
+    if (e.target.value) { $('setIdle').value = e.target.value; }
+  });
+
+  $('applyIdle').addEventListener('click', function () {
+    var minutes = parseInt($('setIdle').value, 10);
+    if (isNaN(minutes) || minutes < bounds.min || minutes > bounds.max) {
+      setResult('idleResult', 'The idle timeout must be between ' + bounds.min + ' and ' +
+                bounds.max + ' minutes.', false);
+      return;
+    }
+    api('/api/settings/session', { method: 'POST', body: { sessionMinutes: minutes } })
+      .then(function (res) {
+        state.sessionMinutes = res.sessionMinutes;
+        startIdleWatch(res.sessionMinutes);
+        setResult('idleResult', 'Idle timeout set to ' + res.sessionMinutes + ' minutes.' +
+                  (res.persisted ? '' : ' Not saved: ' + res.persistError), res.persisted);
+      })
+      .catch(function (err) { setResult('idleResult', err.message, false); });
   });
 }
 
@@ -1814,7 +1960,6 @@ function wireEvents() {
   els('.menu-item[data-tab]').forEach(function (b) {
     b.addEventListener('click', function () { setMenu(false); setTab(b.getAttribute('data-tab')); });
   });
-  $('menuSettings').addEventListener('click', function () { setMenu(false); actionSettings(); });
   $('menuAbout').addEventListener('click', function () { setMenu(false); actionAbout(); });
   $('menuRefresh').addEventListener('click', function () {
     setMenu(false);
