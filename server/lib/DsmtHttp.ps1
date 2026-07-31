@@ -445,7 +445,10 @@ function Invoke-DsmtApi {
 
                 $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ SessionMinutes = $minutes }
 
-                Write-DsmtAudit -Action 'Change idle timeout' -Target ($previous + ' -> ' + $minutes + ' minutes') `
+                # [string] on the left: $previous is an int, and "int + string"
+                # makes PowerShell try to parse the string AS an int, which
+                # threw "Cannot convert value ' -> ' to type System.Int32".
+                Write-DsmtAudit -Action 'Change idle timeout' -Target ([string]$previous + ' -> ' + [string]$minutes + ' minutes') `
                                 -Operator $session.Account -Reason 'Console configuration change' `
                                 -Result 'Success' -Category 'session'
 
@@ -456,8 +459,60 @@ function Invoke-DsmtApi {
                 Send-DsmtJson -Response $Response -Data @{
                     ok             = $true
                     sessionMinutes = $minutes
-                    persisted      = $saved.Ok
-                    persistError   = $saved.Error
+                    persisted       = $saved.Ok
+                    persistError    = $saved.Error
+                    databaseCreated = $init.DatabaseCreated
+                    tablesCreated   = $init.TablesCreated
+                    tablesFound     = $init.TablesFound
+                }
+                return
+            }
+
+            '^/api/settings/network$' {
+                if ($method -ne 'POST') { break }
+
+                $body = Read-DsmtBody -Request $Request
+                $raw  = Get-DsmtBodyValue -Body $body -Name 'port' -Default 0
+
+                $port = 0
+                if (-not [int]::TryParse([string]$raw, [ref] $port)) {
+                    Send-DsmtError -Response $Response -Message 'The port must be a whole number.' -StatusCode 400
+                    return
+                }
+                if ($port -lt 1 -or $port -gt 65535) {
+                    Send-DsmtError -Response $Response -Message 'The port must be between 1 and 65535.' -StatusCode 400
+                    return
+                }
+
+                $previous = $cfg.Port
+                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ Port = $port }
+
+                Write-DsmtAudit -Action 'Change listening port' -Target ([string]$previous + ' -> ' + [string]$port) `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session'
+
+                Write-DsmtLog -Message ($session.Account + ' set the listening port to ' + $port + ' (takes effect on restart)')
+
+                # An HttpListener cannot move to another port without being
+                # torn down, so this is saved and applied on the next start -
+                # said plainly rather than pretending it took effect.
+                $reservation = ''
+                if ($cfg.ListenAddress -eq 'any') {
+                    $reservation = 'netsh http add urlacl url=http://+:' + $port + '/ user="' +
+                                   $env:USERDOMAIN + '\' + $env:USERNAME + '"'
+                }
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok            = $true
+                    port          = $port
+                    previousPort  = $previous
+                    needsRestart  = $true
+                    persisted     = $saved.Ok
+                    persistError  = $saved.Error
+                    reservation   = $reservation
+                    firewall      = ('New-NetFirewallRule -DisplayName "DSMT console (TCP ' + $port +
+                                     ')" -Direction Inbound -Protocol TCP -LocalPort ' + $port +
+                                     ' -Action Allow -Profile Domain')
                 }
                 return
             }
@@ -496,6 +551,32 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/settings/sql/databases$' {
+                if ($method -ne 'POST') { break }
+
+                $body   = Read-DsmtBody -Request $Request
+                $server = ([string](Get-DsmtBodyValue -Body $body -Name 'server')).Trim()
+                $user   = [string](Get-DsmtBodyValue -Body $body -Name 'username')
+                $pass   = [string](Get-DsmtBodyValue -Body $body -Name 'password')
+
+                if ([string]::IsNullOrWhiteSpace($server)) {
+                    Send-DsmtError -Response $Response -Message 'Enter the SQL Server instance first.' -StatusCode 400
+                    return
+                }
+
+                $listed = Get-DsmtSqlDatabases -Server $server -Username $user -Password $pass
+                if (-not $listed.Ok) {
+                    Send-DsmtError -Response $Response -Message $listed.Error -StatusCode 400
+                    return
+                }
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok        = $true
+                    databases = @($listed.Databases)
+                }
+                return
+            }
+
             '^/api/settings/sql$' {
                 if ($method -ne 'POST') { break }
 
@@ -505,6 +586,10 @@ function Invoke-DsmtApi {
                 $user     = [string](Get-DsmtBodyValue -Body $body -Name 'username')
                 $pass     = [string](Get-DsmtBodyValue -Body $body -Name 'password')
 
+                # Creating a database is not something to do as a side effect
+                # of a typo in an instance name, so the caller has to ask.
+                $createIfMissing = [bool](Get-DsmtBodyValue -Body $body -Name 'createIfMissing' -Default $false)
+
                 if ([string]::IsNullOrWhiteSpace($server)) {
                     Send-DsmtError -Response $Response -Message 'Enter the SQL Server instance to connect to.' -StatusCode 400
                     return
@@ -513,7 +598,22 @@ function Invoke-DsmtApi {
 
                 Write-DsmtLog -Message ($session.Account + ' is configuring SQL storage: ' + $server + ' [' + $database + ']')
 
-                $init = Initialize-DsmtSql -Server $server -Database $database -Username $user -Password $pass
+                $init = Initialize-DsmtSql -Server $server -Database $database -Username $user `
+                                           -Password $pass -CreateIfMissing $createIfMissing
+
+                # Not an error: the database simply is not there yet, and the
+                # operator has not said to create it.
+                if ($init.NeedsCreate) {
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok          = $false
+                        needsCreate = $true
+                        server      = $server
+                        database    = $database
+                        error       = $init.Error
+                    }
+                    return
+                }
+
                 if (-not $init.Ok) {
                     Write-DsmtAudit -Action 'Configure SQL storage' -Target ($server + ' [' + $database + ']') `
                                     -Operator $session.Account -Reason 'Console configuration change' `
@@ -528,10 +628,13 @@ function Invoke-DsmtApi {
                     SqlDatabase = $database
                 }
 
+                $detail = 'Database existed, ' + $init.TablesFound + ' tables found'
+                if ($init.DatabaseCreated) { $detail = 'Database created' }
+                if ($init.TablesCreated -gt 0) { $detail = $detail + ', ' + $init.TablesCreated + ' tables created' }
+
                 Write-DsmtAudit -Action 'Configure SQL storage' -Target ($server + ' [' + $database + ']') `
                                 -Operator $session.Account -Reason 'Console configuration change' `
-                                -Result 'Success' -Category 'session' `
-                                -Detail 'Database and tables verified'
+                                -Result 'Success' -Category 'session' -Detail $detail
 
                 # Backfill the operator and this session so the new database is
                 # not born with a gap where the current sign-in should be.

@@ -128,26 +128,72 @@ function Invoke-DsmtSqlCommand {
     }
 }
 
+function Get-DsmtSqlDatabases {
+    <#
+    .SYNOPSIS
+        Lists the databases on an instance, so an upgrade can point DSMT at
+        the database it already has instead of guessing its name.
+    .OUTPUTS
+        Hashtable with Ok, Error and Databases (array of names).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Server,
+        [string] $Username = '',
+        [string] $Password = ''
+    )
+
+    try {
+        $masterCs = New-DsmtSqlConnectionString -Server $Server -Database 'master' -Username $Username -Password $Password
+
+        $rows = Invoke-DsmtSqlCommand -ConnectionString $masterCs -Mode 'Query' -Sql @'
+SELECT name
+  FROM sys.databases
+ WHERE database_id > 4          -- skip master, tempdb, model, msdb
+   AND state = 0                -- online only
+ ORDER BY name;
+'@
+        $names = @()
+        foreach ($r in @($rows)) { $names += [string]$r.name }
+
+        return @{ Ok = $true; Error = ''; Databases = @($names) }
+
+    } catch {
+        return @{ Ok = $false; Error = $_.Exception.Message; Databases = @() }
+    }
+}
+
 function Initialize-DsmtSql {
     <#
     .SYNOPSIS
-        Connects to SQL Server, creates the database if it does not exist and
-        creates any missing tables. Safe to run on every start.
+        Connects to SQL Server and prepares the DSMT schema.
+    .PARAMETER CreateIfMissing
+        $true  - create the database when it does not exist (the installer and
+                 the server both want this).
+        $false - do not create; report NeedsCreate instead, so a person can be
+                 asked first. Creating a database is not something to do as a
+                 side effect of a typo in an instance name.
     .OUTPUTS
-        Hashtable with Ok and Error.
+        Hashtable with Ok, Error, NeedsCreate, DatabaseCreated, TablesCreated
+        and TablesFound.
     #>
     param(
         [Parameter(Mandatory = $true)][string] $Server,
         [string] $Database = 'DSMT',
         [string] $Username = '',
-        [string] $Password = ''
+        [string] $Password = '',
+        [bool]   $CreateIfMissing = $true
     )
 
     $script:DsmtSql.Server   = $Server
     $script:DsmtSql.Database = $Database
 
+    $result = @{
+        Ok = $false; Error = ''; NeedsCreate = $false
+        DatabaseCreated = $false; TablesCreated = 0; TablesFound = 0
+    }
+
     try {
-        # Step 1: connect to master and create the database if needed.
+        # Step 1: connect to master and see whether the database is there.
         $masterCs = New-DsmtSqlConnectionString -Server $Server -Database 'master' -Username $Username -Password $Password
 
         $exists = Invoke-DsmtSqlCommand -ConnectionString $masterCs -Mode 'Scalar' `
@@ -155,6 +201,12 @@ function Initialize-DsmtSql {
             -Parameters @{ db = $Database }
 
         if ($null -eq $exists) {
+            if (-not $CreateIfMissing) {
+                $result.NeedsCreate = $true
+                $result.Error = 'The database "' + $Database + '" does not exist on ' + $Server + '.'
+                return $result
+            }
+
             # CREATE DATABASE cannot take a parameter for the name, so the
             # name is validated hard and then bracket-quoted.
             if ($Database -notmatch '^[A-Za-z][A-Za-z0-9_]{0,62}$') {
@@ -162,21 +214,28 @@ function Initialize-DsmtSql {
             }
             Invoke-DsmtSqlCommand -ConnectionString $masterCs -Mode 'NonQuery' `
                 -Sql ('CREATE DATABASE [' + $Database + ']') | Out-Null
+
+            $result.DatabaseCreated = $true
             Write-DsmtLog -Message ('Created SQL database [' + $Database + '] on ' + $Server)
         }
 
-        # Step 2: point at the database and create the schema.
+        # Step 2: point at the database and create whatever tables are missing.
         $script:DsmtSql.ConnectionString = New-DsmtSqlConnectionString -Server $Server -Database $Database -Username $Username -Password $Password
-        Install-DsmtSqlSchema
+
+        $schema = Install-DsmtSqlSchema
+        $result.TablesCreated = $schema.Created
+        $result.TablesFound   = $schema.Found
 
         $script:DsmtSql.Enabled   = $true
         $script:DsmtSql.LastError = ''
-        return @{ Ok = $true; Error = '' }
+        $result.Ok = $true
+        return $result
 
     } catch {
         $script:DsmtSql.Enabled   = $false
         $script:DsmtSql.LastError = $_.Exception.Message
-        return @{ Ok = $false; Error = $_.Exception.Message }
+        $result.Error = $_.Exception.Message
+        return $result
     }
 }
 
@@ -282,11 +341,27 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DirectoryUsers_Sam' A
 CREATE INDEX IX_DirectoryUsers_Sam ON dbo.DirectoryUsers (SamAccountName);
 '@
 
+    # Count what was already there first, so the caller can tell an upgrade
+    # ("5 tables already present") from a fresh install ("created 5 tables").
+    $wanted = @('Operators', 'Sessions', 'DirectoryUsers', 'DirectoryGroups', 'AuditLog')
+    $before = 0
+    try {
+        $before = [int](Invoke-DsmtSqlCommand -Mode 'Scalar' -Sql @'
+SELECT COUNT(*) FROM sys.tables
+ WHERE name IN ('Operators','Sessions','DirectoryUsers','DirectoryGroups','AuditLog');
+'@)
+    } catch {
+        $before = 0
+    }
+
     foreach ($sql in $statements) {
         Invoke-DsmtSqlCommand -Sql $sql -Mode 'NonQuery' | Out-Null
     }
 
-    Write-DsmtLog -Message ('SQL schema verified in [' + $script:DsmtSql.Database + ']')
+    Write-DsmtLog -Message ('SQL schema verified in [' + $script:DsmtSql.Database + '] - ' +
+                            $before + ' of ' + $wanted.Count + ' tables already present')
+
+    return @{ Found = $before; Created = ($wanted.Count - $before) }
 }
 
 function Get-DsmtTokenHash {

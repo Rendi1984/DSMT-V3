@@ -391,9 +391,9 @@ function loadDomainInfo() {
     // count lives in About and in the menu, where there is room for it.
     $('domainLine').textContent = data.domain.domain;
 
-    var count = data.domain.controllerCount;
-    $('menuDomain').textContent = data.domain.domain + ' - ' + count +
-                                  ' controller' + (count === 1 ? '' : 's');
+    // Just the domain name; the controller count lives in About, where it
+    // is information rather than clutter.
+    $('menuDomain').textContent = data.domain.domain;
     renderNotifications();
   }).catch(function (err) {
     $('domainLine').textContent = 'Domain unavailable';
@@ -1549,6 +1549,27 @@ function renderSettings() {
       '</dl>' +
     '</section>' +
 
+    // ---- network ----
+    '<section class="set-card">' +
+      '<h2 class="set-h">Network</h2>' +
+      '<dl class="detail-fields">' +
+        settingsRow('Listening on', s.listenAddress + ':' + s.port) +
+      '</dl>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setPort">Port (1-65535)</label>' +
+        '<input class="input" id="setPort" type="number" min="1" max="65535" step="1" value="' +
+        esc(String(s.port)) + '"></div>' +
+      '</div>' +
+      '<p class="dialog-note">A listener cannot move to another port while it is running, so the new ' +
+      'port is saved and used on the next start. If DSMT listens on all interfaces you also need a URL ' +
+      'reservation and a firewall rule for it - both commands are shown after you save.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyPort">Save port</button>' +
+      '</div>' +
+      '<div class="set-result" id="portResult"></div>' +
+      '<div id="portCommands"></div>' +
+    '</section>' +
+
     // ---- SQL ----
     '<section class="set-card">' +
       '<h2 class="set-h">Database</h2>' +
@@ -1564,12 +1585,26 @@ function renderSettings() {
         '<div class="field"><label for="setSqlPass">SQL password</label>' +
         '<input class="input" id="setSqlPass" type="password" autocomplete="new-password"></div>' +
       '</div>' +
-      '<p class="dialog-note">The database and its tables are created if they do not exist, and the ' +
-      'setting is saved so it survives a restart. Creating a database needs the <code>dbcreator</code> ' +
-      'right on the instance; using one that already exists needs only read and write.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="listDbs">List existing databases</button>' +
+      '</div>' +
+      '<div class="field" id="dbPickField" hidden>' +
+        '<label for="setSqlPick">Existing databases on that instance</label>' +
+        '<select class="input" id="setSqlPick"></select>' +
+      '</div>' +
+      '<p class="dialog-note">Upgrading an existing installation? List the databases and pick the one ' +
+      'you already have - DSMT will use it and add only the tables that are missing. Creating a new ' +
+      'database needs the <code>dbcreator</code> right; using one that exists needs only read and write.</p>' +
       '<div class="set-actions">' +
         '<button class="btn btn-primary" type="button" id="applySql">' +
-        (s.sqlEnabled ? 'Reconnect' : 'Connect and create database') + '</button>' +
+        (s.sqlEnabled ? 'Reconnect' : 'Connect') + '</button>' +
+      '</div>' +
+      '<div class="set-confirm" id="sqlConfirm" hidden>' +
+        '<p id="sqlConfirmText"></p>' +
+        '<div class="set-actions">' +
+          '<button class="btn btn-primary" type="button" id="confirmCreateDb">Create the database</button>' +
+          '<button class="btn btn-ghost" type="button" id="cancelCreateDb">Cancel</button>' +
+        '</div>' +
       '</div>' +
       '<div class="set-result" id="sqlResult"></div>' +
     '</section>' +
@@ -1678,36 +1713,120 @@ function setResult(id, message, ok) {
 function wireSettings(bounds) {
 
   // ---- SQL ----
-  $('applySql').addEventListener('click', function () {
-    var server = $('setSqlServer').value.trim();
-    if (!server) { setResult('sqlResult', 'Enter the SQL Server instance.', false); return; }
+  function sqlCredentials() {
+    return {
+      server: $('setSqlServer').value.trim(),
+      database: $('setSqlDb').value.trim() || 'DSMT',
+      username: $('setSqlUser').value.trim(),
+      password: $('setSqlPass').value
+    };
+  }
 
-    setResult('sqlResult', 'Connecting to ' + server + '...', true);
+  function hideCreateConfirm() { $('sqlConfirm').hidden = true; }
 
-    api('/api/settings/sql', {
+  $('listDbs').addEventListener('click', function () {
+    var creds = sqlCredentials();
+    if (!creds.server) { setResult('sqlResult', 'Enter the SQL Server instance first.', false); return; }
+
+    hideCreateConfirm();
+    setResult('sqlResult', 'Listing databases on ' + creds.server + '...', true);
+
+    api('/api/settings/sql/databases', {
       method: 'POST',
-      body: {
-        server: server,
-        database: $('setSqlDb').value.trim() || 'DSMT',
-        username: $('setSqlUser').value.trim(),
-        password: $('setSqlPass').value
-      }
+      body: { server: creds.server, username: creds.username, password: creds.password }
     }).then(function (res) {
-      state.storage = res.storage;
-      renderNotifications();
-      var message = 'Connected. Database ' + res.storage.sqlDatabase + ' on ' +
-                    res.storage.sqlServer + ' is ready.';
-      if (!res.persisted) {
-        message += ' NOTE: the setting could not be saved (' + res.persistError +
-                   '), so it will be lost on restart.';
+      var names = asArray(res.databases);
+      var pick = $('setSqlPick');
+
+      if (!names.length) {
+        $('dbPickField').hidden = true;
+        setResult('sqlResult', 'Connected, but the instance has no user databases yet. ' +
+                  'Type a name above and press Connect to create one.', true);
+        return;
       }
-      setResult('sqlResult', message, true);
-      loadSettings();
+
+      pick.innerHTML = '<option value="">Choose a database</option>' +
+        names.map(function (n) {
+          var sel = (n === creds.database) ? ' selected' : '';
+          return '<option value="' + esc(n) + '"' + sel + '>' + esc(n) + '</option>';
+        }).join('');
+      $('dbPickField').hidden = false;
+
+      setResult('sqlResult', names.length + ' database' + (names.length === 1 ? '' : 's') +
+                ' found. Pick one to use it, or type a new name to create one.', true);
     }).catch(function (err) {
-      // The server returns the real SQL error - show it verbatim, it is the
-      // whole point of this control.
+      $('dbPickField').hidden = true;
       setResult('sqlResult', err.message, false);
     });
+  });
+
+  // Picking from the list fills the name field, so there is one place the
+  // name actually comes from.
+  $('setSqlPick').addEventListener('change', function (e) {
+    if (e.target.value) {
+      $('setSqlDb').value = e.target.value;
+      hideCreateConfirm();
+      setResult('sqlResult', 'Will use the existing database ' + e.target.value +
+                '. Press Connect.', true);
+    }
+  });
+
+  function connectSql(createIfMissing) {
+    var creds = sqlCredentials();
+    if (!creds.server) { setResult('sqlResult', 'Enter the SQL Server instance.', false); return; }
+
+    hideCreateConfirm();
+    setResult('sqlResult', 'Connecting to ' + creds.server + '...', true);
+
+    creds.createIfMissing = createIfMissing;
+
+    api('/api/settings/sql', { method: 'POST', body: creds })
+      .then(function (res) {
+        // The database is simply not there yet - ask before creating one,
+        // because a typo in the instance name should not silently produce a
+        // stray database on a production server.
+        if (res && res.needsCreate) {
+          $('sqlConfirmText').textContent =
+            'The database "' + res.database + '" does not exist on ' + res.server +
+            '. Create it now? This needs the dbcreator right on the instance.';
+          $('sqlConfirm').hidden = false;
+          setResult('sqlResult', '', true);
+          return;
+        }
+
+        state.storage = res.storage;
+        renderNotifications();
+
+        var what;
+        if (res.databaseCreated) {
+          what = 'Created database ' + res.storage.sqlDatabase + ' on ' + res.storage.sqlServer +
+                 ' with ' + res.tablesCreated + ' tables.';
+        } else if (res.tablesCreated > 0) {
+          what = 'Using the existing database ' + res.storage.sqlDatabase + '. Added ' +
+                 res.tablesCreated + ' missing table' + (res.tablesCreated === 1 ? '' : 's') + '.';
+        } else {
+          what = 'Using the existing database ' + res.storage.sqlDatabase +
+                 '. All ' + res.tablesFound + ' tables were already present.';
+        }
+        if (!res.persisted) {
+          what += ' NOTE: the setting could not be saved (' + res.persistError +
+                  '), so it will be lost on restart.';
+        }
+        setResult('sqlResult', what, true);
+        loadSettings();
+      })
+      .catch(function (err) {
+        // The server returns the real SQL error - show it verbatim, it is the
+        // whole point of this control.
+        setResult('sqlResult', err.message, false);
+      });
+  }
+
+  $('applySql').addEventListener('click', function () { connectSql(false); });
+  $('confirmCreateDb').addEventListener('click', function () { connectSql(true); });
+  $('cancelCreateDb').addEventListener('click', function () {
+    hideCreateConfirm();
+    setResult('sqlResult', 'Nothing was created.', true);
   });
 
   // ---- identity mode ----
@@ -1791,6 +1910,35 @@ function wireSettings(bounds) {
       sel.addRange(range);
     }
   }
+
+  // ---- port ----
+  $('applyPort').addEventListener('click', function () {
+    var port = parseInt($('setPort').value, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      setResult('portResult', 'The port must be between 1 and 65535.', false);
+      return;
+    }
+
+    api('/api/settings/network', { method: 'POST', body: { port: port } })
+      .then(function (res) {
+        var message = 'Port saved as ' + res.port + '. It takes effect the next time DSMT starts - ' +
+                      'until then the console is still on ' + res.previousPort + '.';
+        if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+        setResult('portResult', message, res.persisted);
+
+        var cmds = '';
+        if (res.reservation) {
+          cmds += '<label class="set-cmd-label">Reserve the new URL, elevated, on the DSMT host:</label>' +
+                  '<div class="secret">' + esc(res.reservation) + '</div>';
+        }
+        if (res.firewall) {
+          cmds += '<label class="set-cmd-label">Open the new port in the firewall:</label>' +
+                  '<div class="secret">' + esc(res.firewall) + '</div>';
+        }
+        $('portCommands').innerHTML = cmds;
+      })
+      .catch(function (err) { setResult('portResult', err.message, false); });
+  });
 
   // ---- idle timeout ----
   $('setIdlePreset').addEventListener('change', function (e) {

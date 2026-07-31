@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.8.1** | 2026-07-31 | Fixes the idle-timeout 500; pick an existing database; confirm before creating; custom port; Settings laid out in columns | Restart + refresh |
 | **1.8.0** | 2026-07-31 | Settings becomes a full tab; shows the verbatim SQL error; builds the service-account command | Refresh |
 | **1.7.5** | 2026-07-31 | **Fixes the first-run blocker** - no dialog, toast or notification panel was visible | Refresh |
 | **1.7.4** | 2026-07-31 | Guide's contents sidebar collapses by group; 1.7.3's body-section collapsing reverted | Docs only |
@@ -46,6 +47,46 @@ The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
 
 ---
+
+## 1.8.1 — 2026-07-31
+Fixes the idle-timeout error, and finishes the Settings screen.
+
+**Fixed - saving an idle timeout returned 500.**
+`Cannot convert value " -> " to type "System.Int32"`. The audit line built its
+target as `$previous + ' -> ' + $minutes`, and `$previous` is an **int** - so
+PowerShell tried to parse the string `' -> '` as a number. Cast to `[string]`
+first. The two other `' -> '` audit targets are string-plus-string and were
+never affected; checked.
+
+**Choose an existing database** (`DsmtSql.ps1`, `DsmtHttp.ps1`, `web/*`):
+- **List existing databases** on the instance and pick one, for upgrading an
+  installation that already has a DSMT database under any name. DSMT then adds
+  only the tables that are missing and leaves the data alone.
+- `POST /api/settings/sql/databases` lists the online user databases.
+
+**Confirmation before a database is created**:
+- `Initialize-DsmtSql` takes `-CreateIfMissing`. From the console it is
+  **false**, so a missing database comes back as `needsCreate` and the screen
+  asks first - a typo in an instance name should not silently leave a stray
+  database on a production server. The installer and the server still create
+  on sight, which is what they are for.
+- The result now says which of three things happened: created the database,
+  used an existing one and added N missing tables, or used an existing one
+  that was already complete. That distinction is the whole point when
+  upgrading.
+
+**Custom port** - a Network section sets the listening port, saved to
+`config\dsmt.config.json`. It states plainly that a listener cannot move port
+while running, so it applies on the next start, and prints the matching
+`netsh http add urlacl` and firewall commands, since a new port needs both.
+
+**Layout** - the Settings screen was a narrow strip down the left of a wide
+monitor. It is now a grid: one column under 1000px, two above, three above
+1600px, capped at 1500px so no card stretches past a readable measure.
+
+**Also** - the menu no longer appends the controller count to the domain name.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart.
 
 ## 1.8.0 — 2026-07-31
 Settings becomes a screen, and it is now the place to diagnose SQL.
