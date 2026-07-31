@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.9.1** | 2026-07-31 | Settings keeps only the section rail; the arrangement switch is gone | Refresh |
 | **1.9.0** | 2026-07-31 | Settings rearranged: a section rail with one section at a time, and the operator picks the arrangement | Refresh |
 | **1.8.1** | 2026-07-31 | Fixes the idle-timeout 500; pick an existing database; confirm before creating; custom port; Settings laid out in columns | Restart + refresh |
 | **1.8.0** | 2026-07-31 | Settings becomes a full tab; shows the verbatim SQL error; builds the service-account command | Refresh |
@@ -46,6 +47,28 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
+
+---
+
+## 1.9.1 — 2026-07-31
+
+**The arrangement switch is removed. One section at a time is the layout.**
+
+1.9.0 offered three arrangements because there seemed to be no single right
+one. There was: the rail. *Single column* and *Columns* were both variations
+on scrolling past five sections you did not come for, and a setting whose
+only real answer is "the default" is not a setting, it is a decision that was
+not made. Made now.
+
+- The segmented control in the Settings header is gone, and with it the
+  `.seg` / `.seg-btn` styles and the `dsmt.settings.layout` key.
+- The rail is always there; which section was open is still remembered per
+  browser in `dsmt.settings.section`.
+- Cards are still hidden rather than removed, so handlers survive a switch,
+  and below 900px the rail is still a scrolling row of chips.
+
+Files: `web/index.html`, `web/app.css`, `web/app.js`,
+`server/lib/DsmtCommon.ps1` (version). Copy `web/*` and hard-refresh.
 
 ---
 

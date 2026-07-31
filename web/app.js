@@ -1506,8 +1506,6 @@ function loadSettings() {
   // The rail belongs to the rendered sections; drop it while there are none,
   // otherwise a failed reload leaves a rail pointing at cards that are gone.
   $('settingsNav').innerHTML = '';
-  $('settingsBody').parentNode.className = 'settings-main';
-  $('settingsBody').className = 'settings-body';
   $('settingsBody').innerHTML = '<p class="muted-sm">Loading...</p>';
 
   api('/api/settings').then(function (data) {
@@ -1701,18 +1699,16 @@ function renderSettings() {
   $('settingsNav').innerHTML = navHtml;
 
   state.settingsSections = sections;
-  wireSettingsLayout();
+  wireSettingsNav();
   wireSettings(bounds);
 }
 
 /* ---------------------------------------------------------------------------
-   Arrangement. Three shapes, because there is no single right one: a rail with
-   one section at a time (calm, and the only one that works on a phone), the
-   whole page in one readable column, or side-by-side columns for a wide
-   monitor. The choice and the open section are remembered per browser.
+   The section rail. One section is shown at a time - calm on a monitor, and
+   the only shape that works on a phone. Which one was open is remembered per
+   browser, so Settings comes back where it was left.
    --------------------------------------------------------------------------- */
 
-var SET_LAYOUT_KEY = 'dsmt.settings.layout';
 var SET_SECTION_KEY = 'dsmt.settings.section';
 
 function readSetting(key, fallback) {
@@ -1726,33 +1722,21 @@ function writeSetting(key, value) {
   try { window.localStorage.setItem(key, value); } catch (e) { /* private mode */ }
 }
 
-function wireSettingsLayout() {
-  var buttons = $('settingsLayouts').querySelectorAll('.seg-btn');
-  var i;
-  for (i = 0; i < buttons.length; i++) {
-    buttons[i].onclick = function () {
-      writeSetting(SET_LAYOUT_KEY, this.getAttribute('data-layout'));
-      applySettingsLayout();
-    };
-  }
-
+function wireSettingsNav() {
   var items = $('settingsNav').querySelectorAll('.set-nav-item');
+  var i;
   for (i = 0; i < items.length; i++) {
     items[i].onclick = function () {
       writeSetting(SET_SECTION_KEY, this.getAttribute('data-section'));
-      applySettingsLayout();
+      showSettingsSection();
     };
   }
-
-  applySettingsLayout();
+  showSettingsSection();
 }
 
-function applySettingsLayout() {
+function showSettingsSection() {
   var sections = state.settingsSections || [];
   if (!sections.length) { return; }
-
-  var layout = readSetting(SET_LAYOUT_KEY, 'focus');
-  if (layout !== 'focus' && layout !== 'list' && layout !== 'grid') { layout = 'focus'; }
 
   var current = readSetting(SET_SECTION_KEY, sections[0].key);
   var known = false;
@@ -1760,27 +1744,17 @@ function applySettingsLayout() {
   for (i = 0; i < sections.length; i++) { if (sections[i].key === current) { known = true; } }
   if (!known) { current = sections[0].key; }
 
-  var main = $('settingsBody').parentNode;
-  main.className = 'settings-main' + (layout === 'focus' ? ' has-nav' : '');
-  $('settingsBody').className = 'settings-body lay-' + layout;
-
-  var buttons = $('settingsLayouts').querySelectorAll('.seg-btn');
-  for (i = 0; i < buttons.length; i++) {
-    buttons[i].className = 'seg-btn' +
-      (buttons[i].getAttribute('data-layout') === layout ? ' is-active' : '');
-  }
-
   var items = $('settingsNav').querySelectorAll('.set-nav-item');
   for (i = 0; i < items.length; i++) {
     items[i].className = 'set-nav-item' +
       (items[i].getAttribute('data-section') === current ? ' is-active' : '');
   }
 
-  // In "one section" mode the others are hidden, never removed - the handlers
-  // wired by wireSettings() stay attached to elements that still exist.
+  // The other cards are hidden, never removed - the handlers wired by
+  // wireSettings() stay attached to elements that still exist.
   for (i = 0; i < sections.length; i++) {
     var card = $('setSec-' + sections[i].key);
-    if (card) { card.hidden = (layout === 'focus' && sections[i].key !== current); }
+    if (card) { card.hidden = (sections[i].key !== current); }
   }
 }
 
