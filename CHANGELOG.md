@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.7.3** | 2026-07-31 | Deployment guide sections collapse; expand/collapse all | Docs only |
 | **1.7.2** | 2026-07-31 | Version history indexed at the top of this file | Docs only |
 | **1.7.1** | 2026-07-30 | Deployment guide made usable on phones: tables reflow to cards, contents collapse, iOS safe areas | Docs only |
 | **1.7.0** | 2026-07-30 | Idle timeout default cut to 15 minutes, capped at 8 hours; bounds enforced on every route | Restart |
@@ -42,6 +43,28 @@ The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
 
 ---
+
+## 1.7.3 — 2026-07-31
+`docs/deployment-guide.html` - every section now collapses.
+
+- All 17 top-level sections are native `<details>`, and **only the first is
+  open**. The guide opens as a one-screen index of itself rather than 88KB of
+  prose, on a desktop as much as on a phone.
+- **Expand all / Collapse all** at the top.
+- Following a link into a collapsed section opens it - otherwise the anchor
+  would land on a closed heading and the guide would look broken. Works from
+  the contents list, from a cross-reference, and from a pasted URL with a
+  fragment.
+- On a phone, tapping a contents entry closes the contents behind you.
+- Printing opens everything first and restores your state afterwards, via
+  `beforeprint`/`afterprint` plus a `matchMedia('print')` listener for Safari,
+  with a print stylesheet as a fallback. A printed guide of bare headings
+  would be worse than no printing at all.
+- Collapsing and expanding still work with **scripting disabled** - that is
+  native `<details>` behaviour. The script only adds the three things that
+  would otherwise be annoying.
+
+Deploy: replace `docs\deployment-guide.html`. Documentation only.
 
 ## 1.7.2 — 2026-07-31
 - `CHANGELOG.md` — added a **"Version history at a glance"** table: one row

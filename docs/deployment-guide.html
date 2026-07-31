@@ -75,8 +75,53 @@ main { padding: 40px 48px 90px; max-width: 1000px; min-width: 0; }
 
 h1 { font-size: 34px; font-weight: 500; line-height: 1.2; margin: 0 0 10px; }
 h2 {
-  font-size: 25px; font-weight: 500; margin: 54px 0 14px; padding-top: 20px;
+  font-size: 25px; font-weight: 500; margin: 0; padding: 0;
+  border: 0;
+}
+
+/* ---- collapsible sections ----
+   Every h2 section is a details element. Only the first is open, so it opens
+   as a readable index of the whole guide rather than 80KB of prose. */
+.sect {
   border-top: 1px solid var(--n-800);
+  margin-top: 10px;
+}
+.sect > summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 18px 0 14px;
+  /* A generous target: this is the primary navigation of the document. */
+  min-height: 44px;
+}
+.sect > summary::-webkit-details-marker { display: none; }
+.sect > summary::before {
+  content: "";
+  flex: none; margin-top: 8px;
+  width: 8px; height: 8px;
+  border-right: 1.5px solid var(--accent);
+  border-bottom: 1.5px solid var(--accent);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+.sect[open] > summary::before { transform: rotate(45deg); }
+.sect > summary:hover h2 { color: var(--accent-300); }
+.sect > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.sect-body { padding-bottom: 26px; }
+.sect-body > *:first-child { margin-top: 0; }
+
+/* Expand / collapse all */
+.sect-controls { display: flex; gap: 10px; margin: 22px 0 4px; }
+.sect-controls button {
+  font: inherit; font-size: 13px; cursor: pointer;
+  color: var(--n-300); background: transparent;
+  border: 1px solid var(--n-800); border-radius: 99px;
+  padding: 7px 14px; min-height: 36px;
+}
+.sect-controls button:hover { color: var(--accent); border-color: var(--accent-700); }
+.sect-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sect > summary::before { transition: none; }
 }
 h3 { font-size: 18px; font-weight: 500; margin: 30px 0 10px; color: var(--n-200); }
 h4 { font-size: 15px; font-weight: 500; margin: 22px 0 8px; color: var(--n-300); }
@@ -171,8 +216,12 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
     padding-bottom: max(60px, env(safe-area-inset-bottom));
   }
   h1 { font-size: 27px; }
-  h2 { font-size: 21px; margin-top: 40px; }
+  h2 { font-size: 21px; }
   h3 { font-size: 17px; }
+  /* Section headings are the main way through the guide on a phone, so they
+     get a full-width, comfortably tall tap target. */
+  .sect > summary { padding: 16px 0; min-height: 48px; }
+  .sect-controls button { flex: 1; }
 }
 
 @media (max-width: 640px) {
@@ -218,7 +267,13 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
   .toc li { margin-bottom: 10px; }
 }
 @media print {
-  .toc { display: none; }
+  .toc, .sect-controls { display: none; }
+  /* Belt and braces alongside the beforeprint handler: a section that is
+     still closed must not print as a bare heading. */
+  .sect > summary::before { display: none; }
+  .sect, .sect-body { display: block; }
+  .sect { border-top: 1px solid #ccc; page-break-inside: auto; }
+  .sect > summary { padding: 12px 0 6px; }
   body { background: #fff; color: #000; }
   main { max-width: none; padding: 0; }
   p, li, td { color: #222; }
@@ -293,13 +348,95 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 </nav>
 
 <script>
-/* The only script in this file, and it makes no requests: on a phone the
-   contents list is collapsed so the document itself starts at the top of the
-   screen. With scripting off it simply stays open, which is still usable. */
+/* The only script in this file, and it makes no requests.
+   Without it the guide is still complete and readable - every section is a
+   native details element, so collapsing and expanding work without it. What
+   this adds is the three things that would otherwise be annoying: jumping to a
+   collapsed section, expand/collapse all, and printing everything. */
 (function () {
+  'use strict';
+
+  var onPhone = window.matchMedia('(max-width: 900px)').matches;
+
+  // On a phone the contents list starts collapsed, so the document itself
+  // begins at the top of the screen instead of below a full-page index.
   var toc = document.getElementById('tocDetails');
-  if (toc && window.matchMedia('(max-width: 900px)').matches) {
-    toc.removeAttribute('open');
+  if (toc && onPhone) { toc.removeAttribute('open'); }
+
+  function sections() {
+    return Array.prototype.slice.call(document.querySelectorAll('details.sect'));
+  }
+
+  /* A link into a collapsed section has to open it, or the anchor lands on
+     nothing and the guide looks broken. */
+  function revealHash() {
+    var id = (window.location.hash || '').replace('#', '');
+    if (!id) { return; }
+
+    var target = document.getElementById(id);
+    if (!target) { return; }
+
+    var node = target;
+    while (node && node !== document.body) {
+      if (node.tagName === 'DETAILS') { node.open = true; }
+      node = node.parentNode;
+    }
+    // Re-scroll: the browser positioned the page before the section opened.
+    window.setTimeout(function () {
+      target.scrollIntoView({ block: 'start', behavior: 'auto' });
+    }, 0);
+  }
+
+  window.addEventListener('hashchange', revealHash);
+  revealHash();
+
+  // Following a contents link on a phone should leave the index behind.
+  if (toc) {
+    toc.addEventListener('click', function (e) {
+      if (onPhone && e.target && e.target.tagName === 'A') {
+        toc.removeAttribute('open');
+      }
+    });
+  }
+
+  function setAll(open) {
+    sections().forEach(function (d) { d.open = open; });
+  }
+
+  var expand = document.getElementById('expandAll');
+  var collapse = document.getElementById('collapseAll');
+  if (expand) { expand.addEventListener('click', function () { setAll(true); }); }
+  if (collapse) {
+    collapse.addEventListener('click', function () {
+      setAll(false);
+      window.scrollTo(0, 0);
+    });
+  }
+
+  /* Printing a guide with everything collapsed would produce a page of
+     headings, so open it all first and restore afterwards. */
+  var beforePrint = [];
+  function openForPrint() {
+    beforePrint = sections().map(function (d) { return d.open; });
+    setAll(true);
+    if (toc) { toc.open = true; }
+  }
+  function restoreAfterPrint() {
+    sections().forEach(function (d, i) { d.open = beforePrint[i]; });
+    if (toc && onPhone) { toc.removeAttribute('open'); }
+  }
+
+  window.addEventListener('beforeprint', openForPrint);
+  window.addEventListener('afterprint', restoreAfterPrint);
+
+  // Safari reaches print through a media query rather than those events.
+  if (window.matchMedia) {
+    var printQuery = window.matchMedia('print');
+    var onChange = function (mql) {
+      if (mql.matches) { openForPrint(); } else { restoreAfterPrint(); }
+    };
+    if (printQuery.addEventListener) { printQuery.addEventListener('change', onChange); }
+    else if (printQuery.addListener) { printQuery.addListener(onChange); }
   }
 })();
 </script>
@@ -314,7 +451,14 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="intro">Before you start: is there an install process?</h2>
+
+<div class="sect-controls">
+  <button type="button" id="expandAll">Expand all</button>
+  <button type="button" id="collapseAll">Collapse all</button>
+</div>
+<details class="sect" open data-sect="intro">
+<summary><h2 id="intro">Before you start: is there an install process?</h2></summary>
+<div class="sect-body">
 
 <p>
   <strong>There is no MSI and no setup.exe</strong> - DSMT is not packaged as a
@@ -356,7 +500,11 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 </div>
 
 <!-- ==================================================================== -->
-<h2 id="auto">The fast path - the automated installer</h2>
+</div>
+</details>
+<details class="sect" data-sect="auto">
+<summary><h2 id="auto">The fast path - the automated installer</h2></summary>
+<div class="sect-body">
 
 <p class="lead">
   <code>Install-DSMT.ps1</code> performs every preparation step described in
@@ -482,7 +630,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="forms">Every installation form, at a glance</h2>
+</div>
+</details>
+<details class="sect" data-sect="forms">
+<summary><h2 id="forms">Every installation form, at a glance</h2></summary>
+<div class="sect-body">
 
 <p class="lead">
   There is one installer. What differs is four independent choices you make
@@ -632,7 +784,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 </div>
 
 <!-- ==================================================================== -->
-<h2 id="s1">Step 1 - Prerequisites</h2>
+</div>
+</details>
+<details class="sect" data-sect="s1">
+<summary><h2 id="s1">Step 1 - Prerequisites</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 1 OF 11</span>
 
 <h3>1.1 The machine that will run the tool</h3>
@@ -745,7 +901,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 </div>
 
 <!-- ==================================================================== -->
-<h2 id="s2">Step 2 - Prepare the machine</h2>
+</div>
+</details>
+<details class="sect" data-sect="s2">
+<summary><h2 id="s2">Step 2 - Prepare the machine</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 2 OF 11</span>
 
 <div class="ok">
@@ -782,7 +942,11 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="s3">Step 3 - Copy the files</h2>
+</div>
+</details>
+<details class="sect" data-sect="s3">
+<summary><h2 id="s3">Step 3 - Copy the files</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 3 OF 11</span>
 
 <p>Copy the project folder as it is, for example to <code>C:\DSMT</code>. The structure must be preserved:</p>
@@ -820,7 +984,11 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="s4">Step 4 - Run account and AD delegation</h2>
+</div>
+</details>
+<details class="sect" data-sect="s4">
+<summary><h2 id="s4">Step 4 - Run account and AD delegation</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 4 OF 11</span>
 
 <h3>4.1 Two separate identities - understand the distinction</h3>
@@ -1013,7 +1181,11 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="s5">Step 5 - Prepare SQL Server</h2>
+</div>
+</details>
+<details class="sect" data-sect="s5">
+<summary><h2 id="s5">Step 5 - Prepare SQL Server</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 5 OF 11</span>
 
 <div class="ok">
@@ -1089,7 +1261,11 @@ ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];</code></pre>
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="s6">Step 6 - Network, port and listener reservation</h2>
+</div>
+</details>
+<details class="sect" data-sect="s6">
+<summary><h2 id="s6">Step 6 - Network, port and listener reservation</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 6 OF 11</span>
 
 <div class="ok">
@@ -1117,7 +1293,11 @@ ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];</code></pre>
     -Protocol TCP -LocalPort 8080 -Action Allow</code></pre>
 
 <!-- ==================================================================== -->
-<h2 id="s7">Step 7 - First run</h2>
+</div>
+</details>
+<details class="sect" data-sect="s7">
+<summary><h2 id="s7">Step 7 - First run</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 7 OF 11</span>
 
 <h3>7.1 Starting it</h3>
@@ -1167,7 +1347,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Start-DSMT.ps1<
          and the audit log is written to JSONL files in C:\DSMT\data</code></pre>
 
 <!-- ==================================================================== -->
-<h2 id="s8">Step 8 - The first connection</h2>
+</div>
+</details>
+<details class="sect" data-sect="s8">
+<summary><h2 id="s8">Step 8 - The first connection</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 8 OF 11</span>
 
 <h3 id="s8-how">8.1 How to sign in</h3>
@@ -1310,7 +1494,11 @@ jdoe</code></pre>
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="s9">Step 9 - Acceptance test</h2>
+</div>
+</details>
+<details class="sect" data-sect="s9">
+<summary><h2 id="s9">Step 9 - Acceptance test</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 9 OF 11</span>
 
 <p>
@@ -1369,7 +1557,11 @@ jdoe</code></pre>
 </div>
 
 <!-- ==================================================================== -->
-<h2 id="s10">Step 10 - HTTPS before production</h2>
+</div>
+</details>
+<details class="sect" data-sect="s10">
+<summary><h2 id="s10">Step 10 - HTTPS before production</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 10 OF 11</span>
 
 <div class="warn">
@@ -1389,7 +1581,11 @@ jdoe</code></pre>
 <p><strong>4.</strong> Start with <code>-Port 8443</code>.</p>
 
 <!-- ==================================================================== -->
-<h2 id="s11">Step 11 - Running permanently</h2>
+</div>
+</details>
+<details class="sect" data-sect="s11">
+<summary><h2 id="s11">Step 11 - Running permanently</h2></summary>
+<div class="sect-body">
 <span class="step-badge">STEP 11 OF 11</span>
 
 <p>
@@ -1496,7 +1692,11 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="s12">Updating a version, shipping a change</h2>
+</div>
+</details>
+<details class="sect" data-sect="s12">
+<summary><h2 id="s12">Updating a version, shipping a change</h2></summary>
+<div class="sect-body">
 
 <h3>What requires what</h3>
 <table>
@@ -1517,7 +1717,11 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 </p>
 
 <!-- ==================================================================== -->
-<h2 id="trouble">Troubleshooting</h2>
+</div>
+</details>
+<details class="sect" data-sect="trouble">
+<summary><h2 id="trouble">Troubleshooting</h2></summary>
+<div class="sect-body">
 
 <table class="cols">
   <tr><th>Symptom</th><th>Likely cause</th><th>What to do</th></tr>
@@ -1592,7 +1796,11 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 </table>
 
 <!-- ==================================================================== -->
-<h2 id="ref">Appendices</h2>
+</div>
+</details>
+<details class="sect" data-sect="ref">
+<summary><h2 id="ref">Appendices</h2></summary>
+<div class="sect-body">
 
 <h3>A. Install-DSMT.ps1 parameters</h3>
 <table class="cols">
@@ -1698,6 +1906,8 @@ asmith,Anna Smith,Anna,Smith,Finance,Analyst,,OU=Finance,DC=lab,DC=local</code><
   About dialog, read from <code>$script:DsmtVersion</code>.
 </p>
 
+</div>
+</details>
 </main>
 </div>
 </body>
