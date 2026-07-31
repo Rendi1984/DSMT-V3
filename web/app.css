@@ -430,6 +430,12 @@ body { overflow: hidden; }
   flex-wrap: wrap; align-items: center;
 }
 .audit-controls .input { flex: 0 1 300px; min-width: 180px; }
+.audit-stamp {
+  font-size: 11.5px; color: var(--color-neutral-500);
+  white-space: nowrap; flex: none;
+}
+#auditRefresh { flex: none; }
+#auditRefresh[disabled] { opacity: 0.6; cursor: default; }
 .chips { display: flex; gap: var(--space-2); padding: 0 var(--space-4) var(--space-3); flex-wrap: wrap; }
 
 .range-custom {
@@ -675,7 +681,12 @@ body { overflow: hidden; }
   .bulk-actions .btn { flex: 1 1 auto; }
   .audit-head { padding: var(--space-4) var(--space-3) var(--space-2); }
   .audit-controls { margin-left: 0; width: 100%; }
-  .audit-controls .input { flex: 1 1 auto; }
+  /* The search box gets its own line; Refresh and Export share the next one.
+     The stamp stays - knowing how stale the table is matters most on the
+     screen where you cannot see all of it at once. */
+  .audit-controls .input { flex: 1 1 100%; order: -1; }
+  .audit-stamp { flex: 1 1 100%; }
+  #auditRefresh, #auditExport { flex: 1 1 auto; }
   .chips { padding-left: var(--space-3); padding-right: var(--space-3); }
   .range-custom { margin-left: var(--space-3); margin-right: var(--space-3); }
   .range-custom .field { flex: 1 1 100%; }

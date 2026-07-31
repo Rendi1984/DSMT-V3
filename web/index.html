@@ -182,6 +182,12 @@
         <h1 class="audit-title">Directory changes</h1>
       </div>
       <div class="audit-controls">
+        <!-- Refresh sits before the search box because the log is written by
+             everyone, not just by this browser: with two operators signed in
+             the table on screen is out of date the moment the other one acts.
+             The stamp beside it says how stale what you are looking at is. -->
+        <span class="audit-stamp" id="auditStamp"></span>
+        <button class="btn btn-secondary" id="auditRefresh" type="button" title="Reload the audit log">Refresh</button>
         <input class="input" id="auditSearch" type="search" placeholder="Search target, operator or reason" autocomplete="off">
         <button class="btn btn-secondary" id="auditExport" type="button">Export</button>
       </div>

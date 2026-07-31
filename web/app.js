@@ -916,19 +916,46 @@ function loadAudit() {
   if (window_.from) { path += '&from=' + encodeURIComponent(window_.from); }
   if (window_.to)   { path += '&to=' + encodeURIComponent(window_.to); }
 
+  setAuditBusy(true);
+
   api(path).then(function (data) {
     state.auditRows = asArray(data.items);
     state.auditTotal = data.total || 0;
     state.auditSource = data.source || '';
+    setAuditBusy(false);
+    stampAudit();
     renderAudit();
   }).catch(function (err) {
     state.auditRows = [];
     state.auditTotal = 0;
     $('auditBody').innerHTML = '';
     $('auditLine').textContent = '';
+    setAuditBusy(false);
+    $('auditStamp').textContent = 'Not updated';
     renderAudit();
     toast('Could not read the audit log: ' + err.message, 'bad');
   });
+}
+
+/* The refresh button doubles as the progress indicator - there is no spinner
+   anywhere else in the console, and a button that does nothing visible when
+   pressed reads as a broken button. */
+function setAuditBusy(busy) {
+  var btn = $('auditRefresh');
+  if (!btn) { return; }
+  btn.disabled = busy;
+  btn.textContent = busy ? 'Refreshing...' : 'Refresh';
+}
+
+/* How stale the table is. Local clock time, not "5 minutes ago": a relative
+   label needs a timer to stay honest, and a wrong one on an audit screen is
+   worse than none. */
+function stampAudit() {
+  var el = $('auditStamp');
+  if (!el) { return; }
+  var d = new Date();
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  el.textContent = 'Updated ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 }
 
 /* Plain-language description of the window currently in force, so the count
@@ -2315,6 +2342,7 @@ function wireEvents() {
     loadAudit();
   });
 
+  $('auditRefresh').addEventListener('click', function () { loadAudit(); });
   $('auditExport').addEventListener('click', exportAudit);
 
   // ---- toolbar ----

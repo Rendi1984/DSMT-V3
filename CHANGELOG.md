@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.10.0** | 2026-07-31 | Refresh button on the Audit log, with a stamp saying how stale the table is | Refresh |
 | **1.9.2** | 2026-07-31 | Database section states the live server and database as fields; a 404 on a new route now names the cause | Refresh |
 | **1.9.1** | 2026-07-31 | Settings keeps only the section rail; the arrangement switch is gone | Refresh |
 | **1.9.0** | 2026-07-31 | Settings rearranged: a section rail with one section at a time, and the operator picks the arrangement | Refresh |
@@ -48,6 +49,35 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
+
+---
+
+## 1.10.0 — 2026-07-31
+
+**Refresh on the Audit log.**
+
+The audit log is the one table in the console written by *everyone*. Every
+other grid shows what this operator asked for; this one goes out of date the
+moment a second operator acts, and until now the only way to see their entry
+was to change a filter and change it back, or reload the page — which on a
+tab that costs a round trip to AD is a poor way to ask a small question.
+
+- **Refresh** sits in the Audit log toolbar, before the search box, and
+  reloads with the range, filter and search term already in force.
+- Beside it, **Updated HH:MM:SS** — how stale what you are reading is. It is
+  clock time, not "5 minutes ago": a relative label needs a timer to stay
+  honest, and a stale one on an audit screen is worse than none at all.
+- The button is its own progress indicator (*Refreshing...*, disabled while
+  in flight). There is no spinner anywhere else in this console, and a button
+  that does nothing visible when pressed reads as a broken button — which is
+  exactly the report that came back about Export in 1.7.5.
+- Narrow screens put the search box on its own line and let Refresh and
+  Export share the next one; the stamp stays, because staleness matters most
+  where you cannot see the whole table at once.
+
+Files: `web/index.html`, `web/app.css`, `web/app.js`,
+`server/lib/DsmtCommon.ps1` (version). Copy `web/*` and hard-refresh. No
+server change — `GET /api/audit` already took every parameter this needs.
 
 ---
 
