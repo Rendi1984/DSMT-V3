@@ -230,6 +230,22 @@ cause. Three shapes:
    fake-data section) — write down the pattern itself, not just each instance.
 
 ### Known instances
+- **[Shape 3] Modern CSS that degrades to nothing, with no error.** The first
+  real run of the console found every dialog, toast and popover invisible —
+  About, every action button, every result message. There was no JavaScript
+  error and every request returned 200; the handlers ran and the markup was
+  built. The cause was that all three overlays positioned themselves with
+  logical inset properties (`inset: 0`, `inset-inline-end`, `inset-block-end`)
+  which the browser ignored, dropping each element at its static position
+  behind an `overflow: hidden`. Fixed in 1.7.5 by using physical offsets.
+  **The pattern, not the instance: a CSS feature that is unsupported does not
+  fail loudly, it is discarded — and a layout that depends on it silently
+  becomes something else.** So in anything the console needs to be *visible*,
+  prefer the older property: `top/right/bottom/left` over `inset*`, `rgba()`
+  over `color-mix()`, `width`+`max-width` over `min()`, `vh` with `dvh` only
+  inside `@supports`. The rules and the reason are written at the top of
+  `web/app.css`. Note this cannot be caught by any check in this repo — the
+  dev container has no browser — so it is a code-review rule, not a test.
 - **[Shape 3] A platform default silently kills a long-running process.**
   Task Scheduler stops a task after 72 hours by default, which would have
   taken the console down every three days with no error — found by reading

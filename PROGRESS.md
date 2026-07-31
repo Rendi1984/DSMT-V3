@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.7.4` — matches the top entry of `CHANGELOG.md` and
+`1.7.5` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -32,82 +32,63 @@ its data is fabricated and every button is inert.
 
 ## Open tasks
 
-1. **[BLOCKER — first real run, 2026-07-31] The console renders but almost
-   nothing works.** Reported from a first install on `LAB.LOCAL`, no SQL.
-   **Fix this before anything else. Do not build new features on top of it.**
+1. **[FIXED IN 1.7.5 - NEEDS CONFIRMING ON THE LAB MACHINE] No overlay in the
+   console was visible.** Reported 2026-07-31 from the first real install.
 
-   ### What works
-   - Sign-in, and the session survives.
-   - The users grid loads real accounts from `LAB.LOCAL` (7 users, correct OUs,
-     correct status). So auth, the API, the AD reads and the attribute mapping
-     are all fine.
-   - Clicking a row loads the detail pane with real attributes and memberships.
-   - **Export** works — and it is the one action that does *not* open a dialog.
-   - The bell badge renders a count, so `/api/meta` and `renderNotifications()`
-     ran.
+   ### What was wrong
+   Dialogs, toasts and the notifications panel never appeared, so About, New
+   user, Import CSV, Columns and every detail-pane action did nothing, and
+   Export gave no feedback. Everything else worked: sign-in, the grid, the
+   detail pane, and the file download itself.
 
-   ### What is broken
-   - **Every button that opens a dialog does nothing**: About (from the header
-     *and* from the menu), New user, Import CSV, Columns, and every button in
-     the detail pane — Reset password, Unlock, Disable, Move OU, Add to group,
-     Delete. No dialog, no error on screen.
-   - **The notifications panel opens off the right edge of the viewport** and
-     is unreadable — it extends rightwards from the bell instead of being
-     right-aligned under it.
-   - Export gives no feedback that anything happened (the toast is not
-     appearing — which is consistent with the dialog problem: both are
-     overlays).
-   - With SQL configured: same behaviour, **and nothing is written to any
-     table**.
+   ### How it was identified
+   The browser console was **clean** and every request returned 200 -
+   including `/api/ous`, which is fetched *only* from inside the Move OU /
+   New user / New group / Import handlers. That proved the listeners fired,
+   the actions ran and the fetches succeeded; the failure was purely in making
+   the result visible. Which pointed at CSS, not JavaScript.
 
-   ### The pattern, and what it points at
-   Everything that fails is an **overlay** — dialog or toast. Everything that
-   works is either inline or a file download. Two candidates fit that:
+   All three overlays positioned themselves with **logical inset properties**
+   (`inset: 0`, `inset-inline-end`, `inset-block-end`). On a browser that
+   ignores those, each element falls back to its static position - the dialog
+   and toasts land below a container with `overflow: hidden`, and the bell
+   panel spills off the right edge. One cause, all three symptoms, no error.
 
-   a) **A JavaScript exception thrown from `openDialog`** (or from the toast
-      path), leaving `dispatchAction` dead. Checked statically and ruled out:
-      all 40 element ids `wireEvents()` touches exist in `index.html`, and
-      `openDialog` itself reads clean. So if it is JS, it is a runtime error
-      the console will name in one line.
+   ### The fix (1.7.5)
+   `web/app.css` rewritten with physical offsets, `rgba()` instead of
+   `color-mix()`, `width`+`max-width` instead of `min()`, and `dvh` demoted to
+   an `@supports` block. `.dialog-backdrop` is restated over the design
+   system's version, which is where `inset: 0` came from. The rules are
+   written at the top of the file with this incident as the reason.
 
-   b) **`web/app.css` served stale from the browser cache.** This fits the
-      bell panel precisely: without the `.bell-wrap { position: relative }`
-      rule the panel falls back to its static position and spills off-screen
-      to the right, exactly as reported. It would also explain missing
-      `[hidden] { display: none !important }` / `z-index` behaviour on the
-      dialog backdrop.
+   ### Confirm on the lab machine
+   Deploy `web\app.css`, **hard refresh (Ctrl+F5)**, then:
+   - About opens - from the header and from the menu.
+   - New user, Import CSV and Columns open.
+   - Every detail-pane button opens its dialog.
+   - Export shows a toast in the bottom-right corner.
+   - The bell panel opens *under* the bell and is fully readable.
 
-   ### Do this first, in order — it should settle it in minutes
-   1. **Open DevTools (F12) → Console.** Read the first red error. That alone
-      probably identifies it. Screenshot it.
-   2. **Network tab, disable cache, hard reload (Ctrl+Shift+R).** Confirm
-      `app.js` and `app.css` are served 200 with current content, not 304 from
-      cache, and that neither 404s.
-   3. In the Console run `typeof openDialog` and then `actionAbout()` directly.
-      If About opens that way, the wiring is at fault; if it throws, the error
-      text is the answer.
-   4. Check `data\dsmt-YYYY-MM-DD.log` on the server for anything logged at
-      the moment of a click.
+   **If any of that still fails**, the diagnosis was wrong and the next step is
+   to inspect the live element: right-click where the dialog should be ->
+   Inspect, find `#dialogBackdrop`, and read its computed `display`,
+   `position`, `top/left/width/height` and `z-index`. That says immediately
+   whether it is positioned off-screen, sized to zero, or covered.
 
-   ### Also to investigate, separately
-   - **SQL writes**: with `-SqlServer` set, `dbo.Operators` and `dbo.Sessions`
-     should have rows from sign-in alone, and `dbo.DirectoryUsers` from the
-     first grid load — none of which needs a working button. If those tables
-     are empty too, the failure is server-side and independent of the UI bug:
-     check the startup banner for `[ok] SQL Server ...` and the log for
-     `Could not record the operator in SQL` / `User snapshot failed`.
-   - `dbo.AuditLog` being empty is **expected** while no write action can be
-     performed, so it proves nothing on its own.
+   ### Still open from the same report - NOT fixed by 1.7.5
+   - **With SQL configured, nothing is written to any table.** `dbo.Operators`
+     and `dbo.Sessions` should get rows from sign-in alone, and
+     `dbo.DirectoryUsers` from the first grid load - none of which needs a
+     working button, so this is independent of the overlay bug. Check the
+     startup banner for `[ok] SQL Server ...`, then `data\dsmt-*.log` for
+     `Could not record the operator in SQL` or `User snapshot failed`, which
+     is where both paths report a failure rather than throwing.
+   - `dbo.AuditLog` being empty was expected while no write could succeed.
+     Recheck it once the buttons work.
 
-   ### Note for whoever picks this up
-   This is the first time any of this code has been executed. Everything
-   through 1.7.4 was verified statically only — that limitation is recorded
-   under "Attempted and deliberately NOT pursued" below, and this is exactly
-   the class of failure it predicted. Do not assume the rest of the acceptance
-   checklist passed; re-run it from the top once the overlays work.
-
-   gMSA testing is **not** worth attempting until this is fixed — agreed with
-   the reporter.
+   ### Note
+   This was the first execution of any of this code. Do not assume the rest of
+   the acceptance checklist passed - re-run it from the top.
 
 2. **Run the rest of the acceptance checklist against LAB.LOCAL** (blocked by
    task 1). Neither `Install-DSMT.ps1` nor
@@ -238,6 +219,14 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
   A browser refresh (F5) does *not* sign anyone out.
 - **[Shape 1] `prototype/` is not the product.** Every action there is `noop`;
   "it doesn't do anything" about those pages is not a DSMT bug.
+- **[Shape 3] Modern CSS that degrades to nothing, with no error.** Every
+  overlay in the console was invisible on the first real run — no JS error,
+  all requests 200 — because logical inset properties were ignored and each
+  element fell back to its static position behind an `overflow: hidden`.
+  Fixed in 1.7.5. **The pattern: unsupported CSS is discarded silently, so a
+  layout that depends on it quietly becomes something else.** Prefer the older
+  property for anything that must be visible; the rules are at the top of
+  `web/app.css`. No check in this repo can catch it — there is no browser here.
 - **[Shape 3] Snapshot-vs-live.** `dbo.DirectoryUsers` / `dbo.DirectoryGroups`
   are written after a live read and go stale immediately. Rendering the grids
   from them would silently show wrong data with no error — the exact pattern

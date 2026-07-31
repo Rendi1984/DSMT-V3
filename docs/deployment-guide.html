@@ -56,11 +56,11 @@ code { overflow-wrap: anywhere; word-break: break-word; }
 /* ---- table of contents ---- */
 .toc {
   position: sticky; top: 0; align-self: start; max-height: 100vh; overflow: auto;
-  padding: 28px 22px; border-inline-end: 1px solid var(--n-800); background: var(--surface);
+  padding: 28px 22px; border-right: 1px solid var(--n-800); background: var(--surface);
 }
 .toc-brand { font-size: 13px; letter-spacing: .12em; color: var(--accent-300); margin-bottom: 4px; }
 .toc-title { font-size: 19px; font-weight: 500; margin: 0 0 18px; }
-.toc ol { margin: 0; padding-inline-start: 20px; font-size: 14px; }
+.toc ol { margin: 0; padding-left: 20px; font-size: 14px; }
 /* On a wide screen the contents are simply always there; the disclosure
    control only earns its place on a phone. */
 .toc summary { display: none; }
@@ -68,7 +68,7 @@ code { overflow-wrap: anywhere; word-break: break-word; }
 .toc li { margin-bottom: 7px; }
 .toc a { color: var(--n-300); text-decoration: none; }
 .toc a:hover { color: var(--accent); }
-.toc .sub { list-style: none; padding-inline-start: 10px; margin-top: 5px; font-size: 13px; }
+.toc .sub { list-style: none; padding-left: 10px; margin-top: 5px; font-size: 13px; }
 .toc .sub a { color: var(--n-500); }
 .toc .sub[hidden] { display: none; }
 
@@ -149,11 +149,11 @@ pre .c { color: var(--n-500); }
 /* ---- callouts ---- */
 .note, .warn, .ok {
   border-radius: var(--radius); padding: 14px 18px; margin: 18px 0;
-  border-inline-start: 3px solid var(--n-700); background: var(--surface); font-size: 15px;
+  border-left: 3px solid var(--n-700); background: var(--surface); font-size: 15px;
 }
-.note { border-inline-start-color: var(--accent); }
-.warn { border-inline-start-color: var(--accent-300); background: var(--accent-900); }
-.ok   { border-inline-start-color: var(--n-500); }
+.note { border-left-color: var(--accent); }
+.warn { border-left-color: var(--accent-300); background: var(--accent-900); }
+.ok   { border-left-color: var(--n-500); }
 .note p:last-child, .warn p:last-child, .ok p:last-child { margin-bottom: 0; }
 .note p:first-child, .warn p:first-child, .ok p:first-child { margin-top: 0; }
 .box-title { display: block; color: var(--text); font-weight: 500; margin-bottom: 5px; }
@@ -168,11 +168,11 @@ td code { font-size: 13px; }
 /* ---- checklist ---- */
 .check { list-style: none; padding: 0; margin: 14px 0; }
 .check li {
-  padding: 9px 0; padding-inline-start: 30px; position: relative;
+  padding: 9px 0; padding-left: 30px; position: relative;
   border-bottom: 1px solid var(--n-900);
 }
 .check li::before {
-  content: ""; position: absolute; inset-inline-start: 0; top: 15px;
+  content: ""; position: absolute; left: 0; top: 15px;
   width: 13px; height: 13px; border: 1px solid var(--n-700); border-radius: 3px;
 }
 
@@ -193,17 +193,17 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
   .wrap { grid-template-columns: 1fr; }
   .toc {
     position: static; max-height: none;
-    border-inline-end: 0; border-bottom: 1px solid var(--n-800);
+    border-right: 0; border-bottom: 1px solid var(--n-800);
     padding: 18px 20px;
     /* Respect the notch and the home indicator on iPhones. */
-    padding-top: max(18px, env(safe-area-inset-top));
+    padding-top: 18px; padding-top: max(18px, env(safe-area-inset-top));
   }
   .toc summary { display: list-item; cursor: pointer; }
   main {
     padding: 24px 20px 60px;
-    padding-left: max(20px, env(safe-area-inset-left));
-    padding-right: max(20px, env(safe-area-inset-right));
-    padding-bottom: max(60px, env(safe-area-inset-bottom));
+    padding-left: 20px; padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: 20px; padding-right: max(20px, env(safe-area-inset-right));
+    padding-bottom: 60px; padding-bottom: max(60px, env(safe-area-inset-bottom));
   }
   h1 { font-size: 27px; }
   h2 { font-size: 21px; margin-top: 40px; }
@@ -212,7 +212,8 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 
 @media (max-width: 640px) {
   body { font-size: 15.5px; line-height: 1.65; }
-  main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  main { padding-left: 16px; padding-left: max(16px, env(safe-area-inset-left));
+         padding-right: 16px; padding-right: max(16px, env(safe-area-inset-right)); }
   h1 { font-size: 24px; }
   h2 { font-size: 19px; }
   pre { padding: 12px 14px; }
@@ -244,7 +245,7 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
   table:not(.cols) td, table:not(.cols) th { padding: 8px 6px; }
   table:not(.cols) td:first-child { width: 40%; }
 
-  .check li { padding-inline-start: 26px; }
+  .check li { padding-left: 26px; }
 }
 
 /* Coarse pointers: comfortable tap targets in the contents list. */

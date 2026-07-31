@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.7.5** | 2026-07-31 | **Fixes the first-run blocker** - no dialog, toast or notification panel was visible | Refresh |
 | **1.7.4** | 2026-07-31 | Guide's contents sidebar collapses by group; 1.7.3's body-section collapsing reverted | Docs only |
 | **1.7.3** | 2026-07-31 | Deployment guide sections collapse (superseded by 1.7.4) | Docs only |
 | **1.7.2** | 2026-07-31 | Version history indexed at the top of this file | Docs only |
@@ -44,6 +45,57 @@ The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
 
 ---
+
+## 1.7.5 — 2026-07-31
+**Fixes the first-run blocker: no overlay in the console was visible.**
+
+Reported from the first real install on `LAB.LOCAL`: dialogs never appeared,
+so About, New user, Import CSV, Columns and every detail-pane action - Reset
+password, Unlock, Disable, Move OU, Add to group, Delete - all did nothing.
+Toasts never appeared, so Export gave no feedback. The notifications panel
+opened off the right edge of the screen.
+
+**It was not JavaScript.** The browser console was clean and every request
+returned 200 - including `/api/ous`, which is fetched only from inside the
+Move OU / New user / New group / Import handlers. So the listeners fired, the
+actions ran, the fetches succeeded and the markup was built. What failed was
+making it visible.
+
+**Cause**: all three overlays positioned themselves with logical inset
+properties, and on the browser in use those were ignored - leaving each
+element at its static position:
+
+| Overlay | Was | Result |
+| --- | --- | --- |
+| Dialog | `inset: 0` (from the design system) | Collapsed to content size at the foot of the page, clipped by `body { overflow: hidden }` |
+| Toasts | `inset-block-end` + `inset-inline-end` | Landed below the fold, clipped the same way |
+| Bell panel | `inset-inline-end: 0` | Spilled to the right, off-screen |
+
+One cause, all three symptoms, and no error anywhere - which is why it read as
+"nothing works".
+
+**Fix** (`web/app.css`, rewritten):
+- Every overlay now uses physical offsets - `top` / `right` / `bottom` /
+  `left`. `.dialog-backdrop` is restated in full over the design system's
+  version, since that is where `inset: 0` came from.
+- `color-mix()` replaced with `rgba()` throughout, including a redefinition of
+  `--color-divider`, which the design system builds with `color-mix()` - where
+  unsupported the variable is invalid and every border drawn from it silently
+  disappears.
+- `min()` replaced with `width` + `max-width`; `.dialog` gets an explicit
+  width because the design system sizes it with `min()`.
+- `100dvh` moved into an `@supports` block as progressive enhancement; the
+  base layout uses `vh`.
+- Logical padding/margin replaced with physical. The console is LTR-only by
+  decision, so they bought nothing and cost a class of failure that produces
+  no error message.
+- The rules for what may and may not be used are written at the top of the
+  file, with this incident as the reason.
+- `docs/deployment-guide.html` given the same treatment.
+
+Deploy: **`web\app.css` and `docs\deployment-guide.html`. Hard refresh
+(Ctrl+F5) - the old stylesheet will otherwise be served from cache.** No
+server restart needed.
 
 ## 1.7.4 — 2026-07-31
 `docs/deployment-guide.html` - the contents sidebar collapses instead of the
