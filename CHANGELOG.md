@@ -21,7 +21,8 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
-| **1.7.3** | 2026-07-31 | Deployment guide sections collapse; expand/collapse all | Docs only |
+| **1.7.4** | 2026-07-31 | Guide's contents sidebar collapses by group; 1.7.3's body-section collapsing reverted | Docs only |
+| **1.7.3** | 2026-07-31 | Deployment guide sections collapse (superseded by 1.7.4) | Docs only |
 | **1.7.2** | 2026-07-31 | Version history indexed at the top of this file | Docs only |
 | **1.7.1** | 2026-07-30 | Deployment guide made usable on phones: tables reflow to cards, contents collapse, iOS safe areas | Docs only |
 | **1.7.0** | 2026-07-30 | Idle timeout default cut to 15 minutes, capped at 8 hours; bounds enforced on every route | Restart |
@@ -43,6 +44,28 @@ The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
 onwards are on `feature/service-identity` and have not been merged.
 
 ---
+
+## 1.7.4 — 2026-07-31
+`docs/deployment-guide.html` - the contents sidebar collapses instead of the
+document.
+
+- **1.7.3 collapsed the wrong thing.** It made the body sections collapsible;
+  what was wanted was the contents list on the left. The body is back to a
+  normally flowing document, and the sidebar is now what folds.
+- Each contents entry that has sub-sections gets its own disclosure control,
+  and **all of them start collapsed** - the sidebar opens as twelve top-level
+  entries instead of thirty.
+- **The chevron toggles, the link navigates.** They are separate targets, so
+  one click never does two things - the usual complaint with this pattern.
+- The group containing the section you are reading **opens itself** and is
+  marked in the accent colour, so a collapsed sidebar still shows where you
+  are. Driven by the URL fragment, so it works from a contents click, a
+  cross-reference, or a pasted link.
+- Printing expands the whole contents list first.
+- Keyboard and screen readers: `aria-expanded` and `aria-controls` on every
+  toggle, and a visible focus ring.
+
+Deploy: replace `docs\deployment-guide.html`. Documentation only.
 
 ## 1.7.3 — 2026-07-31
 `docs/deployment-guide.html` - every section now collapses.

@@ -70,58 +70,48 @@ code { overflow-wrap: anywhere; word-break: break-word; }
 .toc a:hover { color: var(--accent); }
 .toc .sub { list-style: none; padding-inline-start: 10px; margin-top: 5px; font-size: 13px; }
 .toc .sub a { color: var(--n-500); }
+.toc .sub[hidden] { display: none; }
+
+/* ---- collapsible groups in the sidebar ----
+   An entry with sub-sections gets a disclosure control of its own. The link
+   still navigates; only the chevron toggles - so a click never does two
+   things at once, which is the usual complaint with this pattern. */
+.toc .grp-row { display: flex; align-items: baseline; gap: 6px; }
+.toc .grp-row a { flex: 1; min-width: 0; }
+.toc .grp-toggle {
+  flex: none; cursor: pointer; padding: 0;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: 5px;
+  color: var(--n-500);
+}
+.toc .grp-toggle::before {
+  content: "";
+  width: 6px; height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(-45deg);
+  transition: transform .15s ease;
+}
+.toc .grp-toggle[aria-expanded="true"] { color: var(--accent); }
+.toc .grp-toggle[aria-expanded="true"]::before { transform: translateY(-2px) rotate(45deg); }
+.toc .grp-toggle:hover { background: var(--n-900); color: var(--accent); }
+.toc .grp-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The group holding the section you are reading is marked, so the sidebar
+   still tells you where you are while collapsed. */
+.toc .grp.current > .grp-row > a { color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .toc .grp-toggle::before { transition: none; }
+}
 
 main { padding: 40px 48px 90px; max-width: 1000px; min-width: 0; }
 
 h1 { font-size: 34px; font-weight: 500; line-height: 1.2; margin: 0 0 10px; }
 h2 {
-  font-size: 25px; font-weight: 500; margin: 0; padding: 0;
-  border: 0;
-}
-
-/* ---- collapsible sections ----
-   Every h2 section is a details element. Only the first is open, so it opens
-   as a readable index of the whole guide rather than 80KB of prose. */
-.sect {
+  font-size: 25px; font-weight: 500; margin: 54px 0 14px; padding-top: 20px;
   border-top: 1px solid var(--n-800);
-  margin-top: 10px;
-}
-.sect > summary {
-  list-style: none; cursor: pointer;
-  display: flex; align-items: baseline; gap: 12px;
-  padding: 18px 0 14px;
-  /* A generous target: this is the primary navigation of the document. */
-  min-height: 44px;
-}
-.sect > summary::-webkit-details-marker { display: none; }
-.sect > summary::before {
-  content: "";
-  flex: none; margin-top: 8px;
-  width: 8px; height: 8px;
-  border-right: 1.5px solid var(--accent);
-  border-bottom: 1.5px solid var(--accent);
-  transform: rotate(-45deg);
-  transition: transform .15s ease;
-}
-.sect[open] > summary::before { transform: rotate(45deg); }
-.sect > summary:hover h2 { color: var(--accent-300); }
-.sect > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.sect-body { padding-bottom: 26px; }
-.sect-body > *:first-child { margin-top: 0; }
-
-/* Expand / collapse all */
-.sect-controls { display: flex; gap: 10px; margin: 22px 0 4px; }
-.sect-controls button {
-  font: inherit; font-size: 13px; cursor: pointer;
-  color: var(--n-300); background: transparent;
-  border: 1px solid var(--n-800); border-radius: 99px;
-  padding: 7px 14px; min-height: 36px;
-}
-.sect-controls button:hover { color: var(--accent); border-color: var(--accent-700); }
-.sect-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-@media (prefers-reduced-motion: reduce) {
-  .sect > summary::before { transition: none; }
 }
 h3 { font-size: 18px; font-weight: 500; margin: 30px 0 10px; color: var(--n-200); }
 h4 { font-size: 15px; font-weight: 500; margin: 22px 0 8px; color: var(--n-300); }
@@ -216,12 +206,8 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
     padding-bottom: max(60px, env(safe-area-inset-bottom));
   }
   h1 { font-size: 27px; }
-  h2 { font-size: 21px; }
+  h2 { font-size: 21px; margin-top: 40px; }
   h3 { font-size: 17px; }
-  /* Section headings are the main way through the guide on a phone, so they
-     get a full-width, comfortably tall tap target. */
-  .sect > summary { padding: 16px 0; min-height: 48px; }
-  .sect-controls button { flex: 1; }
 }
 
 @media (max-width: 640px) {
@@ -267,13 +253,7 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
   .toc li { margin-bottom: 10px; }
 }
 @media print {
-  .toc, .sect-controls { display: none; }
-  /* Belt and braces alongside the beforeprint handler: a section that is
-     still closed must not print as a bare heading. */
-  .sect > summary::before { display: none; }
-  .sect, .sect-body { display: block; }
-  .sect { border-top: 1px solid #ccc; page-break-inside: auto; }
-  .sect > summary { padding: 12px 0 6px; }
+  .toc { display: none; }
   body { background: #fff; color: #000; }
   main { max-width: none; padding: 0; }
   p, li, td { color: #222; }
@@ -289,16 +269,19 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
   <details id="tocDetails" open>
   <summary>Contents</summary>
   <ol>
-    <li><a href="#intro">Before you start: is there an install process?</a></li>
-    <li><a href="#auto">The fast path - the automated installer</a>
-      <ul class="sub">
+    <li class="grp">
+      <span class="grp-row"><a href="#intro">Before you start: is there an install process?</a></li>
+    <li><a href="#auto">The fast path - the automated installer</a><button class="grp-toggle" type="button" aria-expanded="false" aria-controls="sub-intro" aria-label="Show sub-sections of Before you start: is there an install process?
+    The fast path - the automated installer"></button></span>
+      <ul class="sub" id="sub-intro" hidden>
         <li><a href="#auto-run">How to run it</a></li>
         <li><a href="#auto-does">What it does, step by step</a></li>
         <li><a href="#auto-limits">What it cannot do on its own</a></li>
       </ul>
     </li>
-    <li><a href="#forms">Every installation form, at a glance</a>
-      <ul class="sub">
+    <li class="grp">
+      <span class="grp-row"><a href="#forms">Every installation form, at a glance</a><button class="grp-toggle" type="button" aria-expanded="false" aria-controls="sub-forms" aria-label="Show sub-sections of Every installation form, at a glance"></button></span>
+      <ul class="sub" id="sub-forms" hidden>
         <li><a href="#forms-run">A. How it stays running</a></li>
         <li><a href="#forms-account">B. Which account</a></li>
         <li><a href="#forms-storage">C. Where records are stored</a></li>
@@ -306,30 +289,38 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
         <li><a href="#forms-examples">Putting it together</a></li>
       </ul>
     </li>
-    <li><a href="#s1">Step 1 - Prerequisites</a>
-      <ul class="sub">
+    <li class="grp">
+      <span class="grp-row"><a href="#s1">Step 1 - Prerequisites</a><button class="grp-toggle" type="button" aria-expanded="false" aria-controls="sub-s1" aria-label="Show sub-sections of Step 1 - Prerequisites"></button></span>
+      <ul class="sub" id="sub-s1" hidden>
         <li><a href="#s1-matrix">What each choice requires</a></li>
       </ul>
     </li>
-    <li><a href="#s2">Step 2 - Prepare the machine</a></li>
+    <li class="grp">
+      <span class="grp-row"><a href="#s2">Step 2 - Prepare the machine</a></li>
     <li><a href="#s3">Step 3 - Copy the files</a></li>
-    <li><a href="#s4">Step 4 - Run account and AD delegation</a>
-      <ul class="sub">
+    <li><a href="#s4">Step 4 - Run account and AD delegation</a><button class="grp-toggle" type="button" aria-expanded="false" aria-controls="sub-s2" aria-label="Show sub-sections of Step 2 - Prepare the machine
+    Step 3 - Copy the files
+    Step 4 - Run account and AD delegation"></button></span>
+      <ul class="sub" id="sub-s2" hidden>
         <li><a href="#s4-account">4.2 Which account DSMT runs as</a></li>
         <li><a href="#s4-change">4.3 Changing it later</a></li>
         <li><a href="#s4-identity">4.4 Identity mode</a></li>
         <li><a href="#s4-delegation">4.5 Delegating rights</a></li>
       </ul>
     </li>
-    <li><a href="#s5">Step 5 - Prepare SQL Server</a></li>
+    <li class="grp">
+      <span class="grp-row"><a href="#s5">Step 5 - Prepare SQL Server</a></li>
     <li><a href="#s6">Step 6 - Network, port and listener reservation</a></li>
-    <li><a href="#s7">Step 7 - First run</a>
-      <ul class="sub">
+    <li><a href="#s7">Step 7 - First run</a><button class="grp-toggle" type="button" aria-expanded="false" aria-controls="sub-s5" aria-label="Show sub-sections of Step 5 - Prepare SQL Server
+    Step 6 - Network, port and listener reservation
+    Step 7 - First run"></button></span>
+      <ul class="sub" id="sub-s5" hidden>
         <li><a href="#s7-banner">Reading the preflight banner</a></li>
       </ul>
     </li>
-    <li><a href="#s8">Step 8 - The first connection</a>
-      <ul class="sub">
+    <li class="grp">
+      <span class="grp-row"><a href="#s8">Step 8 - The first connection</a><button class="grp-toggle" type="button" aria-expanded="false" aria-controls="sub-s8" aria-label="Show sub-sections of Step 8 - The first connection"></button></span>
+      <ul class="sub" id="sub-s8" hidden>
         <li><a href="#s8-how">How to sign in</a></li>
         <li><a href="#s8-behind">What happens behind the scenes</a></li>
         <li><a href="#s8-idle">Idle timeout</a></li>
@@ -349,92 +340,74 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 
 <script>
 /* The only script in this file, and it makes no requests.
-   Without it the guide is still complete and readable - every section is a
-   native details element, so collapsing and expanding work without it. What
-   this adds is the three things that would otherwise be annoying: jumping to a
-   collapsed section, expand/collapse all, and printing everything. */
+   It drives the contents sidebar: groups start collapsed, the chevron opens
+   them, and the group you are reading opens itself. */
 (function () {
   'use strict';
 
   var onPhone = window.matchMedia('(max-width: 900px)').matches;
-
-  // On a phone the contents list starts collapsed, so the document itself
-  // begins at the top of the screen instead of below a full-page index.
   var toc = document.getElementById('tocDetails');
+
+  // On a phone the whole contents list starts collapsed, so the document
+  // begins at the top of the screen rather than below a full-page index.
   if (toc && onPhone) { toc.removeAttribute('open'); }
 
-  function sections() {
-    return Array.prototype.slice.call(document.querySelectorAll('details.sect'));
+  var groups = Array.prototype.slice.call(document.querySelectorAll('.toc .grp'));
+
+  function setGroup(grp, open) {
+    var button = grp.querySelector('.grp-toggle');
+    var sub = grp.querySelector('.sub');
+    if (!button || !sub) { return; }
+    button.setAttribute('aria-expanded', String(open));
+    if (open) { sub.removeAttribute('hidden'); } else { sub.setAttribute('hidden', ''); }
   }
 
-  /* A link into a collapsed section has to open it, or the anchor lands on
-     nothing and the guide looks broken. */
-  function revealHash() {
+  groups.forEach(function (grp) {
+    var button = grp.querySelector('.grp-toggle');
+    if (!button) { return; }
+    button.addEventListener('click', function (e) {
+      // The chevron toggles; the link beside it still navigates. One click
+      // never does both.
+      e.preventDefault();
+      e.stopPropagation();
+      setGroup(grp, button.getAttribute('aria-expanded') !== 'true');
+    });
+  });
+
+  /* Open the group that contains whatever section is being read, and close
+     the others, so the sidebar stays short without losing your place. */
+  function syncToHash() {
     var id = (window.location.hash || '').replace('#', '');
     if (!id) { return; }
 
-    var target = document.getElementById(id);
-    if (!target) { return; }
-
-    var node = target;
-    while (node && node !== document.body) {
-      if (node.tagName === 'DETAILS') { node.open = true; }
-      node = node.parentNode;
-    }
-    // Re-scroll: the browser positioned the page before the section opened.
-    window.setTimeout(function () {
-      target.scrollIntoView({ block: 'start', behavior: 'auto' });
-    }, 0);
+    groups.forEach(function (grp) {
+      var links = grp.querySelectorAll('a[href="#' + id + '"]');
+      var owns = links.length > 0;
+      grp.classList.toggle('current', owns);
+      if (owns) { setGroup(grp, true); }
+    });
   }
 
-  window.addEventListener('hashchange', revealHash);
-  revealHash();
+  window.addEventListener('hashchange', syncToHash);
+  syncToHash();
 
   // Following a contents link on a phone should leave the index behind.
   if (toc) {
     toc.addEventListener('click', function (e) {
-      if (onPhone && e.target && e.target.tagName === 'A') {
-        toc.removeAttribute('open');
-      }
+      var link = e.target && e.target.closest ? e.target.closest('a') : null;
+      if (onPhone && link) { toc.removeAttribute('open'); }
     });
   }
 
-  function setAll(open) {
-    sections().forEach(function (d) { d.open = open; });
-  }
-
-  var expand = document.getElementById('expandAll');
-  var collapse = document.getElementById('collapseAll');
-  if (expand) { expand.addEventListener('click', function () { setAll(true); }); }
-  if (collapse) {
-    collapse.addEventListener('click', function () {
-      setAll(false);
-      window.scrollTo(0, 0);
-    });
-  }
-
-  /* Printing a guide with everything collapsed would produce a page of
-     headings, so open it all first and restore afterwards. */
-  var beforePrint = [];
-  function openForPrint() {
-    beforePrint = sections().map(function (d) { return d.open; });
-    setAll(true);
+  // A printed contents list should show everything it has.
+  function openAllForPrint() {
     if (toc) { toc.open = true; }
+    groups.forEach(function (grp) { setGroup(grp, true); });
   }
-  function restoreAfterPrint() {
-    sections().forEach(function (d, i) { d.open = beforePrint[i]; });
-    if (toc && onPhone) { toc.removeAttribute('open'); }
-  }
-
-  window.addEventListener('beforeprint', openForPrint);
-  window.addEventListener('afterprint', restoreAfterPrint);
-
-  // Safari reaches print through a media query rather than those events.
+  window.addEventListener('beforeprint', openAllForPrint);
   if (window.matchMedia) {
     var printQuery = window.matchMedia('print');
-    var onChange = function (mql) {
-      if (mql.matches) { openForPrint(); } else { restoreAfterPrint(); }
-    };
+    var onChange = function (mql) { if (mql.matches) { openAllForPrint(); } };
     if (printQuery.addEventListener) { printQuery.addEventListener('change', onChange); }
     else if (printQuery.addListener) { printQuery.addListener(onChange); }
   }
@@ -451,14 +424,7 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 </p>
 
 <!-- ==================================================================== -->
-
-<div class="sect-controls">
-  <button type="button" id="expandAll">Expand all</button>
-  <button type="button" id="collapseAll">Collapse all</button>
-</div>
-<details class="sect" open data-sect="intro">
-<summary><h2 id="intro">Before you start: is there an install process?</h2></summary>
-<div class="sect-body">
+<h2 id="intro">Before you start: is there an install process?</h2>
 
 <p>
   <strong>There is no MSI and no setup.exe</strong> - DSMT is not packaged as a
@@ -500,11 +466,7 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 </div>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="auto">
-<summary><h2 id="auto">The fast path - the automated installer</h2></summary>
-<div class="sect-body">
+<h2 id="auto">The fast path - the automated installer</h2>
 
 <p class="lead">
   <code>Install-DSMT.ps1</code> performs every preparation step described in
@@ -630,11 +592,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="forms">
-<summary><h2 id="forms">Every installation form, at a glance</h2></summary>
-<div class="sect-body">
+<h2 id="forms">Every installation form, at a glance</h2>
 
 <p class="lead">
   There is one installer. What differs is four independent choices you make
@@ -784,11 +742,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 </div>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s1">
-<summary><h2 id="s1">Step 1 - Prerequisites</h2></summary>
-<div class="sect-body">
+<h2 id="s1">Step 1 - Prerequisites</h2>
 <span class="step-badge">STEP 1 OF 11</span>
 
 <h3>1.1 The machine that will run the tool</h3>
@@ -901,11 +855,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 </div>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s2">
-<summary><h2 id="s2">Step 2 - Prepare the machine</h2></summary>
-<div class="sect-body">
+<h2 id="s2">Step 2 - Prepare the machine</h2>
 <span class="step-badge">STEP 2 OF 11</span>
 
 <div class="ok">
@@ -942,11 +892,7 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s3">
-<summary><h2 id="s3">Step 3 - Copy the files</h2></summary>
-<div class="sect-body">
+<h2 id="s3">Step 3 - Copy the files</h2>
 <span class="step-badge">STEP 3 OF 11</span>
 
 <p>Copy the project folder as it is, for example to <code>C:\DSMT</code>. The structure must be preserved:</p>
@@ -984,11 +930,7 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s4">
-<summary><h2 id="s4">Step 4 - Run account and AD delegation</h2></summary>
-<div class="sect-body">
+<h2 id="s4">Step 4 - Run account and AD delegation</h2>
 <span class="step-badge">STEP 4 OF 11</span>
 
 <h3>4.1 Two separate identities - understand the distinction</h3>
@@ -1181,11 +1123,7 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s5">
-<summary><h2 id="s5">Step 5 - Prepare SQL Server</h2></summary>
-<div class="sect-body">
+<h2 id="s5">Step 5 - Prepare SQL Server</h2>
 <span class="step-badge">STEP 5 OF 11</span>
 
 <div class="ok">
@@ -1261,11 +1199,7 @@ ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];</code></pre>
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s6">
-<summary><h2 id="s6">Step 6 - Network, port and listener reservation</h2></summary>
-<div class="sect-body">
+<h2 id="s6">Step 6 - Network, port and listener reservation</h2>
 <span class="step-badge">STEP 6 OF 11</span>
 
 <div class="ok">
@@ -1293,11 +1227,7 @@ ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];</code></pre>
     -Protocol TCP -LocalPort 8080 -Action Allow</code></pre>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s7">
-<summary><h2 id="s7">Step 7 - First run</h2></summary>
-<div class="sect-body">
+<h2 id="s7">Step 7 - First run</h2>
 <span class="step-badge">STEP 7 OF 11</span>
 
 <h3>7.1 Starting it</h3>
@@ -1347,11 +1277,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Start-DSMT.ps1<
          and the audit log is written to JSONL files in C:\DSMT\data</code></pre>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s8">
-<summary><h2 id="s8">Step 8 - The first connection</h2></summary>
-<div class="sect-body">
+<h2 id="s8">Step 8 - The first connection</h2>
 <span class="step-badge">STEP 8 OF 11</span>
 
 <h3 id="s8-how">8.1 How to sign in</h3>
@@ -1494,11 +1420,7 @@ jdoe</code></pre>
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s9">
-<summary><h2 id="s9">Step 9 - Acceptance test</h2></summary>
-<div class="sect-body">
+<h2 id="s9">Step 9 - Acceptance test</h2>
 <span class="step-badge">STEP 9 OF 11</span>
 
 <p>
@@ -1557,11 +1479,7 @@ jdoe</code></pre>
 </div>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s10">
-<summary><h2 id="s10">Step 10 - HTTPS before production</h2></summary>
-<div class="sect-body">
+<h2 id="s10">Step 10 - HTTPS before production</h2>
 <span class="step-badge">STEP 10 OF 11</span>
 
 <div class="warn">
@@ -1581,11 +1499,7 @@ jdoe</code></pre>
 <p><strong>4.</strong> Start with <code>-Port 8443</code>.</p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s11">
-<summary><h2 id="s11">Step 11 - Running permanently</h2></summary>
-<div class="sect-body">
+<h2 id="s11">Step 11 - Running permanently</h2>
 <span class="step-badge">STEP 11 OF 11</span>
 
 <p>
@@ -1692,11 +1606,7 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="s12">
-<summary><h2 id="s12">Updating a version, shipping a change</h2></summary>
-<div class="sect-body">
+<h2 id="s12">Updating a version, shipping a change</h2>
 
 <h3>What requires what</h3>
 <table>
@@ -1717,11 +1627,7 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 </p>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="trouble">
-<summary><h2 id="trouble">Troubleshooting</h2></summary>
-<div class="sect-body">
+<h2 id="trouble">Troubleshooting</h2>
 
 <table class="cols">
   <tr><th>Symptom</th><th>Likely cause</th><th>What to do</th></tr>
@@ -1796,11 +1702,7 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 </table>
 
 <!-- ==================================================================== -->
-</div>
-</details>
-<details class="sect" data-sect="ref">
-<summary><h2 id="ref">Appendices</h2></summary>
-<div class="sect-body">
+<h2 id="ref">Appendices</h2>
 
 <h3>A. Install-DSMT.ps1 parameters</h3>
 <table class="cols">
@@ -1906,8 +1808,6 @@ asmith,Anna Smith,Anna,Smith,Finance,Analyst,,OU=Finance,DC=lab,DC=local</code><
   About dialog, read from <code>$script:DsmtVersion</code>.
 </p>
 
-</div>
-</details>
 </main>
 </div>
 </body>
