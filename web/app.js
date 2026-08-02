@@ -592,17 +592,25 @@ function setTab(tab, force) {
 
   var isAudit    = (tab === 'audit');
   var isSettings = (tab === 'settings');
+  var isTools    = (tab === 'tools');
+  var isFullView = (isAudit || isSettings || isTools);
 
-  $('directoryView').hidden = (isAudit || isSettings);
+  $('directoryView').hidden = isFullView;
   $('auditView').hidden     = !isAudit;
   $('settingsView').hidden  = !isSettings;
+  $('toolsView').hidden     = !isTools;
 
   // The detail pane belongs to the directory views only.
-  $('detailPane').hidden = (isAudit || isSettings);
+  $('detailPane').hidden = isFullView;
   closeDetail();
 
   if (isSettings) {
     loadSettings();
+    return;
+  }
+
+  if (isTools) {
+    loadTools();
     return;
   }
 
@@ -1630,6 +1638,534 @@ function storageLine() {
 }
 
 // ---------------------------------------------------------------------------
+// Tools
+//
+// Same layout as Settings: a rail of tools, one open at a time. The rail is
+// data, so adding the next tool is one entry here plus its render function.
+//
+// EVERY TOOL MUST READ ITS STATE LIVE. None of them may remember what the
+// operator clicked and paint a tick from it. A wizard that shows step 3 as
+// done because the button was pressed - rather than because the directory
+// says so - is the fake-data failure in CLAUDE.md wearing a different hat,
+// and on this screen it would send someone away believing a gMSA works when
+// it does not.
+// ---------------------------------------------------------------------------
+
+var TOOLS = [
+  { key: 'gmsa', label: 'gMSA', hint: 'Service account for DSMT', render: renderGmsaTool }
+];
+
+var TOOL_KEY = 'dsmt.tools.current';
+
+function loadTools() {
+  var current = readSetting(TOOL_KEY, TOOLS[0].key);
+  var known = false;
+  var i;
+  for (i = 0; i < TOOLS.length; i++) { if (TOOLS[i].key === current) { known = true; } }
+  if (!known) { current = TOOLS[0].key; }
+
+  var navHtml = '';
+  for (i = 0; i < TOOLS.length; i++) {
+    navHtml += '<button class="set-nav-item' + (TOOLS[i].key === current ? ' is-active' : '') +
+               '" type="button" data-tool="' + TOOLS[i].key + '">' +
+               '<span>' + esc(TOOLS[i].label) + '</span>' +
+               '<span class="set-nav-hint">' + esc(TOOLS[i].hint) + '</span></button>';
+  }
+  $('toolsNav').innerHTML = navHtml;
+
+  var items = $('toolsNav').querySelectorAll('.set-nav-item');
+  for (i = 0; i < items.length; i++) {
+    items[i].onclick = function () {
+      writeSetting(TOOL_KEY, this.getAttribute('data-tool'));
+      loadTools();
+    };
+  }
+
+  for (i = 0; i < TOOLS.length; i++) {
+    if (TOOLS[i].key === current) { TOOLS[i].render(); }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   gMSA.
+
+   Five steps, and the honest split between them is the point:
+
+     1  KDS root key      - forest-wide, once ever. Ten-hour convergence.
+     2  Permitted group   - DSMT creates it, as the operator.
+     3  Computers in it   - DSMT manages them, as the operator.
+     4  Install on host   - CANNOT run here: needs local administrator.
+     5  Point DSMT at it  - Settings -> Service account.
+
+   Steps 4 and 5 produce commands rather than pretending. The alternative -
+   a button that fails with an access error - teaches nothing.
+   --------------------------------------------------------------------------- */
+
+function renderGmsaTool() {
+  $('toolsBody').innerHTML = '<p class="muted-sm">Reading the directory...</p>';
+
+  var group = readSetting('dsmt.tools.gmsa.group', '');
+  var name  = readSetting('dsmt.tools.gmsa.name', '');
+
+  var path = '/api/tools/gmsa/state?group=' + encodeURIComponent(group) +
+             '&gmsa=' + encodeURIComponent(name);
+
+  // The OU list is needed by step 2 and is cached after the first fetch;
+  // without this the "Create it in" list would be empty until the operator
+  // happened to open a dialog that loads it.
+  withOus(function () {
+    api(path).then(function (data) {
+      state.gmsa = data;
+      paintGmsa();
+    }).catch(function (err) {
+      $('toolsBody').innerHTML = '<div class="error-box"><strong>Could not read the directory.</strong>' +
+                                 esc(explainApiError(err.message)) + '</div>';
+    });
+  });
+}
+
+function gmsaStep(n, title, status, bodyHtml) {
+  return '<section class="set-card tool-step tool-' + esc(status) + '" id="gmsaStep' + n + '">' +
+           '<div class="tool-step-head">' +
+             '<span class="tool-step-n">' + n + '</span>' +
+             '<h2 class="set-h">' + esc(title) + '</h2>' +
+             '<span class="health-verdict">' + esc(gmsaWord(status)) + '</span>' +
+           '</div>' +
+           bodyHtml +
+         '</section>';
+}
+
+function gmsaWord(status) {
+  if (status === 'ok') { return 'Done'; }
+  if (status === 'warn') { return 'Waiting'; }
+  if (status === 'manual') { return 'Run by hand'; }
+  return 'To do';
+}
+
+function paintGmsa() {
+  var d = state.gmsa;
+  var kds = d.kds || {};
+  var group = d.groupName || '';
+  var name = d.gmsaName || '';
+
+  // ---- requirements, always visible -----------------------------------
+  var intro =
+    '<section class="set-card">' +
+      '<h2 class="set-h">What a gMSA needs</h2>' +
+      '<p class="dialog-note">A group managed service account has no password anyone knows: ' +
+      'the domain generates it, rotates it every 30 days, and it never expires. It is the right ' +
+      'way to run DSMT. Standing one up for the first time needs all of the following.</p>' +
+      '<ul class="tool-reqs">' +
+        '<li><strong>Domain functional level 2012 or higher.</strong> Not negotiable - gMSAs do not exist below it.</li>' +
+        '<li><strong>A KDS root key in the forest</strong>, created once, ever. Step 1 below.</li>' +
+        '<li><strong>Ten hours</strong> after that key is created before any gMSA can be used, ' +
+        'while domain controllers converge on it. This is the step that surprises people.</li>' +
+        '<li><strong>Rights:</strong> creating the KDS root key needs Enterprise or Domain Admin in ' +
+        'the forest root. Creating the group and the account needs delegated create rights in the ' +
+        'target OU. Installing on a host needs <strong>local administrator on that host</strong>.</li>' +
+        '<li><strong>Windows Server 2012 or later</strong> on any machine that will use the account.</li>' +
+      '</ul>' +
+      '<p class="dialog-note">DSMT performs steps 1 to 3 as <strong>you</strong>, so the domain ' +
+      'enforces your rights and records your name. Step 4 cannot run here at all - it needs local ' +
+      'administrator on the DSMT host, which this process deliberately does not have.</p>' +
+    '</section>';
+
+  // ---- step 1: KDS root key -------------------------------------------
+  var kdsStatus = 'todo';
+  var kdsBody = '';
+
+  if (kds.Error) {
+    kdsBody = '<div class="error-box"><strong>Could not read the KDS root keys.</strong>' +
+              esc(kds.Error) + '</div>';
+  } else if (kds.Exists && kds.Usable) {
+    kdsStatus = 'ok';
+    kdsBody = '<p class="set-good">This forest has a usable KDS root key, effective ' +
+              esc(formatStamp(kds.EffectiveUtc)) + '. Nothing to do here - a second key would not help.</p>';
+  } else if (kds.Exists && !kds.Usable) {
+    kdsStatus = 'warn';
+    kdsBody = '<p class="set-warn">The key exists but is <strong>not usable yet</strong>: about ' +
+              esc(String(kds.HoursRemaining)) + ' hour(s) remain of the ' + esc(String(d.waitHours)) +
+              '-hour convergence window (usable from ' + esc(formatStamp(kds.UsableFromUtc)) + '). ' +
+              'Creating a gMSA before then fails with an error that mentions none of this. ' +
+              '<strong>Wait - this is not a fault.</strong></p>';
+  } else {
+    kdsBody =
+      '<p class="set-warn">This forest has <strong>no KDS root key</strong>, so no gMSA can exist ' +
+      'anywhere in it. This is the one-time step that makes gMSAs available to the organisation.</p>' +
+      '<div class="tool-danger">' +
+        '<p><strong>Read before doing this.</strong> It writes to the forest configuration ' +
+        'partition. It affects every domain in the forest, it needs Enterprise or Domain Admin in ' +
+        'the forest root, and it is normally done once in the lifetime of the forest.</p>' +
+        '<p>After it succeeds, <strong>nothing works for ' + esc(String(d.waitHours)) + ' hours</strong> ' +
+        'while domain controllers converge. That wait is expected and cannot be skipped safely.</p>' +
+      '</div>' +
+      // Two independent confirmations. Deliberately worded as two different
+      // statements rather than "are you sure" twice, so ticking both is an
+      // actual second thought and not a reflex.
+      '<label class="tool-check"><input type="checkbox" id="kdsAck1"> ' +
+        'I understand this changes the <strong>forest</strong>, not just this domain, and that ' +
+        'gMSAs will not work for ' + esc(String(d.waitHours)) + ' hours afterwards.</label>' +
+      '<label class="tool-check"><input type="checkbox" id="kdsAck2"> ' +
+        'I am authorised to make a forest-level change, and I have checked that no KDS root key ' +
+        'already exists.</label>' +
+      '<div class="field"><label for="kdsReason">Reason for the audit log (required)</label>' +
+      '<input class="input" id="kdsReason" placeholder="Ticket ID or justification" autocomplete="off"></div>' +
+      '<label class="tool-check"><input type="checkbox" id="kdsBackdate"> ' +
+        '<strong>Lab only:</strong> backdate the effective time so the key works immediately. ' +
+        'Never do this on a production forest - it lets a controller be asked for a key it has ' +
+        'not replicated yet.</label>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-primary" type="button" id="kdsCreate"' +
+        (d.kdsLocal ? '' : ' disabled') + '>Create the KDS root key</button>' +
+      '</div>' +
+      (d.kdsLocal
+        ? '<p class="dialog-note"><strong>Note on attribution:</strong> this one action runs as the ' +
+          'account the DSMT server runs as, not as you. <code>Add-KdsRootKey</code> accepts no ' +
+          'credential and no target server - that is a limitation of the cmdlet, not a choice here. ' +
+          'The audit record names you as the initiator and says so explicitly.</p>'
+        : '<p class="set-warn">The <code>Kds</code> module is not present on the DSMT host, so this ' +
+          'cannot run from here. Run the command below on a domain controller.</p>') +
+      '<label class="set-cmd-label">On a domain controller, in an elevated PowerShell:</label>' +
+      '<div class="secret" id="kdsCmd">Add-KdsRootKey -EffectiveImmediately</div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="copyKdsCmd">Copy command</button>' +
+      '</div>' +
+      '<div class="set-result" id="kdsResult"></div>';
+  }
+
+  // ---- step 2: the group ----------------------------------------------
+  var groupStatus = d.groupExists ? 'ok' : 'todo';
+  var groupBody =
+    '<p class="dialog-note">The computers allowed to retrieve the gMSA password are named by a ' +
+    '<strong>group</strong>, not listed on the account. A list has to be rewritten every time a ' +
+    'host is added or replaced; a group does not. Put the DSMT host in it - and every host that ' +
+    'will ever run DSMT.</p>' +
+    '<div class="set-form">' +
+      '<div class="field"><label for="gmsaGroup">Group name</label>' +
+      '<input class="input" id="gmsaGroup" placeholder="DSMT-gMSA-Hosts" autocomplete="off" value="' +
+      esc(group) + '"></div>' +
+      '<div class="field"><label for="gmsaGroupOu">Create it in</label>' +
+      '<select class="input" id="gmsaGroupOu"></select></div>' +
+    '</div>' +
+    (d.groupExists
+      ? '<p class="set-good">Found: <strong>' + esc(group) + '</strong> at ' + esc(d.groupDn) + '</p>'
+      : '<p class="muted-sm">No group by that name yet.</p>') +
+    '<div class="field"><label for="gmsaGroupReason">Reason for the audit log (required to create)</label>' +
+    '<input class="input" id="gmsaGroupReason" placeholder="Ticket ID or justification" autocomplete="off"></div>' +
+    '<div class="set-actions">' +
+      '<button class="btn btn-secondary" type="button" id="gmsaCheckGroup">Check</button>' +
+      '<button class="btn btn-primary" type="button" id="gmsaCreateGroup"' +
+      (d.groupExists ? ' disabled' : '') + '>Create the group</button>' +
+    '</div>' +
+    '<div class="set-result" id="gmsaGroupResult"></div>';
+
+  // ---- step 3: the computers ------------------------------------------
+  var members = asArray(d.members);
+  var memberStatus = 'todo';
+  if (d.groupExists && members.length > 0) { memberStatus = 'ok'; }
+  else if (d.groupExists) { memberStatus = 'warn'; }
+
+  var memberRows = members.length
+    ? '<table class="table dsmt-table tool-table"><thead><tr>' +
+        '<th>Computer</th><th>DNS name</th><th>Enabled</th><th></th></tr></thead><tbody>' +
+        members.map(function (m) {
+          return '<tr>' +
+            '<td data-label="Computer" class="cell-name">' + esc(m.name) + '</td>' +
+            '<td data-label="DNS name" class="cell-muted">' + esc(m.dns || '-') + '</td>' +
+            '<td data-label="Enabled" class="' + (m.enabled ? 'res-success' : 'res-other') + '">' +
+              (m.enabled ? 'Yes' : 'No') + '</td>' +
+            '<td data-label=""><button class="btn btn-ghost btn-undo" type="button" data-drop="' +
+              esc(m.sam) + '">Remove</button></td>' +
+          '</tr>';
+        }).join('') +
+      '</tbody></table>'
+    : '<p class="' + (d.groupExists ? 'set-warn' : 'muted-sm') + '">' +
+      (d.groupExists
+        ? 'The group is empty. A gMSA whose group has no computers installs on nothing - this is ' +
+          'the most common reason a correct-looking account refuses to work.'
+        : 'Create the group first.') + '</p>';
+
+  var memberBody =
+    '<p class="dialog-note">Add the machine account of every host that may use this gMSA. ' +
+    'Type the computer name, the name with a trailing <code>$</code>, or the full DNS name - all ' +
+    'three are accepted. <strong>Every name is resolved against AD before anything is changed</strong>, ' +
+    'so a typo cannot silently add nothing.</p>' +
+    memberRows +
+    '<div class="field"><label for="gmsaComputers">Computers to add (one per line, or comma separated)</label>' +
+    '<textarea class="input" id="gmsaComputers" rows="3" placeholder="DSMT01&#10;DSMT02.lab.local"></textarea></div>' +
+    '<div class="field"><label for="gmsaMemberReason">Reason for the audit log (required)</label>' +
+    '<input class="input" id="gmsaMemberReason" placeholder="Ticket ID or justification" autocomplete="off"></div>' +
+    '<div class="set-actions">' +
+      '<button class="btn btn-primary" type="button" id="gmsaAddComputers"' +
+      (d.groupExists ? '' : ' disabled') + '>Add to the group</button>' +
+    '</div>' +
+    '<p class="dialog-note">A computer added to a group does not see that membership until it ' +
+    '<strong>reboots</strong> - group membership is read into the machine\'s Kerberos ticket at ' +
+    'startup. If step 4 fails on a host you just added, reboot it before investigating anything else.</p>' +
+    '<div class="set-result" id="gmsaMemberResult"></div>';
+
+  // ---- step 4: the account --------------------------------------------
+  var acctStatus = d.gmsaExists ? 'ok' : 'todo';
+  var accounts = asArray(d.accounts);
+
+  var acctBody =
+    '<p class="dialog-note">The account itself. The permitted-computers group is set <strong>when it ' +
+    'is created</strong>, not afterwards: an account created without it looks perfectly healthy in ' +
+    'AD and then fails to install on every host, with an error naming none of this.</p>' +
+    '<div class="set-form">' +
+      '<div class="field"><label for="gmsaName">Account name (no trailing $)</label>' +
+      '<input class="input" id="gmsaName" placeholder="gmsa-dsmt" autocomplete="off" value="' + esc(name) + '"></div>' +
+      '<div class="field"><label for="gmsaDns">DNS host name</label>' +
+      '<input class="input" id="gmsaDns" placeholder="gmsa-dsmt.' + esc(d.domain || 'lab.local') +
+      '" autocomplete="off"></div>' +
+    '</div>' +
+    (d.gmsaExists
+      ? '<p class="set-good">Found: <strong>' + esc(name) + '$</strong>' +
+        (d.gmsaPrincipals && d.gmsaPrincipals.length
+          ? ' - retrievable by ' + esc(asArray(d.gmsaPrincipals).join(', '))
+          : ' - <strong>but no principals may retrieve its password.</strong> It will not install anywhere.') +
+        '</p>'
+      : '') +
+    (accounts.length
+      ? '<p class="muted-sm">gMSAs already in this domain: ' +
+        esc(accounts.map(function (a) { return a.name; }).join(', ')) + '</p>'
+      : '<p class="muted-sm">There are no gMSAs in this domain yet.</p>') +
+    '<div class="field"><label for="gmsaAcctReason">Reason for the audit log (required)</label>' +
+    '<input class="input" id="gmsaAcctReason" placeholder="Ticket ID or justification" autocomplete="off"></div>' +
+    '<div class="set-actions">' +
+      '<button class="btn btn-primary" type="button" id="gmsaCreateAcct"' +
+      ((d.groupExists && !d.gmsaExists) ? '' : ' disabled') + '>Create the gMSA</button>' +
+    '</div>' +
+    '<div class="set-result" id="gmsaAcctResult"></div>';
+
+  // ---- step 5: install, by hand ----------------------------------------
+  var acctForCmd = name || 'gmsa-dsmt';
+  var installBody =
+    '<p class="dialog-note">This one <strong>cannot</strong> run from the console. It writes to the ' +
+    'local machine\'s secret store and needs local administrator on the DSMT host - which this ' +
+    'process deliberately does not have. Run it there, in an elevated PowerShell.</p>' +
+    '<label class="set-cmd-label">On the DSMT host:</label>' +
+    '<div class="secret" id="gmsaInstallCmd">Install-ADServiceAccount -Identity ' + esc(acctForCmd) + '\n' +
+    'Test-ADServiceAccount -Identity ' + esc(acctForCmd) + '</div>' +
+    '<div class="set-actions">' +
+      '<button class="btn btn-secondary" type="button" id="copyInstallCmd">Copy commands</button>' +
+    '</div>' +
+    '<p class="dialog-note"><code>Test-ADServiceAccount</code> returning <strong>True</strong> is the ' +
+    'only proof that any of this worked. If it returns False, the usual cause is that the host has ' +
+    'not rebooted since it was added to the group.</p>' +
+    '<p class="dialog-note">Then point DSMT at it: <strong>Settings -> Service account</strong>, ' +
+    'which builds the command that moves the service, the URL reservation, the data-folder ' +
+    'permissions and the SQL login together.</p>';
+
+  $('toolsBody').innerHTML =
+    intro +
+    gmsaStep(1, 'KDS root key (once per forest)', kdsStatus, kdsBody) +
+    gmsaStep(2, 'Group of permitted computers', groupStatus, groupBody) +
+    gmsaStep(3, 'Computers in that group', memberStatus, memberBody) +
+    gmsaStep(4, 'The gMSA itself', acctStatus, acctBody) +
+    gmsaStep(5, 'Install it on the host', 'manual', installBody);
+
+  wireGmsa();
+}
+
+function wireGmsa() {
+  var d = state.gmsa;
+
+  function reload() { renderGmsaTool(); }
+
+  // ---- step 1 ----
+  if ($('kdsCreate')) {
+    $('kdsCreate').addEventListener('click', function () {
+      var ack1 = $('kdsAck1').checked;
+      var ack2 = $('kdsAck2').checked;
+      var reason = $('kdsReason').value.trim();
+
+      if (!ack1 || !ack2) {
+        setResult('kdsResult', 'Both confirmations are required. This is a forest-level change.', false);
+        return;
+      }
+      if (!reason) { setResult('kdsResult', 'Give a reason for the audit log.', false); return; }
+
+      setResult('kdsResult', 'Creating the KDS root key...', true);
+      api('/api/tools/gmsa/kds', {
+        method: 'POST',
+        body: {
+          reason: reason,
+          backdate: $('kdsBackdate').checked,
+          confirmUnderstood: ack1,
+          confirmAuthorised: ack2
+        }
+      }).then(function (res) {
+        toast('KDS root key created.', 'good');
+        setResult('kdsResult', res.message + ' (executed as ' + res.ranAs + ')', true);
+        window.setTimeout(reload, 1200);
+      }).catch(function (err) {
+        setResult('kdsResult', explainApiError(err.message), false);
+      });
+    });
+  }
+
+  if ($('copyKdsCmd')) {
+    $('copyKdsCmd').addEventListener('click', function () {
+      copyText($('kdsCmd').textContent, 'kdsResult');
+    });
+  }
+
+  // ---- step 2 ----
+  if ($('gmsaGroupOu')) {
+    var ouSel = $('gmsaGroupOu');
+    var ous = asArray(state.ous);
+    if (!ous.length) {
+      ouSel.innerHTML = '<option value="' + esc(d.defaultOu || '') + '">' +
+                        esc(d.defaultOu || 'Default Computers container') + '</option>';
+    } else {
+      ouSel.innerHTML = ous.map(function (o) {
+        return '<option value="' + esc(o.dn) + '">' + esc(o.path) + '</option>';
+      }).join('');
+    }
+  }
+
+  if ($('gmsaCheckGroup')) {
+    $('gmsaCheckGroup').addEventListener('click', function () {
+      writeSetting('dsmt.tools.gmsa.group', $('gmsaGroup').value.trim());
+      reload();
+    });
+  }
+
+  if ($('gmsaCreateGroup')) {
+    $('gmsaCreateGroup').addEventListener('click', function () {
+      var name = $('gmsaGroup').value.trim();
+      var reason = $('gmsaGroupReason').value.trim();
+      if (!name) { setResult('gmsaGroupResult', 'Name the group.', false); return; }
+      if (!reason) { setResult('gmsaGroupResult', 'Give a reason for the audit log.', false); return; }
+
+      setResult('gmsaGroupResult', 'Creating ' + name + '...', true);
+      api('/api/tools/gmsa/group', {
+        method: 'POST',
+        body: { name: name, ou: $('gmsaGroupOu').value, reason: reason }
+      }).then(function (res) {
+        writeSetting('dsmt.tools.gmsa.group', name);
+        if (res.ok) { toast('Group created.', 'good'); reload(); }
+        else { setResult('gmsaGroupResult', gmsaFirstError(res), false); }
+      }).catch(function (err) {
+        setResult('gmsaGroupResult', explainApiError(err.message), false);
+      });
+    });
+  }
+
+  // ---- step 3 ----
+  if ($('gmsaAddComputers')) {
+    $('gmsaAddComputers').addEventListener('click', function () {
+      var raw = $('gmsaComputers').value;
+      var list = raw.split(/[\n,;]+/).map(function (s) { return s.trim(); })
+                    .filter(function (s) { return s.length > 0; });
+      var reason = $('gmsaMemberReason').value.trim();
+
+      if (!list.length) { setResult('gmsaMemberResult', 'Name at least one computer.', false); return; }
+      if (!reason) { setResult('gmsaMemberResult', 'Give a reason for the audit log.', false); return; }
+
+      setResult('gmsaMemberResult', 'Resolving ' + list.length + ' computer(s)...', true);
+      api('/api/tools/gmsa/members', {
+        method: 'POST',
+        body: { group: d.groupName, mode: 'add', computers: list, reason: reason }
+      }).then(function (res) {
+        if (res.ok) { toast('Added to the group.', 'good'); reload(); }
+        else { setResult('gmsaMemberResult', gmsaFirstError(res), false); }
+      }).catch(function (err) {
+        setResult('gmsaMemberResult', explainApiError(err.message), false);
+      });
+    });
+  }
+
+  var drops = $('toolsBody').querySelectorAll('[data-drop]');
+  for (var i = 0; i < drops.length; i++) {
+    drops[i].onclick = function () {
+      var who = this.getAttribute('data-drop');
+      var reason = $('gmsaMemberReason').value.trim();
+      if (!reason) {
+        setResult('gmsaMemberResult', 'Give a reason first - removing a computer is an audited change.', false);
+        return;
+      }
+      api('/api/tools/gmsa/members', {
+        method: 'POST',
+        body: { group: d.groupName, mode: 'remove', computers: [who], reason: reason }
+      }).then(function () {
+        toast('Removed from the group.', 'good');
+        reload();
+      }).catch(function (err) {
+        setResult('gmsaMemberResult', explainApiError(err.message), false);
+      });
+    };
+  }
+
+  // ---- step 4 ----
+  if ($('gmsaCreateAcct')) {
+    $('gmsaCreateAcct').addEventListener('click', function () {
+      var name = $('gmsaName').value.trim();
+      var reason = $('gmsaAcctReason').value.trim();
+      if (!name) { setResult('gmsaAcctResult', 'Name the account.', false); return; }
+      if (!reason) { setResult('gmsaAcctResult', 'Give a reason for the audit log.', false); return; }
+
+      setResult('gmsaAcctResult', 'Creating ' + name + '$...', true);
+      api('/api/tools/gmsa/account', {
+        method: 'POST',
+        body: { name: name, dns: $('gmsaDns').value.trim(), group: d.groupName, reason: reason }
+      }).then(function (res) {
+        writeSetting('dsmt.tools.gmsa.name', name);
+        if (res.ok) { toast('gMSA created.', 'good'); reload(); }
+        else { setResult('gmsaAcctResult', gmsaFirstError(res), false); }
+      }).catch(function (err) {
+        setResult('gmsaAcctResult', explainApiError(err.message), false);
+      });
+    });
+  }
+
+  // ---- step 5 ----
+  if ($('copyInstallCmd')) {
+    $('copyInstallCmd').addEventListener('click', function () {
+      copyText($('gmsaInstallCmd').textContent, '');
+    });
+  }
+}
+
+/* A bulk-action response reports per target; with one target the useful
+   message is that target's error, not "it failed". */
+function gmsaFirstError(res) {
+  var rows = asArray(res.results);
+  for (var i = 0; i < rows.length; i++) {
+    if (!rows[i].ok && rows[i].error) { return rows[i].error; }
+  }
+  return 'The directory refused the change.';
+}
+
+function copyText(text, resultId) {
+  var done = function () {
+    if (resultId) { setResult(resultId, 'Copied to the clipboard.', true); }
+    else { toast('Copied to the clipboard.', 'good'); }
+  };
+
+  // navigator.clipboard needs a secure context, which http://host:8080 is not.
+  // The textarea fallback is not legacy cruft here - it is the path that
+  // actually runs on most DSMT installations.
+  if (window.navigator && window.navigator.clipboard && window.navigator.clipboard.writeText) {
+    window.navigator.clipboard.writeText(text).then(done, function () { legacyCopy(text, done); });
+    return;
+  }
+  legacyCopy(text, done);
+}
+
+function legacyCopy(text, done) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '-1000px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { toast('Could not copy.', 'bad'); }
+  document.body.removeChild(ta);
+}
+
+// ---------------------------------------------------------------------------
 // Settings - a full view, not a dialog
 //
 // It renders inline and reports inline. Nothing here depends on an overlay
@@ -2214,29 +2750,11 @@ function wireSettings(bounds) {
   name.addEventListener('input', buildCommand);
   buildCommand();
 
+  // One copy path for the whole console - see copyText(). It was duplicated
+  // here with its own fallback until the Tools screen needed the same thing.
   $('copyAcctCmd').addEventListener('click', function () {
-    var text = $('acctCmd').textContent;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        toast('Command copied.');
-      }).catch(function () { selectCommand(); });
-    } else {
-      selectCommand();
-    }
+    copyText($('acctCmd').textContent, '');
   });
-
-  function selectCommand() {
-    // Clipboard API needs a secure context; over plain HTTP it is absent, so
-    // fall back to selecting the text for the operator to copy.
-    var node = $('acctCmd');
-    if (window.getSelection && document.createRange) {
-      var range = document.createRange();
-      range.selectNodeContents(node);
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-  }
 
   // ---- port ----
   $('applyPort').addEventListener('click', function () {

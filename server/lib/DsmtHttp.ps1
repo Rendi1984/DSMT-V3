@@ -1245,6 +1245,260 @@ function Invoke-DsmtApi {
                 return
             }
 
+            # ---------------------------------------------------------------
+            # Tools -> gMSA
+            # ---------------------------------------------------------------
+
+            '^/api/tools/gmsa/state$' {
+                if ($method -ne 'GET') { break }
+
+                $groupName = [string](Get-DsmtQueryValue -Request $Request -Name 'group')
+                $gmsaName  = [string](Get-DsmtQueryValue -Request $Request -Name 'gmsa')
+
+                $state = Get-DsmtGmsaState -Credential $session.Credential -GroupName $groupName -GmsaName $gmsaName
+                Send-DsmtJson -Response $Response -Data @{
+                    ok             = $state.Ok
+                    error          = $state.Error
+                    kds            = $state.Kds
+                    kdsLocal       = $state.KdsLocal
+                    groupName      = $state.GroupName
+                    groupExists    = $state.GroupExists
+                    groupDn        = $state.GroupDn
+                    members        = @($state.Members)
+                    gmsaName       = $state.GmsaName
+                    gmsaExists     = $state.GmsaExists
+                    gmsaDns        = $state.GmsaDns
+                    gmsaPrincipals = @($state.GmsaPrincipals)
+                    accounts       = @($state.Accounts)
+                    defaultOu      = $state.DefaultOu
+                    domain         = $state.DomainDns
+                    waitHours      = $script:DsmtKdsWaitHours
+                }
+                return
+            }
+
+            '^/api/tools/gmsa/kds$' {
+                if ($method -ne 'POST') { break }
+
+                $body     = Read-DsmtBody -Request $Request
+                $reason   = ([string](Get-DsmtBodyValue -Body $body -Name 'reason')).Trim()
+                $backdate = [bool](Get-DsmtBodyValue -Body $body -Name 'backdate' -Default $false)
+
+                # Two independent confirmations, both required, both checked
+                # here rather than only in the browser. This writes an object
+                # to the FOREST configuration partition - the blast radius is
+                # every domain in the forest, and it is not a thing to do
+                # because one button was clicked by accident.
+                $ack1 = [bool](Get-DsmtBodyValue -Body $body -Name 'confirmUnderstood' -Default $false)
+                $ack2 = [bool](Get-DsmtBodyValue -Body $body -Name 'confirmAuthorised' -Default $false)
+
+                if (-not $ack1 -or -not $ack2) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message 'Both confirmations are required before a KDS root key is created.'
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($reason)) {
+                    Send-DsmtError -Response $Response -Message 'Give a reason for the audit log.' -StatusCode 400
+                    return
+                }
+
+                $existing = Get-DsmtKdsStatus -Credential $session.Credential
+                if ($existing.Ok -and $existing.Exists) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message 'This forest already has a KDS root key. A second one is not needed and will not help - if gMSA creation is failing, the cause is elsewhere.'
+                    return
+                }
+
+                $controller = ''
+                try { $controller = Get-DsmtServer -Credential $session.Credential } catch { }
+
+                # ATTRIBUTION GAP, recorded rather than hidden: Add-KdsRootKey
+                # takes no credential, so this one call runs as the account the
+                # server runs as. The audit record names the operator who
+                # initiated it and says so explicitly.
+                $whoRan = $env:USERDOMAIN + '\' + $env:USERNAME
+                $created = New-DsmtKdsRootKey -Backdate $backdate
+
+                $detail = 'Initiated by ' + $session.Account + '; executed in the server process as ' + $whoRan +
+                          ' because Add-KdsRootKey accepts no credential.'
+                if ($backdate) { $detail += ' Effective time backdated (lab shortcut).' }
+                if (-not $created.Ok) { $detail += ' ' + $created.Error }
+
+                $outcome = 'Success'
+                if (-not $created.Ok) { $outcome = 'Failed' }
+
+                $forestLabel = 'the forest'
+                try { $forestLabel = 'forest of ' + (Get-DsmtConfig).Domain } catch { }
+
+                Write-DsmtAudit -Action 'Create KDS root key' -Target $forestLabel `
+                                -Operator $session.Account -Reason $reason -Result $outcome `
+                                -Category 'session' -Controller $controller -Detail $detail
+
+                if (-not $created.Ok) {
+                    Send-DsmtError -Response $Response -Message $created.Error -StatusCode 400
+                    return
+                }
+
+                Write-DsmtLog -Message ($session.Account + ' created the forest KDS root key (backdated: ' + [string]$backdate + ')')
+                Send-DsmtJson -Response $Response -Data @{
+                    ok        = $true
+                    backdated = $created.Backdated
+                    message   = $created.Message
+                    ranAs     = $whoRan
+                }
+                return
+            }
+
+            '^/api/tools/gmsa/group$' {
+                if ($method -ne 'POST') { break }
+
+                $body   = Read-DsmtBody -Request $Request
+                $name   = ([string](Get-DsmtBodyValue -Body $body -Name 'name')).Trim()
+                $path   = ([string](Get-DsmtBodyValue -Body $body -Name 'ou')).Trim()
+                $reason = ([string](Get-DsmtBodyValue -Body $body -Name 'reason')).Trim()
+
+                if ([string]::IsNullOrWhiteSpace($name)) {
+                    Send-DsmtError -Response $Response -Message 'Name the group.' -StatusCode 400
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($path)) {
+                    Send-DsmtError -Response $Response -Message 'Choose the OU to create the group in.' -StatusCode 400
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($reason)) {
+                    Send-DsmtError -Response $Response -Message 'Give a reason for the audit log.' -StatusCode 400
+                    return
+                }
+
+                $outcome = Invoke-DsmtBulkAction -Session $session -Targets @($name) -Action 'Create gMSA group' `
+                    -Reason $reason -Category 'group' -DetailSuffix ('in ' + $path) -Operation {
+                        param($target)
+                        New-DsmtGmsaGroup -Credential $session.Credential -Name $target -Path $path
+                    }
+
+                Send-DsmtJson -Response $Response -Data $outcome
+                return
+            }
+
+            '^/api/tools/gmsa/members$' {
+                if ($method -ne 'POST') { break }
+
+                $body    = Read-DsmtBody -Request $Request
+                $group   = ([string](Get-DsmtBodyValue -Body $body -Name 'group')).Trim()
+                $mode    = ([string](Get-DsmtBodyValue -Body $body -Name 'mode' -Default 'add')).Trim()
+                $reason  = ([string](Get-DsmtBodyValue -Body $body -Name 'reason')).Trim()
+                $names   = Get-DsmtBodyValue -Body $body -Name 'computers' -Default @()
+
+                if ([string]::IsNullOrWhiteSpace($group)) {
+                    Send-DsmtError -Response $Response -Message 'Name the group first.' -StatusCode 400
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($reason)) {
+                    Send-DsmtError -Response $Response -Message 'Give a reason for the audit log.' -StatusCode 400
+                    return
+                }
+
+                $wanted = @()
+                foreach ($n in @($names)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$n)) { $wanted += ([string]$n).Trim() }
+                }
+                if ($wanted.Count -eq 0) {
+                    Send-DsmtError -Response $Response -Message 'Name at least one computer.' -StatusCode 400
+                    return
+                }
+
+                # Resolve every name to a real computer account BEFORE changing
+                # anything. A typo that silently adds nothing is the failure
+                # this whole screen exists to prevent - the account would look
+                # correct and refuse to install on the host that was missed.
+                $resolved = @()
+                $missing  = @()
+                foreach ($n in $wanted) {
+                    $c = Get-DsmtComputerAccount -Credential $session.Credential -Name $n
+                    if ($null -eq $c) { $missing += $n } else { $resolved += [string]$c.DistinguishedName }
+                }
+
+                if ($missing.Count -gt 0) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message ('No computer account found for: ' + ($missing -join ', ') + '. Nothing was changed.')
+                    return
+                }
+
+                $label = 'Add computer to gMSA group'
+                if ($mode -eq 'remove') { $label = 'Remove computer from gMSA group' }
+
+                $outcome = Invoke-DsmtBulkAction -Session $session -Targets $resolved -Action $label `
+                    -Reason $reason -Category 'group' -DetailSuffix ($mode + ' ' + $group) -Operation {
+                        param($target)
+                        if ($mode -eq 'remove') {
+                            Remove-DsmtGroupMember -Credential $session.Credential -Group $group -Members @($target)
+                        } else {
+                            Add-DsmtGroupMember -Credential $session.Credential -Group $group -Members @($target)
+                        }
+                    }
+
+                Send-DsmtJson -Response $Response -Data $outcome
+                return
+            }
+
+            '^/api/tools/gmsa/account$' {
+                if ($method -ne 'POST') { break }
+
+                $body   = Read-DsmtBody -Request $Request
+                $name   = ([string](Get-DsmtBodyValue -Body $body -Name 'name')).Trim().TrimEnd('$')
+                $dns    = ([string](Get-DsmtBodyValue -Body $body -Name 'dns')).Trim()
+                $group  = ([string](Get-DsmtBodyValue -Body $body -Name 'group')).Trim()
+                $reason = ([string](Get-DsmtBodyValue -Body $body -Name 'reason')).Trim()
+
+                if ([string]::IsNullOrWhiteSpace($name)) {
+                    Send-DsmtError -Response $Response -Message 'Name the gMSA.' -StatusCode 400
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($group)) {
+                    Send-DsmtError -Response $Response -Message 'Choose the group of permitted computers.' -StatusCode 400
+                    return
+                }
+                if ([string]::IsNullOrWhiteSpace($reason)) {
+                    Send-DsmtError -Response $Response -Message 'Give a reason for the audit log.' -StatusCode 400
+                    return
+                }
+
+                # Refuse early and explain, rather than letting AD return
+                # "Key does not exist" - which names none of this.
+                $kds = Get-DsmtKdsStatus -Credential $session.Credential
+                if ($kds.Ok -and -not $kds.Exists) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message 'This forest has no KDS root key, so no gMSA can be created. Create the key first - it is the step above.'
+                    return
+                }
+                if ($kds.Ok -and $kds.Exists -and -not $kds.Usable) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message ('The KDS root key exists but is not usable yet: about ' + [string]$kds.HoursRemaining +
+                                  ' hour(s) remain of the ' + [string]$script:DsmtKdsWaitHours +
+                                  '-hour convergence window. This is expected, not a fault.')
+                    return
+                }
+
+                if ([string]::IsNullOrWhiteSpace($dns)) {
+                    $domainDns = ''
+                    try { $domainDns = (Get-DsmtDomainInfo -Credential $session.Credential).domain } catch { }
+                    if (-not [string]::IsNullOrWhiteSpace($domainDns)) { $dns = $name + '.' + $domainDns }
+                }
+                if ([string]::IsNullOrWhiteSpace($dns)) {
+                    Send-DsmtError -Response $Response -Message 'Give the DNS host name for the account.' -StatusCode 400
+                    return
+                }
+
+                $outcome = Invoke-DsmtBulkAction -Session $session -Targets @($name) -Action 'Create gMSA' `
+                    -Reason $reason -Category 'user' -DetailSuffix ('retrievable by ' + $group) -Operation {
+                        param($target)
+                        New-DsmtGmsa -Credential $session.Credential -Name $target -DnsHostName $dns -Group $group
+                    }
+
+                Send-DsmtJson -Response $Response -Data $outcome
+                return
+            }
+
             '^/api/health$' {
                 if ($method -ne 'GET') { break }
                 Send-DsmtJson -Response $Response -Data (Get-DsmtHealth -Session $session)
