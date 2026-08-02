@@ -48,8 +48,8 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
-onwards are on `feature/service-identity` and have not been merged.
+`main` carries **1.11.0**: 1.5.0 through 1.11.0 were merged from
+`feature/service-identity` in one pull request. The last tag is `v1.4.0`.
 
 ---
 
