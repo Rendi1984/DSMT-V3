@@ -46,6 +46,10 @@ var state = {
   notifications: [],
   pageLimitHit: false,
   storage: null,
+  identity: null,
+  settings: null,
+  sessionMinutes: 0,
+  publisher: '',
   busy: 0
 };
 
@@ -185,9 +189,118 @@ function clearToken() {
 }
 
 function signOutLocal() {
+  stopIdleWatch();
   clearToken();
   state.user = null;
   showLogin();
+}
+
+// ---------------------------------------------------------------------------
+// Idle timeout
+//
+// The server is the enforcement: it drops a session that has not been used for
+// SessionMinutes, and nothing the browser does can extend that. This timer
+// exists so the operator is WARNED before it happens, instead of discovering
+// it as a failed action mid-task.
+//
+// Only real interaction counts as activity. Background work does not reset the
+// clock - otherwise a page left open on a dashboard would keep a session alive
+// forever, which defeats the point of having a timeout at all.
+// ---------------------------------------------------------------------------
+
+var IDLE_WARN_SECONDS = 60;
+
+var idle = {
+  minutes: 0,
+  lastActivity: 0,
+  tick: null,
+  warning: false,
+  countdown: 0
+};
+
+function startIdleWatch(minutes) {
+  idle.minutes = minutes || 0;
+  stopIdleWatch();
+  if (!idle.minutes) { return; }
+
+  noteActivity();
+
+  ['mousedown', 'keydown', 'touchstart', 'wheel', 'focus'].forEach(function (name) {
+    document.addEventListener(name, noteActivity, true);
+  });
+
+  idle.tick = window.setInterval(checkIdle, 1000);
+}
+
+function stopIdleWatch() {
+  if (idle.tick) { window.clearInterval(idle.tick); idle.tick = null; }
+  ['mousedown', 'keydown', 'touchstart', 'wheel', 'focus'].forEach(function (name) {
+    document.removeEventListener(name, noteActivity, true);
+  });
+  idle.warning = false;
+}
+
+function noteActivity() {
+  idle.lastActivity = Date.now();
+
+  // Dismissing the warning by moving the mouse is deliberate: the operator is
+  // demonstrably there. The server is told, so its clock agrees with ours.
+  if (idle.warning) {
+    idle.warning = false;
+    if (!$('dialogBackdrop').hidden && dialogState.isIdleWarning) { closeDialog(); }
+    api('/api/session', { allow401: true }).catch(function () { /* the timer keeps running */ });
+  }
+}
+
+function checkIdle() {
+  if (!idle.minutes || !state.token) { return; }
+
+  var idleSeconds = Math.floor((Date.now() - idle.lastActivity) / 1000);
+  var limit = idle.minutes * 60;
+  var remaining = limit - idleSeconds;
+
+  if (remaining <= 0) {
+    stopIdleWatch();
+    signOutIdle();
+    return;
+  }
+
+  if (remaining <= IDLE_WARN_SECONDS) {
+    idle.countdown = remaining;
+    if (!idle.warning) {
+      idle.warning = true;
+      showIdleWarning();
+    } else {
+      var span = $('idleCountdown');
+      if (span) { span.textContent = String(remaining); }
+    }
+  }
+}
+
+function showIdleWarning() {
+  openDialog({
+    title: 'Still there?',
+    confirmLabel: 'Stay signed in',
+    cancelLabel: 'Sign out now',
+    isIdleWarning: true,
+    body: '<p class="dialog-note">You have not used DSMT for ' + idle.minutes +
+          ' minutes. For security, you will be signed out in ' +
+          '<strong id="idleCountdown">' + idle.countdown + '</strong> seconds.</p>' +
+          '<p class="dialog-note">Anything you have typed into an open dialog will be lost.</p>',
+    onConfirm: function () { noteActivity(); closeDialog(); },
+    onCancel: function () { stopIdleWatch(); signOutIdle(); }
+  });
+}
+
+function signOutIdle() {
+  api('/api/session', { method: 'DELETE', allow401: true })
+    .catch(function () { /* signing out locally regardless */ })
+    .then(function () {
+      signOutLocal();
+      var err = $('loginError');
+      err.textContent = 'You were signed out after ' + idle.minutes + ' minutes without activity.';
+      err.hidden = false;
+    });
 }
 
 function showLogin() {
@@ -209,11 +322,17 @@ function showApp() {
 // Version - one value, from the API, painted everywhere it is shown
 // ---------------------------------------------------------------------------
 
-function applyVersion(version) {
-  if (!version) { return; }
-  state.version = version;
-  var badge = $('loginVersion');
-  if (badge) { badge.textContent = 'v' + version; }
+function applyVersion(version, publisher) {
+  if (version) {
+    state.version = version;
+    var badge = $('loginVersion');
+    if (badge) { badge.textContent = 'v' + version; }
+  }
+  if (publisher) {
+    state.publisher = publisher;
+    var by = $('loginPublisher');
+    if (by) { by.textContent = 'by ' + publisher; }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,8 +344,10 @@ function boot() {
 
   api('/api/meta', { allow401: true }).then(function (meta) {
     if (meta) {
-      applyVersion(meta.version);
+      applyVersion(meta.version, meta.publisher);
       state.storage = meta.storage || null;
+      state.identity = meta.identity || null;
+      if (meta.sessionMinutes) { state.sessionMinutes = meta.sessionMinutes; }
       state.domain = meta.domain || '';
       var dom = $('loginDomain');
       if (dom && state.domain) { dom.textContent = state.domain; }
@@ -240,7 +361,8 @@ function boot() {
   state.token = token;
   api('/api/session', { allow401: true }).then(function (data) {
     if (!data || !data.ok) { signOutLocal(); return; }
-    applyVersion(data.version);
+    applyVersion(data.version, data.publisher);
+    if (data.sessionMinutes) { state.sessionMinutes = data.sessionMinutes; }
     state.user = data.user;
     enterApp();
   }).catch(function () {
@@ -253,6 +375,7 @@ function enterApp() {
   paintIdentity();
   loadDomainInfo();
   setTab(state.tab, true);
+  startIdleWatch(state.sessionMinutes);
 }
 
 function paintIdentity() {
@@ -268,9 +391,9 @@ function loadDomainInfo() {
     // count lives in About and in the menu, where there is room for it.
     $('domainLine').textContent = data.domain.domain;
 
-    var count = data.domain.controllerCount;
-    $('menuDomain').textContent = data.domain.domain + ' - ' + count +
-                                  ' controller' + (count === 1 ? '' : 's');
+    // Just the domain name; the controller count lives in About, where it
+    // is information rather than clutter.
+    $('menuDomain').textContent = data.domain.domain;
     renderNotifications();
   }).catch(function (err) {
     $('domainLine').textContent = 'Domain unavailable';
@@ -307,6 +430,47 @@ function buildNotifications() {
       kind: 'advice',
       title: 'SQL Server reported a problem',
       body: storage.sqlError,
+      actionLabel: 'Open settings',
+      action: function () { closeBell(); actionSettings(); }
+    });
+  }
+
+  var identity = state.identity;
+
+  if (identity && identity.accountKind === 'user') {
+    list.push({
+      kind: 'advice',
+      title: 'Running under a personal account',
+      body: 'DSMT runs as ' + (identity.serviceUser || 'an interactive account') +
+            '. Personal accounts have passwords that expire and leave with the person. ' +
+            'Move it to a dedicated service account or a gMSA when convenient.',
+      actionLabel: 'How',
+      action: function () {
+        closeBell();
+        openDialog({
+          title: 'Move DSMT to a service account',
+          hideConfirm: true,
+          cancelLabel: 'Close',
+          body: '<p class="dialog-note">Run this on the DSMT host, elevated. It updates the service or ' +
+                'scheduled task, the URL reservation, the data folder permissions and the saved settings ' +
+                'in one go, and prints the SQL grant you still need to run.</p>' +
+                '<div class="secret">.\\server\\Install-DSMT.ps1 -ChangeServiceAccount "DOMAIN\\svc-dsmt"</div>' +
+                '<p class="dialog-note">For a group managed service account, end the name with a dollar ' +
+                'sign and no password is asked for:</p>' +
+                '<div class="secret">.\\server\\Install-DSMT.ps1 -ChangeServiceAccount "DOMAIN\\gmsa-dsmt$"</div>' +
+                '<p class="dialog-note">Restart DSMT afterwards for the change to take effect.</p>'
+        });
+      }
+    });
+  }
+
+  if (identity && identity.mode === 'hybrid') {
+    list.push({
+      kind: 'info',
+      title: 'Hybrid identity mode is on',
+      body: 'Directory reads run as ' + (identity.serviceUser || 'the service account') +
+            ', so every operator can see everything that account can see. Writes still run as ' +
+            'the signed-in operator, so the domain controller records who made each change.',
       actionLabel: 'Open settings',
       action: function () { closeBell(); actionSettings(); }
     });
@@ -426,10 +590,21 @@ function setTab(tab, force) {
     b.setAttribute('aria-selected', String(b.getAttribute('data-tab') === tab));
   });
 
-  var isAudit = (tab === 'audit');
-  $('directoryView').hidden = isAudit;
-  $('auditView').hidden = !isAudit;
+  var isAudit    = (tab === 'audit');
+  var isSettings = (tab === 'settings');
+
+  $('directoryView').hidden = (isAudit || isSettings);
+  $('auditView').hidden     = !isAudit;
+  $('settingsView').hidden  = !isSettings;
+
+  // The detail pane belongs to the directory views only.
+  $('detailPane').hidden = (isAudit || isSettings);
   closeDetail();
+
+  if (isSettings) {
+    loadSettings();
+    return;
+  }
 
   if (isAudit) {
     renderAuditFilters();
@@ -741,19 +916,46 @@ function loadAudit() {
   if (window_.from) { path += '&from=' + encodeURIComponent(window_.from); }
   if (window_.to)   { path += '&to=' + encodeURIComponent(window_.to); }
 
+  setAuditBusy(true);
+
   api(path).then(function (data) {
     state.auditRows = asArray(data.items);
     state.auditTotal = data.total || 0;
     state.auditSource = data.source || '';
+    setAuditBusy(false);
+    stampAudit();
     renderAudit();
   }).catch(function (err) {
     state.auditRows = [];
     state.auditTotal = 0;
     $('auditBody').innerHTML = '';
     $('auditLine').textContent = '';
+    setAuditBusy(false);
+    $('auditStamp').textContent = 'Not updated';
     renderAudit();
     toast('Could not read the audit log: ' + err.message, 'bad');
   });
+}
+
+/* The refresh button doubles as the progress indicator - there is no spinner
+   anywhere else in the console, and a button that does nothing visible when
+   pressed reads as a broken button. */
+function setAuditBusy(busy) {
+  var btn = $('auditRefresh');
+  if (!btn) { return; }
+  btn.disabled = busy;
+  btn.textContent = busy ? 'Refreshing...' : 'Refresh';
+}
+
+/* How stale the table is. Local clock time, not "5 minutes ago": a relative
+   label needs a timer to stay honest, and a wrong one on an audit screen is
+   worse than none. */
+function stampAudit() {
+  var el = $('auditStamp');
+  if (!el) { return; }
+  var d = new Date();
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  el.textContent = 'Updated ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 }
 
 /* Plain-language description of the window currently in force, so the count
@@ -780,15 +982,20 @@ function renderAudit() {
     if (state.auditFilter !== 'All') { scope += ' for the ' + state.auditFilter + ' filter'; }
     if (state.auditQuery) { scope += ' matching "' + state.auditQuery + '"'; }
 
-    $('auditBody').innerHTML = '<tr><td colspan="7" data-label="">' +
+    $('auditBody').innerHTML = '<tr><td colspan="8" data-label="">' +
       '<span class="muted-sm">' + esc(scope) + '. Entries are written here as changes are made.</span>' +
       '</td></tr>';
     $('auditLine').textContent = '';
     return;
   }
 
-  $('auditBody').innerHTML = state.auditRows.map(function (r) {
+  $('auditBody').innerHTML = state.auditRows.map(function (r, i) {
     var cls = (r.result === 'Success') ? 'res-success' : 'res-other';
+    var plan = undoPlan(r);
+    var undoCell = plan.ok
+      ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
+      : '<span class="cell-disabled undo-no" title="' + esc(plan.reason) + '">-</span>';
+
     return '<tr>' +
       '<td data-label="Time" class="cell-muted">' + esc(formatStamp(r.time)) + '</td>' +
       '<td data-label="Action" class="cell-name">' + esc(r.action) + '</td>' +
@@ -797,14 +1004,124 @@ function renderAudit() {
       '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>' +
       '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>' +
       '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>' +
+      '<td data-label="Undo">' + undoCell + '</td>' +
       '</tr>';
   }).join('');
+
+  var undoButtons = $('auditBody').querySelectorAll('[data-undo]');
+  for (var u = 0; u < undoButtons.length; u++) {
+    undoButtons[u].onclick = function () {
+      askUndo(state.auditRows[parseInt(this.getAttribute('data-undo'), 10)]);
+    };
+  }
 
   var line = state.auditRows.length + ' of ' + state.auditTotal + ' entries in ' + windowLabel() +
              ' - written by this console, newest first';
   if (state.auditSource === 'sql') { line += ' - stored in SQL Server'; }
   else if (state.auditSource === 'file') { line += ' - stored in files on the server (no SQL configured)'; }
   $('auditLine').textContent = line;
+}
+
+// ---------------------------------------------------------------------------
+// Undo
+//
+// This mirrors Get-DsmtUndoPlan in server/lib/DsmtHttp.ps1, and the SERVER IS
+// AUTHORITATIVE: it recomputes the plan and refuses anything not on its own
+// list. This copy exists only to decide whether to paint a button, and to say
+// why when it does not. If the two ever disagree, fix this one - a button that
+// appears and then fails is worse than no button.
+// ---------------------------------------------------------------------------
+
+function undoPlan(r) {
+  function no(why) { return { ok: false, reason: why, what: '' }; }
+
+  if (!r) { return no('No entry.'); }
+
+  // Only a change that actually happened can be put back. A Failed or Denied
+  // record changed nothing, so there is nothing to reverse.
+  if (r.result !== 'Success') {
+    return no('This action did not succeed, so there is nothing to undo.');
+  }
+
+  var detail = r.detail || '';
+  var m;
+
+  if (r.action === 'Disable user') { return { ok: true, reason: '', what: 'enable ' + r.target + ' again' }; }
+  if (r.action === 'Enable user')  { return { ok: true, reason: '', what: 'disable ' + r.target + ' again' }; }
+
+  if (r.action === 'Add to group') {
+    m = /^into\s+(.+)$/.exec(detail);
+    if (!m) { return no('The record does not name the group that was joined.'); }
+    return { ok: true, reason: '', what: 'remove ' + r.target + ' from ' + m[1] };
+  }
+
+  if (r.action === 'Remove from group') {
+    m = /^from\s+(.+)$/.exec(detail);
+    if (!m) { return no('The record does not name the group that was left.'); }
+    return { ok: true, reason: '', what: 'add ' + r.target + ' back to ' + m[1] };
+  }
+
+  if (r.action === 'Move OU') {
+    m = /^from\s+(.+?)\s+into\s+(.+)$/.exec(detail);
+    if (!m) {
+      return no('The record does not say which OU the object came from. Moves recorded from 1.11.0 onwards can be undone.');
+    }
+    return { ok: true, reason: '', what: 'move ' + r.target + ' back to ' + m[1] };
+  }
+
+  if (r.action === 'Reset password') {
+    return no('A password cannot be undone - DSMT never knew the previous one.');
+  }
+  if (r.action === 'Unlock account') {
+    return no('An unlock cannot be undone: a lockout comes from failed sign-ins, not from an administrator.');
+  }
+  if (/^(Create|Delete) (user|group)$/.test(r.action) || r.action === 'Bulk CSV import') {
+    return no('Creating and deleting are not reversible here - a recreated object gets a new SID, so every permission that pointed at the old one stays broken. Use the AD Recycle Bin.');
+  }
+
+  return no('There is no defined way to reverse "' + (r.action || '') + '".');
+}
+
+function askUndo(r) {
+  var plan = undoPlan(r);
+  if (!plan.ok) { toast(plan.reason, 'bad'); return; }
+
+  openDialog({
+    title: 'Undo ' + r.action,
+    confirmLabel: 'Undo it',
+    body:
+      '<p class="dialog-note">This will <strong>' + esc(plan.what) + '</strong>.</p>' +
+      '<dl class="detail-fields">' +
+        '<div class="detail-row"><dt>Original action</dt><dd>' + esc(r.action) + '</dd></div>' +
+        '<div class="detail-row"><dt>Performed by</dt><dd>' + esc(r.operator) + '</dd></div>' +
+        '<div class="detail-row"><dt>When</dt><dd>' + esc(formatStamp(r.time)) + '</dd></div>' +
+      '</dl>' +
+      // Said plainly, because an "undo" that quietly rewrote history would be
+      // the single worst thing this tool could do.
+      '<p class="dialog-note">The original entry stays in the audit log exactly as it is. ' +
+      'This is recorded as a new change, made by you, now - and it runs with your own ' +
+      'directory rights, like any other action here.</p>' +
+      reasonField(),
+    onConfirm: function () {
+      var reason = readReason();
+      if (!reason) { dialogError('Give a reason for the undo.'); return; }
+
+      api('/api/audit/undo', {
+        method: 'POST',
+        body: { action: r.action, target: r.target, detail: r.detail || '', reason: reason }
+      }).then(function (res) {
+        closeDialog();
+        if (res.ok) {
+          toast('Undone: ' + plan.what + '.', 'good');
+        } else {
+          toast('The undo did not succeed. See the audit log for the reason.', 'bad');
+        }
+        loadAudit();
+      }).catch(function (err) {
+        dialogError(err.message);
+      });
+    }
+  });
 }
 
 /* Formats a Date for a <input type="datetime-local">, which wants local time
@@ -885,9 +1202,11 @@ function exportAudit() {
 // Dialog engine
 // ---------------------------------------------------------------------------
 
-var dialogState = { onConfirm: null };
+var dialogState = { onConfirm: null, onCancel: null, isIdleWarning: false };
 
 function openDialog(config) {
+  dialogState.onCancel = config.onCancel || null;
+  dialogState.isIdleWarning = !!config.isIdleWarning;
   $('dialogTitle').textContent = config.title;
   $('dialogBody').innerHTML = config.body;
   $('dialogConfirm').textContent = config.confirmLabel || 'Apply';
@@ -909,6 +1228,8 @@ function openDialog(config) {
 function closeDialog() {
   $('dialogBackdrop').hidden = true;
   dialogState.onConfirm = null;
+  dialogState.onCancel = null;
+  dialogState.isIdleWarning = false;
 }
 
 function dialogError(message) {
@@ -1308,89 +1629,664 @@ function storageLine() {
   return 'No SQL Server configured - audit log written to files on the server only';
 }
 
-/* Settings: shows what the server is actually running with, and lets an
-   operator point it at a SQL Server and create the DSMT database from here
-   instead of restarting with -SqlServer. */
-function actionSettings() {
+// ---------------------------------------------------------------------------
+// Settings - a full view, not a dialog
+//
+// It renders inline and reports inline. Nothing here depends on an overlay
+// being able to display, because the one thing an operator needs when the
+// console is misbehaving is the settings screen.
+// ---------------------------------------------------------------------------
+
+function actionSettings() { setTab('settings'); }
+
+function settingsRow(label, value) {
+  if (!value) { return ''; }
+  return '<div class="detail-row"><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>';
+}
+
+function loadSettings() {
+  // The rail belongs to the rendered sections; drop it while there are none,
+  // otherwise a failed reload leaves a rail pointing at cards that are gone.
+  $('settingsNav').innerHTML = '';
+  state.healthLoaded = false;
+  $('settingsBody').innerHTML = '<p class="muted-sm">Loading...</p>';
+
   api('/api/settings').then(function (data) {
-    var s = data.settings;
+    state.settings = data.settings;
+    renderSettings();
+  }).catch(function (err) {
+    $('settingsBody').innerHTML = '<div class="error-box"><strong>Could not read the settings.</strong>' +
+                                  esc(err.message) + '</div>';
+  });
+}
 
-    var readOnly = [
-      ['Version', s.version],
-      ['Domain', s.domain],
-      ['Domain controller', s.server || 'Auto-discovered'],
-      ['Listening on', s.listenAddress + ':' + s.port],
-      ['Session lifetime', s.sessionHours + ' hours idle'],
-      ['Search result cap', String(s.pageSize)],
-      ['Data folder', s.dataPath]
-    ].map(function (r) {
-      return '<div class="detail-row"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>';
-    }).join('');
+function renderSettings() {
+  var s = state.settings;
+  if (!s) { return; }
 
-    var status = s.sqlEnabled
-      ? '<p class="dialog-note">Connected to <strong>' + esc(s.sqlServer) + '</strong>, database ' +
-        '<strong>' + esc(s.sqlDatabase) + '</strong>. Operators, sessions, the directory snapshot ' +
-        'and the audit log are stored there.</p>'
-      : '<p class="dialog-note">No database is configured. The audit log is written to files under ' +
-        'the data folder, and operators, sessions and the directory snapshot are <strong>not stored ' +
-        'at all</strong>. Fill in a SQL Server below to create the database.</p>';
+  var b = s.sessionBounds || {};
+  var bounds = { min: b.Min || b.min || 1, max: b.Max || b.max || 480, def: b.Default || b.def || 15 };
 
-    if (s.sqlEnabled && s.sqlError) {
-      status += '<p class="form-error">' + esc(s.sqlError) + '</p>';
-    }
+  // Where the data actually goes, stated as fields rather than buried in a
+  // sentence: on a screen with two name-shaped inputs, the one thing that must
+  // be unambiguous is which server and database are LIVE right now, as opposed
+  // to whatever is currently typed into the boxes below.
+  var storage =
+    '<div class="set-state' + (s.sqlEnabled ? ' set-state-on' : ' set-state-off') + '">' +
+      '<div class="set-state-head">' +
+        '<span class="set-state-dot"></span>' +
+        '<span>' + (s.sqlEnabled ? 'Connected' : 'Not connected') + '</span>' +
+      '</div>' +
+      '<dl class="detail-fields">' +
+        settingsRow('SQL Server instance', s.sqlEnabled ? s.sqlServer : 'None') +
+        settingsRow('Database', s.sqlEnabled ? s.sqlDatabase : 'None') +
+        settingsRow('Audit log', s.sqlEnabled ? 'SQL Server, and files under the data folder'
+                                              : 'Files under the data folder only') +
+        settingsRow('Operators, sessions, snapshot', s.sqlEnabled ? 'Stored in SQL Server'
+                                                                  : 'Not stored') +
+      '</dl>' +
+    '</div>';
 
-    openDialog({
-      title: 'Settings',
-      confirmLabel: s.sqlEnabled ? 'Reconnect' : 'Create database',
-      body:
-        '<div class="detail-fields"><span class="detail-section-label">Server</span>' + readOnly + '</div>' +
-        '<hr class="rule">' +
-        '<span class="detail-section-label">SQL Server storage</span>' +
-        status +
+  if (!s.sqlEnabled) {
+    storage += '<p class="set-warn">No database is configured, so operators, sessions and the ' +
+               'directory snapshot are <strong>not stored at all</strong> and the audit log ' +
+               'survives only as files on the server.</p>';
+  }
+
+  if (s.sqlError) {
+    storage += '<div class="error-box"><strong>The last SQL attempt failed with:</strong>' +
+               esc(s.sqlError) + '</div>';
+  }
+
+  // Sections are data, not one wall of markup: the rail and the cards both
+  // read from this one list.
+  var sections = [];
+
+  // Health first: it is the section someone opens when something is wrong,
+  // and the one that answers "is it me or is it the server".
+  sections.push({ key: 'health', label: 'Health', hint: 'Is everything reachable', body:
+      '<h2 class="set-h">Health</h2>' +
+      '<p class="dialog-note">Every check below is run live, now. Nothing here changes anything, ' +
+      'so it is safe to press repeatedly while diagnosing.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="runHealth">Run checks</button>' +
+        '<span class="audit-stamp" id="healthStamp"></span>' +
+      '</div>' +
+      '<div id="healthBody"></div>' });
+
+  sections.push({ key: 'system', label: 'System', hint: 'Version, domain, paths', body:
+      '<h2 class="set-h">System</h2>' +
+      '<dl class="detail-fields">' +
+        settingsRow('Version', s.version) +
+        settingsRow('Published by', s.publisher) +
+        settingsRow('Domain', s.domain) +
+        settingsRow('Domain controller', s.server || 'Auto-discovered') +
+        settingsRow('Listening on', s.listenAddress + ':' + s.port) +
+        settingsRow('Search result cap', String(s.pageSize)) +
+        settingsRow('Data folder', s.dataPath) +
+      '</dl>' });
+
+  sections.push({ key: 'network', label: 'Network', hint: 'Listening port', body:
+      '<h2 class="set-h">Network</h2>' +
+      '<dl class="detail-fields">' +
+        settingsRow('Listening on', s.listenAddress + ':' + s.port) +
+      '</dl>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setPort">Port (1-65535)</label>' +
+        '<input class="input" id="setPort" type="number" min="1" max="65535" step="1" value="' +
+        esc(String(s.port)) + '"></div>' +
+      '</div>' +
+      '<p class="dialog-note">A listener cannot move to another port while it is running, so the new ' +
+      'port is saved and used on the next start. If DSMT listens on all interfaces you also need a URL ' +
+      'reservation and a firewall rule for it - both commands are shown after you save.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyPort">Save port</button>' +
+      '</div>' +
+      '<div class="set-result" id="portResult"></div>' +
+      '<div id="portCommands"></div>' });
+
+  sections.push({ key: 'sql', label: 'Database',
+    hint: (s.sqlEnabled ? s.sqlServer + ' / ' + s.sqlDatabase : 'Not connected'), body:
+      '<h2 class="set-h">Database</h2>' +
+      storage +
+      '<div class="set-form">' +
         '<div class="field"><label for="setSqlServer">SQL Server instance</label>' +
         '<input class="input" id="setSqlServer" placeholder="SQL01 or SQL01\\INSTANCE" autocomplete="off" value="' +
         esc(s.sqlServer || '') + '"></div>' +
         '<div class="field"><label for="setSqlDb">Database name</label>' +
         '<input class="input" id="setSqlDb" autocomplete="off" value="' + esc(s.sqlDatabase || 'DSMT') + '"></div>' +
-        '<div class="row-2">' +
-          '<div class="field"><label for="setSqlUser">SQL user (blank = Windows auth)</label>' +
-          '<input class="input" id="setSqlUser" autocomplete="off"></div>' +
-          '<div class="field"><label for="setSqlPass">SQL password</label>' +
-          '<input class="input" id="setSqlPass" type="password" autocomplete="new-password"></div>' +
+        '<div class="field"><label for="setSqlUser">SQL user (blank = Windows auth)</label>' +
+        '<input class="input" id="setSqlUser" autocomplete="off"></div>' +
+        '<div class="field"><label for="setSqlPass">SQL password</label>' +
+        '<input class="input" id="setSqlPass" type="password" autocomplete="new-password"></div>' +
+      '</div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="listDbs">List existing databases</button>' +
+      '</div>' +
+      '<div class="field" id="dbPickField" hidden>' +
+        '<label for="setSqlPick">Existing databases on that instance</label>' +
+        '<select class="input" id="setSqlPick"></select>' +
+      '</div>' +
+      '<p class="dialog-note">Upgrading an existing installation? List the databases and pick the one ' +
+      'you already have - DSMT will use it and add only the tables that are missing. Creating a new ' +
+      'database needs the <code>dbcreator</code> right; using one that exists needs only read and write.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-primary" type="button" id="applySql">' +
+        (s.sqlEnabled ? 'Reconnect' : 'Connect') + '</button>' +
+      '</div>' +
+      '<div class="set-confirm" id="sqlConfirm" hidden>' +
+        '<p id="sqlConfirmText"></p>' +
+        '<div class="set-actions">' +
+          '<button class="btn btn-primary" type="button" id="confirmCreateDb">Create the database</button>' +
+          '<button class="btn btn-ghost" type="button" id="cancelCreateDb">Cancel</button>' +
         '</div>' +
-        '<p class="dialog-note">The database and its tables are created if they do not exist, and the ' +
-        'setting is saved so it survives a restart. Creating a database needs the <code>dbcreator</code> ' +
-        'right on the instance; connecting to one that already exists needs only read and write.</p>',
-      onConfirm: function () {
-        var server = $('setSqlServer').value.trim();
-        if (!server) { dialogError('Enter the SQL Server instance.'); return; }
+      '</div>' +
+      '<div class="set-result" id="sqlResult"></div>' });
 
-        api('/api/settings/sql', {
-          method: 'POST',
-          body: {
-            server: server,
-            database: $('setSqlDb').value.trim() || 'DSMT',
-            username: $('setSqlUser').value.trim(),
-            password: $('setSqlPass').value
-          }
-        }).then(function (res) {
-          state.storage = res.storage;
-          renderNotifications();
-          closeDialog();
+  sections.push({ key: 'identity', label: 'Identity', hint: 'Who reads the directory', body:
+      '<h2 class="set-h">Identity</h2>' +
+      '<dl class="detail-fields">' +
+        settingsRow('DSMT runs as', s.serviceUser) +
+        settingsRow('Registered account', s.serviceAccount) +
+        settingsRow('Account type', accountKindLabel(s.accountKind)) +
+      '</dl>' +
+      '<p class="dialog-note">Which account performs directory operations. ' +
+      '<strong>Writes always run as the signed-in operator</strong> in either mode, so the domain ' +
+      'controller records who made each change.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setIdentity">Identity mode</label>' +
+        '<select class="input" id="setIdentity">' +
+          '<option value="operator"' + (s.identityMode === 'operator' ? ' selected' : '') + '>' +
+            'Operator - reads and writes both run as the signed-in operator</option>' +
+          '<option value="hybrid"' + (s.identityMode === 'hybrid' ? ' selected' : '') + '>' +
+            'Hybrid - reads run as the service account</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<p class="dialog-note" id="identityWarning"></p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyIdentity">Apply identity mode</button>' +
+      '</div>' +
+      '<div class="set-result" id="identityResult"></div>' });
 
-          toast('Database ready on ' + res.storage.sqlServer + ' (' + res.storage.sqlDatabase + ').');
-          if (!res.persisted) {
-            toast('The database works, but the setting could not be saved: ' + res.persistError +
-                  ' It will be lost on restart.', 'bad');
-          }
-          if (state.tab === 'audit') { loadAudit(); }
-        }).catch(function (err) {
-          dialogError(err.message);
-        });
-      }
-    });
+  sections.push({ key: 'account', label: 'Service account', hint: 'Move to gMSA or a user', body:
+      '<h2 class="set-h">Service account</h2>' +
+      '<p class="dialog-note">Move DSMT onto a dedicated account, a group managed service account ' +
+      '(gMSA) or the machine account. Pick the target below and DSMT builds the exact command.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setAcctKind">Account type</label>' +
+        '<select class="input" id="setAcctKind">' +
+          '<option value="gmsa">gMSA - no password, recommended</option>' +
+          '<option value="user">Dedicated account - you are prompted for its password</option>' +
+          '<option value="machine">LocalSystem - the machine account, no password</option>' +
+        '</select></div>' +
+        '<div class="field" id="acctNameField"><label for="setAcctName">Account name</label>' +
+        '<input class="input" id="setAcctName" placeholder="LAB\\gmsa-dsmt$" autocomplete="off"></div>' +
+      '</div>' +
+      '<p class="dialog-note" id="acctHint"></p>' +
+      '<label class="set-cmd-label" for="acctCmd">Run this on the DSMT host, in an elevated PowerShell:</label>' +
+      '<div class="secret" id="acctCmd"></div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="copyAcctCmd">Copy command</button>' +
+      '</div>' +
+      '<p class="dialog-note"><strong>Why this is not a button that just does it:</strong> changing ' +
+      'the account rewrites the Windows service or scheduled task, the HTTP URL reservation, the ' +
+      'data folder permissions and the SQL login. Those need administrator rights on the host, which ' +
+      'this process deliberately does not have. The command does all five as one operation and ' +
+      'verifies the account before touching anything.</p>' });
+
+  sections.push({ key: 'sessions', label: 'Sessions', hint: 'Idle timeout', body:
+      '<h2 class="set-h">Sessions</h2>' +
+      '<p class="dialog-note">An operator who does not touch the console for this long is signed ' +
+      'out; the browser warns a minute beforehand. Applies to sessions already open. Maximum ' +
+      bounds.max + ' minutes (' + Math.round(bounds.max / 60) + ' hours).</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setIdle">Minutes of inactivity (' + bounds.min + '-' + bounds.max + ')</label>' +
+        '<input class="input" id="setIdle" type="number" min="' + bounds.min + '" max="' + bounds.max +
+        '" step="1" value="' + esc(String(s.sessionMinutes || bounds.def)) + '"></div>' +
+        '<div class="field"><label for="setIdlePreset">Common values</label>' +
+        '<select class="input" id="setIdlePreset">' +
+          '<option value="">Choose</option>' +
+          '<option value="5">5 minutes</option>' +
+          '<option value="15">15 minutes (default)</option>' +
+          '<option value="30">30 minutes</option>' +
+          '<option value="60">1 hour</option>' +
+          '<option value="240">4 hours</option>' +
+          '<option value="480">8 hours (maximum)</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyIdle">Apply idle timeout</button>' +
+      '</div>' +
+      '<div class="set-result" id="idleResult"></div>' });
+
+  var bodyHtml = '';
+  var navHtml = '';
+  var i;
+  for (i = 0; i < sections.length; i++) {
+    bodyHtml += '<section class="set-card" id="setSec-' + sections[i].key + '">' +
+                sections[i].body + '</section>';
+    navHtml += '<button class="set-nav-item" type="button" data-section="' + sections[i].key + '">' +
+               '<span>' + esc(sections[i].label) + '</span>' +
+               '<span class="set-nav-hint">' + esc(sections[i].hint) + '</span></button>';
+  }
+  $('settingsBody').innerHTML = bodyHtml;
+  $('settingsNav').innerHTML = navHtml;
+
+  state.settingsSections = sections;
+  wireSettingsNav();
+  wireSettings(bounds);
+}
+
+/* ---------------------------------------------------------------------------
+   The section rail. One section is shown at a time - calm on a monitor, and
+   the only shape that works on a phone. Which one was open is remembered per
+   browser, so Settings comes back where it was left.
+   --------------------------------------------------------------------------- */
+
+var SET_SECTION_KEY = 'dsmt.settings.section';
+
+function readSetting(key, fallback) {
+  try {
+    var v = window.localStorage.getItem(key);
+    return v ? v : fallback;
+  } catch (e) { return fallback; }
+}
+
+function writeSetting(key, value) {
+  try { window.localStorage.setItem(key, value); } catch (e) { /* private mode */ }
+}
+
+function wireSettingsNav() {
+  var items = $('settingsNav').querySelectorAll('.set-nav-item');
+  var i;
+  for (i = 0; i < items.length; i++) {
+    items[i].onclick = function () {
+      writeSetting(SET_SECTION_KEY, this.getAttribute('data-section'));
+      showSettingsSection();
+    };
+  }
+  showSettingsSection();
+}
+
+function showSettingsSection() {
+  var sections = state.settingsSections || [];
+  if (!sections.length) { return; }
+
+  var current = readSetting(SET_SECTION_KEY, sections[0].key);
+  var known = false;
+  var i;
+  for (i = 0; i < sections.length; i++) { if (sections[i].key === current) { known = true; } }
+  if (!known) { current = sections[0].key; }
+
+  var items = $('settingsNav').querySelectorAll('.set-nav-item');
+  for (i = 0; i < items.length; i++) {
+    items[i].className = 'set-nav-item' +
+      (items[i].getAttribute('data-section') === current ? ' is-active' : '');
+  }
+
+  // Run the checks when Health is opened, not when Settings loads: they cost a
+  // live directory search and a SQL round trip, and nobody wants those on the
+  // way to changing an idle timeout.
+  if (current === 'health' && !state.healthLoaded) { loadHealth(); }
+
+  // The other cards are hidden, never removed - the handlers wired by
+  // wireSettings() stay attached to elements that still exist.
+  for (i = 0; i < sections.length; i++) {
+    var card = $('setSec-' + sections[i].key);
+    if (card) { card.hidden = (sections[i].key !== current); }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Health. One request, one verdict per check, and a fix for anything that is
+   not green - a red light with no instruction has moved the problem rather
+   than helped with it. Most of the "the server won't start" reports in this
+   project's history were a known external step nobody had done yet.
+   --------------------------------------------------------------------------- */
+
+function loadHealth() {
+  var btn = $('runHealth');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking...'; }
+  $('healthBody').innerHTML = '<p class="muted-sm">Running the checks...</p>';
+
+  api('/api/health').then(function (data) {
+    state.healthLoaded = true;
+    renderHealth(data);
   }).catch(function (err) {
-    toast('Could not read the settings: ' + err.message, 'bad');
+    state.healthLoaded = true;
+    // A failure here is itself the answer: the server is not answering at all.
+    $('healthBody').innerHTML = '<div class="error-box"><strong>The health check itself failed.</strong>' +
+      esc(explainApiError(err.message)) + '</div>';
+  }).then(function () {
+    if (btn) { btn.disabled = false; btn.textContent = 'Run checks'; }
+  });
+}
+
+function healthWordFor(status) {
+  if (status === 'ok') { return 'OK'; }
+  if (status === 'warn') { return 'Attention'; }
+  return 'Failing';
+}
+
+function renderHealth(data) {
+  var checks = asArray(data.checks);
+
+  var head =
+    '<div class="set-state set-state-' + esc(data.overall) + '">' +
+      '<div class="set-state-head">' +
+        '<span class="set-state-dot"></span>' +
+        '<span>' + esc(healthWordFor(data.overall)) + '</span>' +
+      '</div>' +
+      '<p class="muted-sm">' +
+        (data.overall === 'ok'
+          ? 'Every check passed.'
+          : 'One or more checks need attention. Each one below says what to do.') +
+      '</p>' +
+    '</div>';
+
+  var rows = checks.map(function (c) {
+    var fix = c.fix
+      ? '<p class="health-fix"><strong>Fix:</strong> ' + esc(c.fix) + '</p>'
+      : '';
+    return '<div class="health-item health-' + esc(c.status) + '">' +
+             '<div class="health-item-head">' +
+               '<span class="set-state-dot"></span>' +
+               '<span class="health-name">' + esc(c.name) + '</span>' +
+               '<span class="health-verdict">' + esc(healthWordFor(c.status)) + '</span>' +
+             '</div>' +
+             '<p class="health-detail">' + esc(c.detail) + '</p>' +
+             fix +
+           '</div>';
+  }).join('');
+
+  $('healthBody').innerHTML = head + '<div class="health-list">' + rows + '</div>';
+
+  var stamp = $('healthStamp');
+  if (stamp) { stamp.textContent = 'Checked ' + formatStamp(data.checkedAt); }
+}
+
+function accountKindLabel(kind) {
+  if (kind === 'gmsa') { return 'Group managed service account (no password)'; }
+  if (kind === 'machine') { return 'Machine account (LocalSystem)'; }
+  if (kind === 'user') { return 'Ordinary account'; }
+  return '';
+}
+
+/* "No API route for POST /api/..." has exactly one cause worth naming: the
+   web files were copied but the server was not restarted, so a new front end
+   is talking to an old back end. Say that instead of the raw 404, because the
+   raw 404 reads like a bug in the feature. */
+function explainApiError(message) {
+  if (message && message.indexOf('No API route') === 0) {
+    return message + ' - the server is running an older build than these web ' +
+           'files. Copy server\\lib\\*.ps1 to the DSMT host and restart ' +
+           'Start-DSMT.ps1, then reload this page.';
+  }
+  return message;
+}
+
+/* Inline result, shown next to the control that produced it - so a failure is
+   readable even if no overlay renders. */
+function setResult(id, message, ok) {
+  var box = $(id);
+  if (!box) { return; }
+  box.className = 'set-result ' + (ok ? 'set-result-ok' : 'set-result-bad');
+  box.textContent = message;
+}
+
+function wireSettings(bounds) {
+
+  // ---- health ----
+  $('runHealth').addEventListener('click', function () { loadHealth(); });
+
+  // ---- SQL ----
+  function sqlCredentials() {
+    return {
+      server: $('setSqlServer').value.trim(),
+      database: $('setSqlDb').value.trim() || 'DSMT',
+      username: $('setSqlUser').value.trim(),
+      password: $('setSqlPass').value
+    };
+  }
+
+  function hideCreateConfirm() { $('sqlConfirm').hidden = true; }
+
+  $('listDbs').addEventListener('click', function () {
+    var creds = sqlCredentials();
+    if (!creds.server) { setResult('sqlResult', 'Enter the SQL Server instance first.', false); return; }
+
+    hideCreateConfirm();
+    setResult('sqlResult', 'Listing databases on ' + creds.server + '...', true);
+
+    api('/api/settings/sql/databases', {
+      method: 'POST',
+      body: { server: creds.server, username: creds.username, password: creds.password }
+    }).then(function (res) {
+      var names = asArray(res.databases);
+      var pick = $('setSqlPick');
+
+      if (!names.length) {
+        $('dbPickField').hidden = true;
+        setResult('sqlResult', 'Connected, but the instance has no user databases yet. ' +
+                  'Type a name above and press Connect to create one.', true);
+        return;
+      }
+
+      pick.innerHTML = '<option value="">Choose a database</option>' +
+        names.map(function (n) {
+          var sel = (n === creds.database) ? ' selected' : '';
+          return '<option value="' + esc(n) + '"' + sel + '>' + esc(n) + '</option>';
+        }).join('');
+      $('dbPickField').hidden = false;
+
+      setResult('sqlResult', names.length + ' database' + (names.length === 1 ? '' : 's') +
+                ' found. Pick one to use it, or type a new name to create one.', true);
+    }).catch(function (err) {
+      $('dbPickField').hidden = true;
+      setResult('sqlResult', explainApiError(err.message), false);
+    });
+  });
+
+  // Picking from the list fills the name field, so there is one place the
+  // name actually comes from.
+  $('setSqlPick').addEventListener('change', function (e) {
+    if (e.target.value) {
+      $('setSqlDb').value = e.target.value;
+      hideCreateConfirm();
+      setResult('sqlResult', 'Will use the existing database ' + e.target.value +
+                '. Press Connect.', true);
+    }
+  });
+
+  function connectSql(createIfMissing) {
+    var creds = sqlCredentials();
+    if (!creds.server) { setResult('sqlResult', 'Enter the SQL Server instance.', false); return; }
+
+    hideCreateConfirm();
+    setResult('sqlResult', 'Connecting to ' + creds.server + '...', true);
+
+    creds.createIfMissing = createIfMissing;
+
+    api('/api/settings/sql', { method: 'POST', body: creds })
+      .then(function (res) {
+        // The database is simply not there yet - ask before creating one,
+        // because a typo in the instance name should not silently produce a
+        // stray database on a production server.
+        if (res && res.needsCreate) {
+          $('sqlConfirmText').textContent =
+            'The database "' + res.database + '" does not exist on ' + res.server +
+            '. Create it now? This needs the dbcreator right on the instance.';
+          $('sqlConfirm').hidden = false;
+          setResult('sqlResult', '', true);
+          return;
+        }
+
+        state.storage = res.storage;
+        renderNotifications();
+
+        var what;
+        if (res.databaseCreated) {
+          what = 'Created database ' + res.storage.sqlDatabase + ' on ' + res.storage.sqlServer +
+                 ' with ' + res.tablesCreated + ' tables.';
+        } else if (res.tablesCreated > 0) {
+          what = 'Using the existing database ' + res.storage.sqlDatabase + '. Added ' +
+                 res.tablesCreated + ' missing table' + (res.tablesCreated === 1 ? '' : 's') + '.';
+        } else {
+          what = 'Using the existing database ' + res.storage.sqlDatabase +
+                 '. All ' + res.tablesFound + ' tables were already present.';
+        }
+        if (!res.persisted) {
+          what += ' NOTE: the setting could not be saved (' + res.persistError +
+                  '), so it will be lost on restart.';
+        }
+        setResult('sqlResult', what, true);
+        loadSettings();
+      })
+      .catch(function (err) {
+        // The server returns the real SQL error - show it verbatim, it is the
+        // whole point of this control.
+        setResult('sqlResult', err.message, false);
+      });
+  }
+
+  $('applySql').addEventListener('click', function () { connectSql(false); });
+  $('confirmCreateDb').addEventListener('click', function () { connectSql(true); });
+  $('cancelCreateDb').addEventListener('click', function () {
+    hideCreateConfirm();
+    setResult('sqlResult', 'Nothing was created.', true);
+  });
+
+  // ---- identity mode ----
+  var identity = $('setIdentity');
+  var warning = $('identityWarning');
+  function describeIdentity() {
+    if (identity.value === 'hybrid') {
+      warning.innerHTML = '<strong>Every operator will be able to see everything ' +
+        esc(state.settings.serviceUser || 'the service account') + ' can see</strong>, whether or ' +
+        'not they have read rights of their own in the directory.';
+    } else {
+      warning.textContent = 'Each operator sees only what the directory lets them see.';
+    }
+  }
+  identity.addEventListener('change', describeIdentity);
+  describeIdentity();
+
+  $('applyIdentity').addEventListener('click', function () {
+    api('/api/settings/identity', { method: 'POST', body: { mode: identity.value } })
+      .then(function (res) {
+        if (state.identity) { state.identity.mode = res.identityMode; }
+        renderNotifications();
+        setResult('identityResult', 'Identity mode set to ' + res.identityMode + '.' +
+                  (res.persisted ? '' : ' Not saved: ' + res.persistError), res.persisted);
+        if (state.tab !== 'settings') { loadRows(); }
+      })
+      .catch(function (err) { setResult('identityResult', err.message, false); });
+  });
+
+  // ---- service account command builder ----
+  var kind = $('setAcctKind');
+  var name = $('setAcctName');
+  var hint = $('acctHint');
+
+  function buildCommand() {
+    var target = name.value.trim();
+    var show = (kind.value !== 'machine');
+    $('acctNameField').hidden = !show;
+
+    if (kind.value === 'gmsa') {
+      hint.textContent = 'End the name with a dollar sign. The gMSA must already exist and be ' +
+                         'installed on this host (Install-ADServiceAccount). No password is asked for.';
+      if (target && target.charAt(target.length - 1) !== '$') { target = target + '$'; }
+    } else if (kind.value === 'user') {
+      hint.textContent = 'You are prompted for the password once - Windows has to store it to log ' +
+                         'on at boot. Set the password not to expire, or use a gMSA.';
+    } else {
+      hint.textContent = 'Reaches AD and SQL as the computer account. Grant that account rights on ' +
+                         'the SQL instance.';
+      target = 'LocalSystem';
+    }
+
+    var arg = target || (kind.value === 'gmsa' ? 'DOMAIN\\gmsa-dsmt$' : 'DOMAIN\\svc-dsmt');
+    $('acctCmd').textContent = '.\\server\\Install-DSMT.ps1 -ChangeServiceAccount "' + arg + '"';
+  }
+
+  kind.addEventListener('change', buildCommand);
+  name.addEventListener('input', buildCommand);
+  buildCommand();
+
+  $('copyAcctCmd').addEventListener('click', function () {
+    var text = $('acctCmd').textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        toast('Command copied.');
+      }).catch(function () { selectCommand(); });
+    } else {
+      selectCommand();
+    }
+  });
+
+  function selectCommand() {
+    // Clipboard API needs a secure context; over plain HTTP it is absent, so
+    // fall back to selecting the text for the operator to copy.
+    var node = $('acctCmd');
+    if (window.getSelection && document.createRange) {
+      var range = document.createRange();
+      range.selectNodeContents(node);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+
+  // ---- port ----
+  $('applyPort').addEventListener('click', function () {
+    var port = parseInt($('setPort').value, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      setResult('portResult', 'The port must be between 1 and 65535.', false);
+      return;
+    }
+
+    api('/api/settings/network', { method: 'POST', body: { port: port } })
+      .then(function (res) {
+        var message = 'Port saved as ' + res.port + '. It takes effect the next time DSMT starts - ' +
+                      'until then the console is still on ' + res.previousPort + '.';
+        if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+        setResult('portResult', message, res.persisted);
+
+        var cmds = '';
+        if (res.reservation) {
+          cmds += '<label class="set-cmd-label">Reserve the new URL, elevated, on the DSMT host:</label>' +
+                  '<div class="secret">' + esc(res.reservation) + '</div>';
+        }
+        if (res.firewall) {
+          cmds += '<label class="set-cmd-label">Open the new port in the firewall:</label>' +
+                  '<div class="secret">' + esc(res.firewall) + '</div>';
+        }
+        $('portCommands').innerHTML = cmds;
+      })
+      .catch(function (err) { setResult('portResult', err.message, false); });
+  });
+
+  // ---- idle timeout ----
+  $('setIdlePreset').addEventListener('change', function (e) {
+    if (e.target.value) { $('setIdle').value = e.target.value; }
+  });
+
+  $('applyIdle').addEventListener('click', function () {
+    var minutes = parseInt($('setIdle').value, 10);
+    if (isNaN(minutes) || minutes < bounds.min || minutes > bounds.max) {
+      setResult('idleResult', 'The idle timeout must be between ' + bounds.min + ' and ' +
+                bounds.max + ' minutes.', false);
+      return;
+    }
+    api('/api/settings/session', { method: 'POST', body: { sessionMinutes: minutes } })
+      .then(function (res) {
+        state.sessionMinutes = res.sessionMinutes;
+        startIdleWatch(res.sessionMinutes);
+        setResult('idleResult', 'Idle timeout set to ' + res.sessionMinutes + ' minutes.' +
+                  (res.persisted ? '' : ' Not saved: ' + res.persistError), res.persisted);
+      })
+      .catch(function (err) { setResult('idleResult', err.message, false); });
   });
 }
 
@@ -1400,7 +2296,11 @@ function actionAbout() {
 
   var rows = [
     ['Version', state.version],
+    ['Published by', state.publisher],
     ['Signed in as', state.user ? state.user.account : ''],
+    ['Identity mode', state.identity ? state.identity.mode : ''],
+    ['Service account', state.identity ? state.identity.serviceUser : ''],
+    ['Idle timeout', state.sessionMinutes ? (state.sessionMinutes + ' minutes') : ''],
     ['Domain', d ? d.domain : state.domain],
     ['NetBIOS name', d ? d.netbios : ''],
     ['Forest', d ? d.forest : ''],
@@ -1426,7 +2326,10 @@ function actionAbout() {
               }).join('') + '</ul></div>'
             : '') +
           '<p class="dialog-note">Version numbering is MAJOR.FEATURE.FIX and comes from one constant on ' +
-          'the server, surfaced through /api/meta.</p>'
+          'the server, surfaced through /api/meta.</p>' +
+          (state.publisher
+            ? '<p class="dialog-note">' + esc(state.publisher) + '</p>'
+            : '')
   });
 }
 
@@ -1509,7 +2412,7 @@ function wireEvents() {
     }).then(function (data) {
       button.disabled = false;
       saveToken(data.token);
-      applyVersion(data.version);
+      applyVersion(data.version, data.publisher);
       state.user = data.user;
       $('loginPass').value = '';
       enterApp();
@@ -1532,7 +2435,6 @@ function wireEvents() {
   els('.menu-item[data-tab]').forEach(function (b) {
     b.addEventListener('click', function () { setMenu(false); setTab(b.getAttribute('data-tab')); });
   });
-  $('menuSettings').addEventListener('click', function () { setMenu(false); actionSettings(); });
   $('menuAbout').addEventListener('click', function () { setMenu(false); actionAbout(); });
   $('menuRefresh').addEventListener('click', function () {
     setMenu(false);
@@ -1644,6 +2546,7 @@ function wireEvents() {
     loadAudit();
   });
 
+  $('auditRefresh').addEventListener('click', function () { loadAudit(); });
   $('auditExport').addEventListener('click', exportAudit);
 
   // ---- toolbar ----
@@ -1717,7 +2620,11 @@ function wireEvents() {
   });
 
   // ---- dialog ----
-  $('dialogCancel').addEventListener('click', closeDialog);
+  $('dialogCancel').addEventListener('click', function () {
+    var onCancel = dialogState.onCancel;
+    closeDialog();
+    if (onCancel) { onCancel(); }
+  });
   $('dialogConfirm').addEventListener('click', function () {
     if (dialogState.onConfirm) { dialogState.onConfirm(); }
   });

@@ -13,6 +13,609 @@ deploying can hot-swap individual files without reasoning it out.
 
 ---
 
+## Version history at a glance
+
+One line per release. The full entry for each is below — this table is an
+index into it, not a second record, so that there is still exactly one place
+where what changed is written down.
+
+| Version | Date | What changed | To deploy |
+| --- | --- | --- | --- |
+| **1.11.0** | 2026-07-31 | Undo a directory change from its audit entry; a Health section that says what is reachable and how to fix what is not | Restart + refresh |
+| **1.10.0** | 2026-07-31 | Refresh button on the Audit log, with a stamp saying how stale the table is | Refresh |
+| **1.9.2** | 2026-07-31 | Database section states the live server and database as fields; a 404 on a new route now names the cause | Refresh |
+| **1.9.1** | 2026-07-31 | Settings keeps only the section rail; the arrangement switch is gone | Refresh |
+| **1.9.0** | 2026-07-31 | Settings rearranged: a section rail with one section at a time, and the operator picks the arrangement | Refresh |
+| **1.8.1** | 2026-07-31 | Fixes the idle-timeout 500; pick an existing database; confirm before creating; custom port; Settings laid out in columns | Restart + refresh |
+| **1.8.0** | 2026-07-31 | Settings becomes a full tab; shows the verbatim SQL error; builds the service-account command | Refresh |
+| **1.7.5** | 2026-07-31 | **Fixes the first-run blocker** - no dialog, toast or notification panel was visible | Refresh |
+| **1.7.4** | 2026-07-31 | Guide's contents sidebar collapses by group; 1.7.3's body-section collapsing reverted | Docs only |
+| **1.7.3** | 2026-07-31 | Deployment guide sections collapse (superseded by 1.7.4) | Docs only |
+| **1.7.2** | 2026-07-31 | Version history indexed at the top of this file | Docs only |
+| **1.7.1** | 2026-07-30 | Deployment guide made usable on phones: tables reflow to cards, contents collapse, iOS safe areas | Docs only |
+| **1.7.0** | 2026-07-30 | Idle timeout default cut to 15 minutes, capped at 8 hours; bounds enforced on every route | Restart |
+| **1.6.0** | 2026-07-30 | Idle timeout with a warning countdown; deployment guide covers every installation form | Restart + refresh |
+| **1.5.0** | 2026-07-30 | Service identity: gMSA, dedicated, machine or installing user; `-ChangeServiceAccount`; identity mode; publisher | Restart + refresh |
+| **1.4.0** | 2026-07-30 | Run unattended as a Windows service or a hardened scheduled task; `-StartWhenDone` | Restart |
+| **1.3.0** | 2026-07-30 | Audit time filtering; Settings screen that creates the database; notifications bell | Restart + refresh |
+| **1.2.1** | 2026-07-27 | Deployment guide rewritten in English | Docs only |
+| **1.2.0** | 2026-07-27 | Automated installer and saved configuration | Re-run installer |
+| **1.1.0** | 2026-07-27 | Step-by-step deployment guide | Docs only |
+| **1.0.0** | 2026-07-27 | **First working release** — live AD, SQL persistence, responsive console | Full install |
+| 0.1.0 | 2026-07-27 | Design prototype imported (fabricated data, inert buttons) | — |
+| 0.0.0 | 2026-07-27 | Project scaffold | — |
+
+**Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
+in the browser (Ctrl+F5); *Docs only* = no runtime impact.
+
+The version currently in `main` is **1.4.0** (tag `v1.4.0`). Versions 1.5.0
+onwards are on `feature/service-identity` and have not been merged.
+
+---
+
+## 1.11.0 — 2026-07-31
+
+Two features: **undo**, and a **health check**.
+
+### Undo, from the audit entry
+
+Every audit row that can be reversed now carries an **Undo** button; every row
+that cannot carries a dash whose tooltip says why.
+
+Reversible, using nothing but the record itself:
+
+| Original | Undo |
+| --- | --- |
+| Disable user | Enable user |
+| Enable user | Disable user |
+| Add to group | Remove from that group |
+| Remove from group | Add back to that group |
+| Move OU | Move back to the source OU |
+
+Refused **on purpose**, each with its reason shown:
+
+- **Reset password / Unlock account** — DSMT never knew the previous password,
+  and a lockout comes from failed sign-ins, not from an administrator. There
+  is no previous state to restore.
+- **Create / Delete, and CSV import** — a recreated object gets a **new SID**,
+  so every ACL, membership and profile that referenced the old one is still
+  broken. An "undo" that produces a same-named stranger is a lie. Use the AD
+  Recycle Bin.
+- **Anything that failed** — a Failed or Denied record changed nothing.
+
+Three properties that matter more than the feature:
+
+1. **The original entry is never touched.** The undo is a new audit record
+   (`Undo: Disable user`) with its own operator, its own timestamp and its own
+   **mandatory reason**. The log is append-only and stays that way.
+2. **It runs as the signed-in operator**, exactly like the button that would
+   make the same change by hand — so it can never do anything that operator is
+   not already permitted to do, and the DC records their name against it.
+3. **The server decides, not the browser.** `Get-DsmtUndoPlan` recomputes the
+   plan and refuses anything not on its own list. The copy in `app.js` only
+   decides whether to paint a button.
+
+**Move OU became undoable, which needed a change to what is recorded.** The
+audit detail said only `into <OU>`; the source was never captured, and after
+the move it is gone. `Invoke-DsmtBulkAction` gained `-DetailBuilder`, a
+scriptblock evaluated per target *before* the operation, and the move now
+records `from <A> into <B>`. A failure in the builder can never block the
+action. **Moves recorded before this version cannot be undone**, and the
+console says so rather than guessing at a container.
+
+### Health check
+
+**Settings -> Health**, first in the rail. One request, run live on demand:
+
+- **ActiveDirectory module** — is RSAT actually loaded.
+- **Domain** — which controller answered, and how many exist.
+- **Directory read** — a real search as the signed-in operator. Reaching the
+  domain and being *allowed* to read it are different things.
+- **SQL Server** — the instance, the database and the audit row count; or the
+  verbatim error; or a warning that none is configured.
+- **Data folder** — actually written to and deleted again. The JSONL audit
+  fallback lives there, and an unwritable folder loses records silently.
+- **Last successful write** — the newest non-session Success in the log.
+- **Uptime** — how long this process has been up. See the 72-hour scheduled
+  task default in `CLAUDE.md` for why that is not a theoretical question.
+- **Open sessions** — how many, and the idle window.
+
+Every check that is not green carries a **Fix** line with the actual command
+or the actual menu path. A red light with no instruction moves the problem
+rather than helping with it — and most "the server won't start" reports in
+this project were a known external step nobody had done yet. The overall
+verdict is the **worst** individual result: a page that averages its checks
+into a comfortable green is worse than no page.
+
+Colour is never the only signal — every check also carries a word (OK /
+Attention / Failing).
+
+Files: `server/lib/DsmtHttp.ps1` (undo plan, undo route, health, the detail
+builder), `server/lib/DsmtDirectory.ps1` (`Get-DsmtObjectParent`),
+`server/lib/DsmtSession.ps1` (`Get-DsmtSessionSummary`),
+`server/lib/DsmtCommon.ps1` (version, `StartedUtc`), `web/index.html`,
+`web/app.css`, `web/app.js`. **Copy `server/lib/*.ps1` and restart
+`Start-DSMT.ps1`**, then copy `web/*` and hard-refresh.
+
+---
+
+## 1.10.0 — 2026-07-31
+
+**Refresh on the Audit log.**
+
+The audit log is the one table in the console written by *everyone*. Every
+other grid shows what this operator asked for; this one goes out of date the
+moment a second operator acts, and until now the only way to see their entry
+was to change a filter and change it back, or reload the page — which on a
+tab that costs a round trip to AD is a poor way to ask a small question.
+
+- **Refresh** sits in the Audit log toolbar, before the search box, and
+  reloads with the range, filter and search term already in force.
+- Beside it, **Updated HH:MM:SS** — how stale what you are reading is. It is
+  clock time, not "5 minutes ago": a relative label needs a timer to stay
+  honest, and a stale one on an audit screen is worse than none at all.
+- The button is its own progress indicator (*Refreshing...*, disabled while
+  in flight). There is no spinner anywhere else in this console, and a button
+  that does nothing visible when pressed reads as a broken button — which is
+  exactly the report that came back about Export in 1.7.5.
+- Narrow screens put the search box on its own line and let Refresh and
+  Export share the next one; the stamp stays, because staleness matters most
+  where you cannot see the whole table at once.
+
+Files: `web/index.html`, `web/app.css`, `web/app.js`,
+`server/lib/DsmtCommon.ps1` (version). Copy `web/*` and hard-refresh. No
+server change — `GET /api/audit` already took every parameter this needs.
+
+---
+
+## 1.9.2 — 2026-07-31
+
+**Says what it is connected to, and explains a 404 on a new route.**
+
+- The **Database** section opens with a connection panel: a Connected /
+  Not connected marker and four fields — SQL Server instance, Database,
+  where the audit log goes, and whether operators, sessions and the snapshot
+  are stored. It was a sentence before; on a screen with two name-shaped
+  inputs, what is *live* has to be readable without comparing it to what is
+  typed in the boxes underneath.
+- The rail entry for Database now carries `server / database` as its hint,
+  so the current target is visible without opening the section.
+- `No API route for POST /api/settings/sql/databases` now adds what it
+  means: the web files were copied but the server was not restarted, so a new
+  front end is talking to an old back end. The raw 404 read like a broken
+  feature. **This is not a code fix — the route has existed since 1.8.1 —
+  it is a fix for the message.**
+
+Files: `web/app.js`, `web/app.css`, `server/lib/DsmtCommon.ps1` (version).
+Copy `web/*` and hard-refresh. Note that `server/lib/*.ps1` from 1.8.1 must
+be on the host and the server restarted before *List existing databases*,
+the custom port or the idle timeout will work at all.
+
+---
+
+## 1.9.1 — 2026-07-31
+
+**The arrangement switch is removed. One section at a time is the layout.**
+
+1.9.0 offered three arrangements because there seemed to be no single right
+one. There was: the rail. *Single column* and *Columns* were both variations
+on scrolling past five sections you did not come for, and a setting whose
+only real answer is "the default" is not a setting, it is a decision that was
+not made. Made now.
+
+- The segmented control in the Settings header is gone, and with it the
+  `.seg` / `.seg-btn` styles and the `dsmt.settings.layout` key.
+- The rail is always there; which section was open is still remembered per
+  browser in `dsmt.settings.section`.
+- Cards are still hidden rather than removed, so handlers survive a switch,
+  and below 900px the rail is still a scrolling row of chips.
+
+Files: `web/index.html`, `web/app.css`, `web/app.js`,
+`server/lib/DsmtCommon.ps1` (version). Copy `web/*` and hard-refresh.
+
+---
+
+## 1.9.0 — 2026-07-31
+
+**Settings is rearranged, and the arrangement is the operator's choice.**
+
+1.8.1 put the settings cards into a two- or three-column grid. That fixed the
+narrow-strip problem but produced a new one: six cards of unequal height in a
+grid have ragged bottoms, no reading order, and a form whose fields sit in a
+different column from the button that submits them. Density is not the same
+thing as order.
+
+What it is now:
+
+- **A section rail.** The six sections — System, Network, Database, Identity,
+  Service account, Sessions — are listed down the left with a one-line hint
+  each, and one section is shown at a time. The current one is marked with an
+  accent edge, not a filled block.
+- **Three arrangements, chosen in the header.** *One section* (the default,
+  the rail), *Single column* (everything, top to bottom, at a readable
+  measure), *Columns* (two from 1100px, three from 1700px — 1.8.1's layout,
+  kept for anyone who prefers it). The choice and the open section are
+  remembered per browser in `localStorage`.
+- **Cards are hidden, never removed.** Switching sections toggles `hidden` on
+  elements that stay in the DOM, so every handler wired by `wireSettings()`
+  stays attached — no re-wiring, and no dead buttons after a switch.
+- **On a phone** the rail becomes a horizontally scrolling row of section
+  chips above the card, so it never takes half the screen. Below 900px the
+  hints are dropped and the accent edge moves from the left to the bottom.
+
+There is no single correct arrangement for a screen that is used on a 360px
+phone and a 34" monitor, which is why this is a setting and not a decision.
+
+Files: `web/index.html`, `web/app.css`, `web/app.js`,
+`server/lib/DsmtCommon.ps1` (version). Copy `web/*` and hard-refresh
+(Ctrl+F5); restart the server only so the About dialog reports 1.9.0.
+
+---
+
+## 1.8.1 — 2026-07-31
+Fixes the idle-timeout error, and finishes the Settings screen.
+
+**Fixed - saving an idle timeout returned 500.**
+`Cannot convert value " -> " to type "System.Int32"`. The audit line built its
+target as `$previous + ' -> ' + $minutes`, and `$previous` is an **int** - so
+PowerShell tried to parse the string `' -> '` as a number. Cast to `[string]`
+first. The two other `' -> '` audit targets are string-plus-string and were
+never affected; checked.
+
+**Choose an existing database** (`DsmtSql.ps1`, `DsmtHttp.ps1`, `web/*`):
+- **List existing databases** on the instance and pick one, for upgrading an
+  installation that already has a DSMT database under any name. DSMT then adds
+  only the tables that are missing and leaves the data alone.
+- `POST /api/settings/sql/databases` lists the online user databases.
+
+**Confirmation before a database is created**:
+- `Initialize-DsmtSql` takes `-CreateIfMissing`. From the console it is
+  **false**, so a missing database comes back as `needsCreate` and the screen
+  asks first - a typo in an instance name should not silently leave a stray
+  database on a production server. The installer and the server still create
+  on sight, which is what they are for.
+- The result now says which of three things happened: created the database,
+  used an existing one and added N missing tables, or used an existing one
+  that was already complete. That distinction is the whole point when
+  upgrading.
+
+**Custom port** - a Network section sets the listening port, saved to
+`config\dsmt.config.json`. It states plainly that a listener cannot move port
+while running, so it applies on the next start, and prints the matching
+`netsh http add urlacl` and firewall commands, since a new port needs both.
+
+**Layout** - the Settings screen was a narrow strip down the left of a wide
+monitor. It is now a grid: one column under 1000px, two above, three above
+1600px, capped at 1500px so no card stretches past a readable measure.
+
+**Also** - the menu no longer appends the controller count to the domain name.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart.
+
+## 1.8.0 — 2026-07-31
+Settings becomes a screen, and it is now the place to diagnose SQL.
+
+**Settings is a tab, not a dialog** (`web/*`):
+- It sits alongside Users, Groups and Audit log, and renders inline. Nothing
+  in it depends on an overlay being able to display - which matters, because
+  1.7.5 was an incident where no overlay displayed and the settings screen was
+  therefore unreachable exactly when it was needed.
+- Five sections: **System** (version, publisher, domain, controller, listen
+  address, result cap, data folder), **Database**, **Identity**, **Service
+  account**, **Sessions**.
+- Every action reports **inline, next to the control that produced it**, not
+  in a toast.
+
+**Database section** — the fastest way to find out why SQL is not recording
+anything. Enter the instance, press Connect, and the **exact error SQL Server
+returned is shown verbatim** rather than being reduced to "it failed". On
+success the database and tables are created and the setting persisted.
+
+**Service account section** — pick gMSA, a dedicated account or LocalSystem,
+type the name, and DSMT builds the exact `-ChangeServiceAccount` command, with
+a Copy button and a per-type hint (a gMSA gets its trailing `$` added for you).
+
+It builds the command rather than running it, and says why: changing the
+account rewrites the service or scheduled task, the URL reservation, the data
+folder permissions and the SQL login, which need administrator rights on the
+host that this process deliberately does not have. A button that pretended
+otherwise would fail halfway and leave the installation in a worse state than
+it started.
+
+**Also**: the Settings entry moved out of the menu into the tab strip; the
+identity-mode warning and the idle-timeout controls moved into the new screen;
+the deployment guide updated to match.
+
+Deploy: `web\*` — hard refresh (Ctrl+F5). No server restart needed.
+
+## 1.7.5 — 2026-07-31
+**Fixes the first-run blocker: no overlay in the console was visible.**
+
+Reported from the first real install on `LAB.LOCAL`: dialogs never appeared,
+so About, New user, Import CSV, Columns and every detail-pane action - Reset
+password, Unlock, Disable, Move OU, Add to group, Delete - all did nothing.
+Toasts never appeared, so Export gave no feedback. The notifications panel
+opened off the right edge of the screen.
+
+**It was not JavaScript.** The browser console was clean and every request
+returned 200 - including `/api/ous`, which is fetched only from inside the
+Move OU / New user / New group / Import handlers. So the listeners fired, the
+actions ran, the fetches succeeded and the markup was built. What failed was
+making it visible.
+
+**Cause**: all three overlays positioned themselves with logical inset
+properties, and on the browser in use those were ignored - leaving each
+element at its static position:
+
+| Overlay | Was | Result |
+| --- | --- | --- |
+| Dialog | `inset: 0` (from the design system) | Collapsed to content size at the foot of the page, clipped by `body { overflow: hidden }` |
+| Toasts | `inset-block-end` + `inset-inline-end` | Landed below the fold, clipped the same way |
+| Bell panel | `inset-inline-end: 0` | Spilled to the right, off-screen |
+
+One cause, all three symptoms, and no error anywhere - which is why it read as
+"nothing works".
+
+**Fix** (`web/app.css`, rewritten):
+- Every overlay now uses physical offsets - `top` / `right` / `bottom` /
+  `left`. `.dialog-backdrop` is restated in full over the design system's
+  version, since that is where `inset: 0` came from.
+- `color-mix()` replaced with `rgba()` throughout, including a redefinition of
+  `--color-divider`, which the design system builds with `color-mix()` - where
+  unsupported the variable is invalid and every border drawn from it silently
+  disappears.
+- `min()` replaced with `width` + `max-width`; `.dialog` gets an explicit
+  width because the design system sizes it with `min()`.
+- `100dvh` moved into an `@supports` block as progressive enhancement; the
+  base layout uses `vh`.
+- Logical padding/margin replaced with physical. The console is LTR-only by
+  decision, so they bought nothing and cost a class of failure that produces
+  no error message.
+- The rules for what may and may not be used are written at the top of the
+  file, with this incident as the reason.
+- `docs/deployment-guide.html` given the same treatment.
+
+Deploy: **`web\app.css` and `docs\deployment-guide.html`. Hard refresh
+(Ctrl+F5) - the old stylesheet will otherwise be served from cache.** No
+server restart needed.
+
+## 1.7.4 — 2026-07-31
+`docs/deployment-guide.html` - the contents sidebar collapses instead of the
+document.
+
+- **1.7.3 collapsed the wrong thing.** It made the body sections collapsible;
+  what was wanted was the contents list on the left. The body is back to a
+  normally flowing document, and the sidebar is now what folds.
+- Each contents entry that has sub-sections gets its own disclosure control,
+  and **all of them start collapsed** - the sidebar opens as twelve top-level
+  entries instead of thirty.
+- **The chevron toggles, the link navigates.** They are separate targets, so
+  one click never does two things - the usual complaint with this pattern.
+- The group containing the section you are reading **opens itself** and is
+  marked in the accent colour, so a collapsed sidebar still shows where you
+  are. Driven by the URL fragment, so it works from a contents click, a
+  cross-reference, or a pasted link.
+- Printing expands the whole contents list first.
+- Keyboard and screen readers: `aria-expanded` and `aria-controls` on every
+  toggle, and a visible focus ring.
+
+Deploy: replace `docs\deployment-guide.html`. Documentation only.
+
+## 1.7.3 — 2026-07-31
+`docs/deployment-guide.html` - every section now collapses.
+
+- All 17 top-level sections are native `<details>`, and **only the first is
+  open**. The guide opens as a one-screen index of itself rather than 88KB of
+  prose, on a desktop as much as on a phone.
+- **Expand all / Collapse all** at the top.
+- Following a link into a collapsed section opens it - otherwise the anchor
+  would land on a closed heading and the guide would look broken. Works from
+  the contents list, from a cross-reference, and from a pasted URL with a
+  fragment.
+- On a phone, tapping a contents entry closes the contents behind you.
+- Printing opens everything first and restores your state afterwards, via
+  `beforeprint`/`afterprint` plus a `matchMedia('print')` listener for Safari,
+  with a print stylesheet as a fallback. A printed guide of bare headings
+  would be worse than no printing at all.
+- Collapsing and expanding still work with **scripting disabled** - that is
+  native `<details>` behaviour. The script only adds the three things that
+  would otherwise be annoying.
+
+Deploy: replace `docs\deployment-guide.html`. Documentation only.
+
+## 1.7.2 — 2026-07-31
+- `CHANGELOG.md` — added a **"Version history at a glance"** table: one row
+  per release with the date, a one-line summary and what deploying it takes.
+  It is an index into the entries below it, not a second record — a separate
+  version-history file would have been a second source of truth to keep in
+  step, which is the failure mode the versioning rule exists to prevent.
+- `CLAUDE.md` — records that a release adds both the row and the entry, and
+  that the row must never carry a detail the entry does not.
+
+Deploy: documentation only, no runtime impact.
+
+## 1.7.1 — 2026-07-30
+`docs/deployment-guide.html` made usable on a phone — Safari on iOS, and any
+Chromium browser on Android or iOS.
+
+- **Tables reflow into stacked cards below 640px.** Every data cell carries
+  its column name in `data-label`, added to all 17 multi-column tables, so a
+  narrow screen loses no information. Hiding columns would have been easier
+  and would have hidden exactly the prerequisites people miss.
+- **The contents list collapses on a phone**, so the document starts at the
+  top of the screen instead of below a full-page index. Four lines of inline
+  script, no requests; with scripting off it simply stays open.
+- **iOS specifics**: `-webkit-text-size-adjust: 100%` stops Safari inflating
+  text on rotation to landscape; `env(safe-area-inset-*)` keeps content clear
+  of the notch and the home indicator; `-webkit-overflow-scrolling: touch` on
+  scrollable blocks.
+- **Nothing scrolls the page sideways.** Code blocks scroll inside themselves
+  and keep their lines unwrapped so commands stay copy-pasteable; inline code
+  wraps instead of widening the page.
+- Deliberately **not** `overflow-x: hidden` on `body`, which is the usual
+  quick fix and breaks `position: sticky` for the desktop sidebar in both
+  Safari and Chromium. The real cause is a grid item refusing to shrink below
+  its content, so `min-width: 0` fixes it without side effects.
+- Larger tap targets in the contents under `@media (pointer: coarse)`, and a
+  second type scale at 640px.
+
+Deploy: replace `docs\deployment-guide.html`. Documentation only, no runtime
+impact.
+
+## 1.7.0 — 2026-07-30
+Idle timeout defaults tightened.
+
+- **Default is now 15 minutes** (was 480). An idle console showing directory
+  objects and holding an operator's credentials should not sit unattended for
+  a working day.
+- **Maximum is 480 minutes (8 hours)**, down from 10080. A session that can
+  outlive a working day is not an idle control, it is a formality.
+- The default, minimum and maximum are **three constants in
+  `DsmtCommon.ps1`**, enforced on every route that can set the value — the
+  `-SessionMinutes` parameter, `config\dsmt.config.json`, and
+  `POST /api/settings/session` — and served to the browser through
+  `/api/meta` and `/api/settings` as `sessionBounds`, so the Settings form
+  validates against exactly the numbers the server enforces instead of
+  keeping its own copy.
+- Out-of-range values from a parameter or a config file are **clamped, not
+  rejected**: a stale config must not stop the server from starting. The
+  runtime API still rejects them with a 400, because there a human is
+  watching and silently changing their number would be worse.
+- `-SessionHours` no longer carries a default of its own, so it cannot
+  quietly override the new default when omitted.
+- Settings presets relabelled: 15 minutes is marked as the default, 8 hours
+  as the maximum.
+
+**Upgrading**: an existing `config\dsmt.config.json` keeps whatever it
+already has — an explicit setting still wins. Only fresh installs, and
+installations that never set a value, pick up 15 minutes. Anything above 480
+in an old file is clamped to 480 on the next start.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart.
+
+## 1.6.0 — 2026-07-30
+Idle timeout, and a deployment guide that covers every installation form.
+
+**Deployment guide** (`docs/deployment-guide.html`):
+- New section **"Every installation form, at a glance"** — the four
+  independent choices an installation is made of (how it stays running, which
+  account, where records are stored, which identity acts), each as a table of
+  the concrete forms with the switch that selects it and what it needs. They
+  combine freely, and five worked examples show the common combinations.
+- New **1.4 "What each choice additionally requires"** — a matrix of every
+  optional choice against its one-time prerequisite and who provides it.
+  These are exactly the steps that, when skipped, resurface later as failures
+  that look like bugs: the KDS root key and its 10-hour propagation, the
+  `dbcreator` right, FOD media for an offline client, the batch-logon right.
+- Subsection numbering repaired: the incremental additions had produced
+  4.1a/4.1b/4.1c and 8.3a. Now 4.1–4.6 and 8.1–8.7, with stable anchors, and
+  every cross-reference updated to match.
+- Table of contents rebuilt to include the subsections that had accumulated
+  without ever being listed.
+- States explicitly that none of the choices is a one-way door: account,
+  database, identity mode, idle timeout and hosting form can all be changed
+  afterwards.
+
+Verified: no broken internal links, no external references, no Hebrew left.
+
+**Server** (`DsmtCommon.ps1`, `DsmtSession.ps1`, `DsmtHttp.ps1`,
+`Start-DSMT.ps1`):
+- The timeout is now held in **minutes, in one field** (`SessionMinutes`,
+  default 480). `-SessionHours` still works and is converted at startup rather
+  than stored alongside — two fields meaning the same thing is how they end up
+  disagreeing.
+- `-SessionMinutes` on `Start-DSMT.ps1`, saved in `config\dsmt.config.json`.
+- `POST /api/settings/session` changes it at runtime, audited, persisted, and
+  **applied to sessions that are already open** — the check is made against
+  the current value on every request, not captured when the session started.
+  Accepted range 1 minute to 7 days; anything else is a 400.
+- `/api/meta` and `GET /api/session` return the value so the browser can run
+  its own countdown.
+- The startup banner states the timeout.
+
+**Front end** (`web/app.js`):
+- A real idle watch. **Only genuine interaction counts** — mousedown, keydown,
+  touch, wheel, focus. Background work deliberately does not reset the clock,
+  or a console left open on a dashboard would keep its session alive forever
+  and the timeout would mean nothing.
+- One minute before expiry a dialog appears with a live countdown, "Stay
+  signed in" and "Sign out now". Any real activity dismisses it and tells the
+  server, so both clocks agree.
+- On expiry the session is ended server-side too, and the sign-in screen says
+  why rather than just appearing.
+- The server remains the enforcement — nothing the browser does extends a
+  session. The timer only exists so an operator is warned instead of
+  discovering it as a failed action mid-task.
+
+**Settings** — the timeout is editable, with presets from 5 minutes to 8
+hours. Changing it restarts the local countdown immediately.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart.
+
+## 1.5.0 — 2026-07-30
+Flexible service identity: gMSA, dedicated account, machine account or the
+installing user — changeable at any time. Plus an identity mode that lets
+directory reads run as the service account while writes stay on the operator.
+
+**Identity mode** (`server/lib/DsmtDirectory.ps1`, `DsmtCommon.ps1`,
+`DsmtHttp.ps1`, `Start-DSMT.ps1`, `web/*`):
+- `Get-DsmtAdParams` now takes `-Intent 'read'|'write'` and is **the single
+  place** that decides which identity performs an operation. All 16 call
+  sites declare their intent.
+- `operator` (default) — reads and writes both run as the signed-in operator.
+  Byte-for-byte the 1.4.x behaviour; an existing installation notices nothing.
+- `hybrid` — reads run as the account the server runs under, writes still run
+  as the operator. **Writes deliberately stay on the operator in both modes**,
+  because that is what makes the DC's own security log name the human who
+  made the change. Nothing can forge that afterwards.
+- "Runs as the service account" is implemented as *not passing* `-Credential`
+  — the process already runs as that account. That is precisely why a gMSA or
+  machine account works: there is no password to hand over.
+- `-Intent` defaults to `write`, so a call site that forgets to declare itself
+  keeps operator credentials rather than silently gaining service-account
+  rights.
+- Settable with `-IdentityMode`, in `config\dsmt.config.json`, or from
+  **Settings** at runtime (`POST /api/settings/identity`, audited).
+- The hybrid consequence — every operator can see everything the service
+  account can see — is stated in the Settings dialog next to the control, in
+  the startup banner, and as a notification. Not buried in documentation.
+
+**Service accounts** (`server/Install-DSMT.ps1`):
+- `-ServiceAccount` now accepts four forms, classified automatically:
+  the installing user (default), a dedicated account, a **gMSA** (detected by
+  the trailing `$`, no password requested), or **LocalSystem**.
+- Pre-flight per kind: a gMSA is verified with `Test-ADServiceAccount` before
+  anything is registered against it; an ordinary account is checked for
+  `PasswordNeverExpires` and for membership of Domain/Enterprise/Schema
+  Admins, both of which produce a loud warning rather than a silent surprise.
+- gMSA registration uses `sc.exe config obj= "DOM\name$" password= ""` after
+  `New-Service`, because `New-Service` cannot express a passwordless managed
+  account. Scheduled tasks use `New-ScheduledTaskPrincipal`.
+- The default remains the installing user: it is the only choice that cannot
+  fail, since the installer has just proved that account reaches AD and SQL.
+  It requires one password prompt — Windows cannot log on as an account at
+  boot without storing its password.
+
+**`-ChangeServiceAccount`** — move an installation to a different account
+without reinstalling. Updates all five things that depend on the identity as
+one operation: the service or scheduled task, **the URL reservation** (the one
+that otherwise breaks listening much later, with a misleading error), the
+`data\` permissions, the SQL login (printed as a script, since the installer
+may not hold rights on the instance), and the saved settings. The target
+account is verified and its password collected before anything is touched, so
+a failure leaves the installation as it was.
+
+**Publisher** — `$script:DsmtPublisher` in `DsmtCommon.ps1`, one constant like
+the version, surfaced through `/api/meta` into the sign-in footer and the
+About dialog. Set to **Rendi Group**.
+
+**Notifications** — two new, both derived from real state: running under a
+personal account (with the exact `-ChangeServiceAccount` command), and hybrid
+mode being active.
+
+Deploy: `web\*` — hard refresh. `server\**` — restart. Re-run the installer
+only if you want to change the account.
+
 ## 1.4.0 — 2026-07-30
 Run DSMT unattended: as a real Windows service, or as a hardened scheduled
 task, and start it straight from the installer.

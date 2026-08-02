@@ -33,9 +33,32 @@
     'any' (default here) reserves the URL so other machines can reach the
     console. 'localhost' skips the reservation and the firewall rule.
 .PARAMETER ServiceAccount
-    Domain account that will run DSMT, e.g. 'LAB\svc-dsmt'. Used for the URL
-    reservation, the data\ permissions and the scheduled task. Defaults to
-    the account running this installer.
+    The account DSMT will run as. Used for the URL reservation, the data\
+    permissions, and the service or scheduled task. Four forms are accepted
+    and the right handling is chosen automatically:
+
+      (omitted)             the account running this installer. The default,
+                            because it is the only choice that cannot fail:
+                            it already exists, and the installer just proved
+                            it can reach AD and SQL. You are prompted for its
+                            password once, because Windows has to store it to
+                            log on at boot.
+      LAB\svc-dsmt          a dedicated account. Prompts for the password.
+      LAB\gmsa-dsmt$        a group managed service account - detected by the
+                            trailing $. No password exists or is asked for.
+      LocalSystem           the machine account. No password. Reaches AD and
+                            SQL as LAB\COMPUTERNAME$.
+
+    Whatever you pick, it can be changed later with -ChangeServiceAccount.
+.PARAMETER ChangeServiceAccount
+    Move an existing installation to a different account, without
+    reinstalling. Takes the same four forms as -ServiceAccount and updates
+    all five things that depend on the identity: the service or task, the URL
+    reservation, the data\ permissions, the SQL login and the saved settings.
+.PARAMETER IdentityMode
+    'operator' (default) - every directory read and write runs as the
+    signed-in operator. 'hybrid' - reads run as the service account, writes
+    still run as the operator. See Start-DSMT.ps1 for the full explanation.
 .PARAMETER SqlServer
     SQL Server instance to use, e.g. 'SQL01' or 'SQL01\LAB'. Omit to have the
     installer look for a local instance. Use -SkipSql to run without SQL.
@@ -97,6 +120,8 @@ param(
     [int]    $Port = 8080,
     [ValidateSet('localhost', 'any')][string] $ListenAddress = 'any',
     [string] $ServiceAccount = '',
+    [string] $ChangeServiceAccount = '',
+    [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
     [string] $SqlServer = '',
     [string] $SqlDatabase = 'DSMT',
     [switch] $SkipSql,
@@ -145,6 +170,110 @@ function Write-Fail {
 function Write-Warn2 {
     param([string] $Message)
     Write-Host ('       [warn] ' + $Message) -ForegroundColor Yellow
+}
+
+function Get-DsmtAccountKind {
+    <#
+    .SYNOPSIS
+        Classifies an account string so every later step knows how to treat it.
+    .OUTPUTS
+        'gmsa'    - group managed service account (trailing $). No password.
+        'machine' - LocalSystem / the computer account. No password.
+        'user'    - an ordinary domain or local account. Needs a password.
+    #>
+    param([string] $Account)
+
+    if ([string]::IsNullOrWhiteSpace($Account)) { return 'user' }
+
+    $trimmed = $Account.Trim()
+    if ($trimmed.EndsWith('$')) { return 'gmsa' }
+
+    $wellKnown = @('LocalSystem', 'NT AUTHORITY\SYSTEM', 'SYSTEM',
+                   'NT AUTHORITY\NETWORK SERVICE', 'NetworkService')
+    foreach ($name in $wellKnown) {
+        if ($trimmed -eq $name) { return 'machine' }
+    }
+
+    return 'user'
+}
+
+function Get-DsmtServiceLogonName {
+    <#
+    .SYNOPSIS
+        The string the service control manager wants for an account.
+    #>
+    param([string] $Account, [string] $Kind)
+
+    if ($Kind -eq 'machine') { return 'LocalSystem' }
+    return $Account
+}
+
+function Test-DsmtAccountReady {
+    <#
+    .SYNOPSIS
+        Checks an account before anything is registered against it, so a
+        problem surfaces here rather than as a service that will not start.
+    .OUTPUTS
+        Hashtable with Ok, Message and Warning.
+    #>
+    param([string] $Account, [string] $Kind)
+
+    if ($Kind -eq 'machine') {
+        return @{ Ok = $true; Message = 'LocalSystem - no password, reaches the network as the computer account'; Warning = '' }
+    }
+
+    if ($Kind -eq 'gmsa') {
+        # A gMSA has to be installed on THIS host before anything can run as
+        # it. Test-ADServiceAccount is the only reliable way to know.
+        $name = $Account.Trim().TrimEnd('$')
+        if ($name.Contains('\')) { $name = $name.Split('\')[-1] }
+
+        try {
+            Import-Module ActiveDirectory -ErrorAction Stop
+            if (Test-ADServiceAccount -Identity $name -ErrorAction Stop) {
+                return @{ Ok = $true; Message = ('gMSA ' + $Account + ' is installed on this host - no password needed'); Warning = '' }
+            }
+            return @{ Ok = $false
+                      Message = ('The gMSA ' + $Account + ' is not usable on this host.')
+                      Warning = ('Run:  Install-ADServiceAccount -Identity ' + $name + '   and make sure this computer is in the group named by -PrincipalsAllowedToRetrieveManagedPassword.') }
+        } catch {
+            return @{ Ok = $false
+                      Message = ('Could not verify the gMSA ' + $Account + ': ' + $_.Exception.Message)
+                      Warning = 'A gMSA needs Add-KdsRootKey in the forest (once, with a 10 hour propagation delay), New-ADServiceAccount, and Install-ADServiceAccount on this host.' }
+        }
+    }
+
+    # Ordinary account: the password is the thing that bites later.
+    $warning = ''
+    $sam = $Account
+    if ($sam.Contains('\')) { $sam = $sam.Split('\')[-1] }
+    if ($sam.Contains('@')) { $sam = $sam.Split('@')[0] }
+
+    try {
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $adUser = Get-ADUser -Identity $sam -Properties PasswordNeverExpires, memberOf -ErrorAction Stop
+
+        if (-not $adUser.PasswordNeverExpires) {
+            $warning = 'This account''s password CAN EXPIRE. When it does, DSMT stops starting and the cause is not obvious. Set PasswordNeverExpires, or use a gMSA.'
+        }
+
+        # Running a service that holds operator credentials as a highly
+        # privileged account is worth objecting to out loud.
+        foreach ($groupDn in @($adUser.memberOf)) {
+            if ($groupDn -match '(?i)CN=(Domain Admins|Enterprise Admins|Schema Admins)') {
+                $extra = 'This account is a member of ' + $Matches[1] + '. DSMT holds operator credentials in memory; running it as a privileged account makes that much more attractive to steal. Use a dedicated low-privilege account or a gMSA.'
+                if ($warning) { $warning = $warning + ' ' + $extra } else { $warning = $extra }
+            }
+        }
+
+        return @{ Ok = $true; Message = ('Account ' + $Account + ' found in the directory'); Warning = $warning }
+
+    } catch {
+        # A local (non-domain) account is legitimate; do not fail on it.
+        return @{ Ok = $true
+                  Message = ('Could not look up ' + $Account + ' in the directory - continuing (it may be a local account)')
+                  Warning = ('Directory lookup failed: ' + $_.Exception.Message) }
+    }
 }
 
 function Test-IsAdmin {
@@ -199,6 +328,237 @@ if ($isAdmin) {
     } catch {
         Write-Fail 'Could not elevate automatically.' 'Right-click PowerShell, Run as administrator, and run this script again.'
     }
+}
+
+# ---------------------------------------------------------------------------
+# 1b. Change the run account and stop - a maintenance operation, not an install
+# ---------------------------------------------------------------------------
+
+if ($ChangeServiceAccount) {
+
+    Write-Host ''
+    Write-Host ('  Moving DSMT to a different account: ' + $ChangeServiceAccount) -ForegroundColor White
+    Write-Host '  ---------------------------------------------------------------' -ForegroundColor DarkGray
+
+    if (-not (Test-IsAdmin)) {
+        Write-Host '  [FAIL] This needs administrator rights.' -ForegroundColor Red
+        exit 1
+    }
+
+    $newAccount = $ChangeServiceAccount.Trim()
+    $newKind    = Get-DsmtAccountKind -Account $newAccount
+
+    $dataPath   = Join-Path $repoRoot 'data'
+    $serviceNm  = 'DSMT'
+    $taskNm     = 'DSMT Console'
+
+    # --- verify the target account before touching anything ------------------
+    Write-Step ('Verifying ' + $newAccount)
+    $check = Test-DsmtAccountReady -Account $newAccount -Kind $newKind
+    if (-not $check.Ok) {
+        Write-Fail $check.Message $check.Warning
+        Write-Host ''
+        Write-Host '  Nothing was changed.' -ForegroundColor Yellow
+        Write-Host ''
+        exit 1
+    }
+    Write-Ok $check.Message
+    if ($check.Warning) { Write-Warn2 $check.Warning }
+
+    # The password is collected once, up front. Failing here leaves the
+    # installation exactly as it was.
+    $newCred = $null
+    if ($newKind -eq 'user') {
+        Write-Info ('Enter the password for ' + $newAccount + '.')
+        $newCred = Get-Credential -UserName $newAccount -Message 'Password for the new DSMT account'
+        if ($null -eq $newCred) {
+            Write-Host ''
+            Write-Host '  No password supplied. Nothing was changed.' -ForegroundColor Yellow
+            Write-Host ''
+            exit 1
+        }
+    }
+
+    $previous = ''
+    $saved = Get-DsmtSavedSettings -RootPath $repoRoot
+    if ($null -ne $saved -and $saved.PSObject.Properties['ServiceAccount']) {
+        $previous = [string]$saved.ServiceAccount
+    }
+    $changePort = $Port
+    if ($null -ne $saved -and $saved.PSObject.Properties['Port'] -and -not $PSBoundParameters.ContainsKey('Port')) {
+        $changePort = [int]$saved.Port
+    }
+
+    # --- 1 of 5: the service or the scheduled task ---------------------------
+    Write-Step 'Service / scheduled task logon account'
+
+    $svc = Get-Service -Name $serviceNm -ErrorAction SilentlyContinue
+    $tsk = Get-ScheduledTask -TaskName $taskNm -ErrorAction SilentlyContinue
+
+    if ($null -ne $svc) {
+        try {
+            $wasRunning = ($svc.Status -eq 'Running')
+            if ($wasRunning) { Stop-Service -Name $serviceNm -Force -ErrorAction Stop }
+
+            $logon = Get-DsmtServiceLogonName -Account $newAccount -Kind $newKind
+            if ($newKind -eq 'gmsa' -and -not $logon.EndsWith('$')) { $logon = $logon + '$' }
+
+            if ($newKind -eq 'user') {
+                $plain = $newCred.GetNetworkCredential().Password
+                $scOut = & sc.exe config $serviceNm obj= $newAccount password= $plain 2>&1 | Out-String
+                $plain = $null
+            } else {
+                $scOut = & sc.exe config $serviceNm obj= $logon password= "" 2>&1 | Out-String
+            }
+
+            if ($LASTEXITCODE -ne 0) { throw $scOut.Trim() }
+            Write-Ok ('Service "' + $serviceNm + '" now logs on as ' + $logon)
+
+            if ($wasRunning) {
+                Start-Service -Name $serviceNm -ErrorAction Stop
+                Write-Ok 'Service restarted'
+            }
+        } catch {
+            Write-Fail ('Could not change the service logon account: ' + $_.Exception.Message) `
+                       ('Set it by hand in services.msc, then re-run the remaining steps.')
+        }
+    } elseif ($null -ne $tsk) {
+        try {
+            if ($newKind -eq 'gmsa') {
+                $logon = $newAccount
+                if (-not $logon.EndsWith('$')) { $logon = $logon + '$' }
+                $principal = New-ScheduledTaskPrincipal -UserId $logon -LogonType Password -RunLevel Limited
+                Set-ScheduledTask -TaskName $taskNm -Principal $principal -ErrorAction Stop | Out-Null
+            } elseif ($newKind -eq 'machine') {
+                $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+                Set-ScheduledTask -TaskName $taskNm -Principal $principal -ErrorAction Stop | Out-Null
+            } else {
+                Set-ScheduledTask -TaskName $taskNm -User $newAccount `
+                                  -Password $newCred.GetNetworkCredential().Password -ErrorAction Stop | Out-Null
+            }
+            Write-Ok ('Scheduled task "' + $taskNm + '" now runs as ' + $newAccount)
+        } catch {
+            Write-Fail ('Could not change the scheduled task principal: ' + $_.Exception.Message)
+        }
+    } else {
+        Write-Skip 'No DSMT service or scheduled task is registered on this machine'
+    }
+
+    # --- 2 of 5: the URL reservation -----------------------------------------
+    # THE one that bites. The reservation names an account; leaving the old one
+    # in place means the new account cannot listen, and the failure appears
+    # much later as "Could not listen on http://+:8080/".
+    Write-Step 'HTTP URL reservation'
+
+    $url = 'http://+:' + $changePort + '/'
+    try {
+        $existing = & netsh.exe http show urlacl url=$url 2>&1 | Out-String
+        if ($existing -match [regex]::Escape($url)) {
+            & netsh.exe http delete urlacl url=$url 2>&1 | Out-Null
+            Write-Info ('Removed the previous reservation for ' + $url)
+        }
+
+        $aclAccount = $newAccount
+        if ($newKind -eq 'machine') { $aclAccount = 'NT AUTHORITY\SYSTEM' }
+        if ($newKind -eq 'gmsa' -and -not $aclAccount.EndsWith('$')) { $aclAccount = $aclAccount + '$' }
+
+        $add = & netsh.exe http add urlacl url=$url user=$aclAccount 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok ('Reserved ' + $url + ' for ' + $aclAccount)
+        } else {
+            Write-Fail ('Could not reserve ' + $url + ' for ' + $aclAccount + ': ' + $add.Trim()) `
+                       ('Run: netsh http add urlacl url=' + $url + ' user="' + $aclAccount + '"')
+        }
+    } catch {
+        Write-Fail ('URL reservation step failed: ' + $_.Exception.Message)
+    }
+
+    # --- 3 of 5: data\ permissions -------------------------------------------
+    Write-Step 'Data folder permissions'
+
+    if ($newKind -eq 'machine') {
+        Write-Skip 'LocalSystem already has full access'
+    } else {
+        try {
+            $grantee = $newAccount
+            if ($newKind -eq 'gmsa' -and -not $grantee.EndsWith('$')) { $grantee = $grantee + '$' }
+
+            $icacls = & icacls.exe $dataPath '/grant' ($grantee + ':(OI)(CI)M') '/T' 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok ('Granted modify on data\ to ' + $grantee)
+            } else {
+                Write-Fail ('icacls returned ' + $LASTEXITCODE + ': ' + ($icacls -join ' '))
+            }
+        } catch {
+            Write-Fail ('Could not update data\ permissions: ' + $_.Exception.Message)
+        }
+    }
+
+    # --- 4 of 5: SQL login ----------------------------------------------------
+    Write-Step 'SQL Server login'
+
+    $sqlName = ''
+    $sqlDb   = 'DSMT'
+    if ($null -ne $saved) {
+        if ($saved.PSObject.Properties['SqlServer'])   { $sqlName = [string]$saved.SqlServer }
+        if ($saved.PSObject.Properties['SqlDatabase']) { $sqlDb   = [string]$saved.SqlDatabase }
+    }
+
+    if (-not $sqlName) {
+        Write-Skip 'No SQL Server is configured, so there is no login to move'
+    } else {
+        $sqlPrincipal = $newAccount
+        if ($newKind -eq 'machine') { $sqlPrincipal = $env:USERDOMAIN + '\' + $env:COMPUTERNAME + '$' }
+        if ($newKind -eq 'gmsa' -and -not $sqlPrincipal.EndsWith('$')) { $sqlPrincipal = $sqlPrincipal + '$' }
+
+        # Granting SQL rights needs rights on the SQL instance that this
+        # installer may not have, so this step reports rather than assumes.
+        Write-Warn2 ('DSMT cannot grant SQL rights on your behalf. Run this on ' + $sqlName + ':')
+        Write-Host ''
+        Write-Host ('    USE master;') -ForegroundColor Cyan
+        Write-Host ("    IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '" + $sqlPrincipal + "')") -ForegroundColor Cyan
+        Write-Host ('        CREATE LOGIN [' + $sqlPrincipal + '] FROM WINDOWS;') -ForegroundColor Cyan
+        Write-Host ('    USE [' + $sqlDb + '];') -ForegroundColor Cyan
+        Write-Host ('    CREATE USER [' + $sqlPrincipal + '] FOR LOGIN [' + $sqlPrincipal + '];') -ForegroundColor Cyan
+        Write-Host ('    ALTER ROLE db_datareader ADD MEMBER [' + $sqlPrincipal + '];') -ForegroundColor Cyan
+        Write-Host ('    ALTER ROLE db_datawriter ADD MEMBER [' + $sqlPrincipal + '];') -ForegroundColor Cyan
+        Write-Host ''
+        $script:Outstanding.Add('Grant ' + $sqlPrincipal + ' access to ' + $sqlDb + ' on ' + $sqlName + ' (SQL script printed above)')
+    }
+
+    # --- 5 of 5: saved settings ----------------------------------------------
+    Write-Step 'Saved configuration'
+
+    $update = Save-DsmtSavedSettings -RootPath $repoRoot -Values @{
+        ServiceAccount = $newAccount
+        AccountKind    = $newKind
+        AccountChangedOn = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        AccountChangedBy = ($env:USERDOMAIN + '\' + $env:USERNAME)
+    }
+    if ($update.Ok) {
+        Write-Ok ('Recorded the new account' + $(if ($previous) { ' (was ' + $previous + ')' } else { '' }))
+    } else {
+        Write-Fail ('Could not update the saved settings: ' + $update.Error)
+    }
+
+    # --- summary --------------------------------------------------------------
+    Write-Host ''
+    Write-Host '  ---------------------------------------------------------------' -ForegroundColor DarkGray
+    if ($script:Outstanding.Count -eq 0) {
+        Write-Host ('  DSMT now runs as ' + $newAccount + '. Nothing outstanding.') -ForegroundColor Green
+    } else {
+        Write-Host ('  Account changed, with ' + $script:Outstanding.Count + ' item(s) outstanding:') -ForegroundColor Yellow
+        Write-Host ''
+        $idx = 1
+        foreach ($item in $script:Outstanding) {
+            Write-Host ('   ' + $idx + ') ' + $item) -ForegroundColor Yellow
+            $idx++
+        }
+    }
+    Write-Host ''
+    Write-Host '  Restart DSMT for the change to take effect.' -ForegroundColor White
+    Write-Host ''
+    exit 0
 }
 
 # ---------------------------------------------------------------------------
@@ -364,25 +724,65 @@ foreach ($dir in @($dataPath, $configPath)) {
     }
 }
 
+Write-Step 'Run account'
+
+# The default is the account running this installer. It is the only choice
+# that cannot fail: it exists, and the steps above just proved it reaches the
+# directory. Everything else is opt-in.
 $runAccount = $ServiceAccount
+$accountWasChosen = $true
 if ([string]::IsNullOrWhiteSpace($runAccount)) {
     $runAccount = $env:USERDOMAIN + '\' + $env:USERNAME
-    Write-Info ('No -ServiceAccount given; using the current account: ' + $runAccount)
+    $accountWasChosen = $false
 }
 
-if ($ServiceAccount) {
+$runAccountKind = Get-DsmtAccountKind -Account $runAccount
+
+switch ($runAccountKind) {
+    'gmsa'    { Write-Info ('Group managed service account: ' + $runAccount) }
+    'machine' { Write-Info 'Machine account (LocalSystem)' }
+    default   {
+        if ($accountWasChosen) {
+            Write-Info ('Dedicated account: ' + $runAccount)
+        } else {
+            Write-Info ('No -ServiceAccount given; using the account running this installer: ' + $runAccount)
+        }
+    }
+}
+
+$accountCheck = Test-DsmtAccountReady -Account $runAccount -Kind $runAccountKind
+if ($accountCheck.Ok) {
+    Write-Ok $accountCheck.Message
+} else {
+    Write-Fail $accountCheck.Message $accountCheck.Warning
+}
+if ($accountCheck.Warning -and $accountCheck.Ok) {
+    Write-Warn2 $accountCheck.Warning
+}
+
+if (-not $accountWasChosen -and $runAccountKind -eq 'user') {
+    Write-Info 'This is a personal account. For production, move DSMT to a dedicated account or a gMSA:'
+    Write-Info ('  .\Install-DSMT.ps1 -ChangeServiceAccount "' + $Domain.Split('.')[0].ToUpper() + '\svc-dsmt"')
+    Write-Info 'The console will also raise this as a notification until it is changed.'
+}
+
+# --- data\ permissions for that account -------------------------------------
+
+if ($runAccountKind -ne 'machine') {
     try {
         # Modify, inherited by files and folders, applied to the whole tree.
-        $icacls = & icacls.exe $dataPath '/grant' ($ServiceAccount + ':(OI)(CI)M') '/T' 2>&1
+        $icacls = & icacls.exe $dataPath '/grant' ($runAccount + ':(OI)(CI)M') '/T' 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-Ok ('Granted modify on data\ to ' + $ServiceAccount)
+            Write-Ok ('Granted modify on data\ to ' + $runAccount)
         } else {
             Write-Fail ('icacls returned ' + $LASTEXITCODE + ': ' + ($icacls -join ' ')) `
-                       ('Grant ' + $ServiceAccount + ' modify rights on ' + $dataPath + ' manually.')
+                       ('Grant ' + $runAccount + ' modify rights on ' + $dataPath + ' manually.')
         }
     } catch {
         Write-Fail ('Could not set permissions on data\: ' + $_.Exception.Message)
     }
+} else {
+    Write-Skip 'LocalSystem already has full access to the file system'
 }
 
 # ---------------------------------------------------------------------------
@@ -680,9 +1080,15 @@ public class DsmtServiceHost : ServiceBase
                 StartupType    = 'Automatic'
             }
 
-            if ($ServiceAccount) {
-                Write-Info ('Enter the password for ' + $ServiceAccount + ' - the service manager has to store it.')
-                $svcCred = Get-Credential -UserName $ServiceAccount -Message 'Password for the DSMT service account'
+            # A gMSA has no password, and New-Service has no way to express
+            # that - so the service is created first and the logon account is
+            # set afterwards with sc.exe, where an empty password is the
+            # documented way to say "managed account".
+            $needsScConfig = ($runAccountKind -eq 'gmsa')
+
+            if ($runAccountKind -eq 'user') {
+                Write-Info ('Enter the password for ' + $runAccount + ' - the service manager has to store it to log on at boot.')
+                $svcCred = Get-Credential -UserName $runAccount -Message 'Password for the DSMT service account'
                 if ($null -eq $svcCred) {
                     throw 'No credential was supplied, so the service cannot run under that account.'
                 }
@@ -691,11 +1097,20 @@ public class DsmtServiceHost : ServiceBase
 
             New-Service @newService -ErrorAction Stop | Out-Null
 
-            if ($ServiceAccount) {
-                Write-Ok ('Registered service "' + $serviceName + '" running as ' + $ServiceAccount)
-            } else {
+            if ($needsScConfig) {
+                $logon = $runAccount
+                if (-not $logon.EndsWith('$')) { $logon = $logon + '$' }
+
+                $scOut = & sc.exe config $serviceName obj= $logon password= "" 2>&1 | Out-String
+                if ($LASTEXITCODE -ne 0) {
+                    throw ('Could not set the gMSA as the service logon account: ' + $scOut.Trim())
+                }
+                Write-Ok ('Registered service "' + $serviceName + '" running as ' + $logon + ' (no password stored)')
+            } elseif ($runAccountKind -eq 'machine') {
                 Write-Ok ('Registered service "' + $serviceName + '" running as LocalSystem')
-                Write-Warn2 'As LocalSystem it reaches AD and SQL as the computer account. Grant that account SQL rights, or re-run with -ServiceAccount.'
+                Write-Warn2 ('It reaches AD and SQL as the computer account. Grant ' + $env:COMPUTERNAME + '$ rights on the SQL instance.')
+            } else {
+                Write-Ok ('Registered service "' + $serviceName + '" running as ' + $runAccount)
             }
 
             # Restart after 5s, then 10s, then every 30s; reset the counter daily.
@@ -733,13 +1148,36 @@ public class DsmtServiceHost : ServiceBase
                             -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
                             -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable
 
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-                                   -Settings $settings -User $runAccount -RunLevel Limited `
-                                   -Description 'Starts the DSMT web console at boot.' -ErrorAction Stop | Out-Null
+            $register = @{
+                TaskName    = $taskName
+                Action      = $action
+                Trigger     = $trigger
+                Settings    = $settings
+                Description = 'Starts the DSMT web console at boot.'
+            }
+
+            if ($runAccountKind -eq 'machine') {
+                $register.User = 'SYSTEM'
+                $register.RunLevel = 'Highest'
+            } elseif ($runAccountKind -eq 'gmsa') {
+                # A gMSA in Task Scheduler needs a principal object; -User
+                # alone cannot express a passwordless managed account.
+                $logon = $runAccount
+                if (-not $logon.EndsWith('$')) { $logon = $logon + '$' }
+                $register.Principal = New-ScheduledTaskPrincipal -UserId $logon -LogonType Password -RunLevel Limited
+            } else {
+                $register.User = $runAccount
+                $register.RunLevel = 'Limited'
+            }
+
+            Register-ScheduledTask @register -ErrorAction Stop | Out-Null
 
             Write-Ok ('Registered "' + $taskName + '" to start at boot as ' + $runAccount)
             Write-Info 'Configured to run whether or not anyone is signed in, with no time limit and restart on failure.'
-            Write-Warn2 'A task running under a domain account needs that account''s password stored by Task Scheduler, or the "Log on as a batch job" right. Open the task once to confirm it is configured as you expect.'
+
+            if ($runAccountKind -eq 'user') {
+                Write-Warn2 'A task running under a domain account needs that account''s password stored by Task Scheduler, or the "Log on as a batch job" right. Open the task once to confirm it is configured as you expect.'
+            }
 
             $script:StartMode = 'task'
 
@@ -760,16 +1198,19 @@ public class DsmtServiceHost : ServiceBase
 Write-Step 'Saved configuration'
 
 $settings = [ordered]@{
-    Domain        = $Domain
-    Port          = $Port
-    ListenAddress = $ListenAddress
-    SqlServer     = ''
-    SqlDatabase   = $SqlDatabase
-    SessionHours  = 8
-    PageSize      = 500
-    InstalledOn   = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    InstalledBy   = ($env:USERDOMAIN + '\' + $env:USERNAME)
-    Version       = $script:DsmtVersion
+    Domain         = $Domain
+    Port           = $Port
+    ListenAddress  = $ListenAddress
+    IdentityMode   = $IdentityMode
+    ServiceAccount = $runAccount
+    AccountKind    = $runAccountKind
+    SqlServer      = ''
+    SqlDatabase    = $SqlDatabase
+    SessionMinutes = 15
+    PageSize       = 500
+    InstalledOn    = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    InstalledBy    = ($env:USERDOMAIN + '\' + $env:USERNAME)
+    Version        = $script:DsmtVersion
 }
 if ($sqlReady) { $settings.SqlServer = $sqlTarget }
 

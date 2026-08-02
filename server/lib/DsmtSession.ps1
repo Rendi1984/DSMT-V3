@@ -135,7 +135,7 @@ function Get-DsmtSession {
     $s   = $script:DsmtSessions[$Token]
     $age = (Get-Date).ToUniversalTime() - $s.LastSeenUtc
 
-    if ($age.TotalHours -ge $cfg.SessionHours) {
+    if ($age.TotalMinutes -ge $cfg.SessionMinutes) {
         Remove-DsmtSession -Token $Token -Reason 'idle timeout'
         return $null
     }
@@ -156,6 +156,28 @@ function Remove-DsmtSession {
     }
 }
 
+function Get-DsmtSessionSummary {
+    <#
+    .SYNOPSIS
+        How many sessions are open and who holds them - for the health page.
+    .DESCRIPTION
+        Deliberately returns accounts and last-seen times only. The token and
+        the credential never leave this file.
+    #>
+    $now = (Get-Date).ToUniversalTime()
+    $list = @()
+
+    foreach ($key in $script:DsmtSessions.Keys) {
+        $s = $script:DsmtSessions[$key]
+        $list += [ordered]@{
+            account  = [string]$s.Account
+            idleMins = [int][math]::Floor(($now - $s.LastSeenUtc).TotalMinutes)
+        }
+    }
+
+    return @{ Count = $list.Count; Sessions = @($list) }
+}
+
 function Clear-DsmtExpiredSessions {
     <#
     .SYNOPSIS
@@ -167,7 +189,7 @@ function Clear-DsmtExpiredSessions {
 
     $stale = @()
     foreach ($key in $script:DsmtSessions.Keys) {
-        if (($now - $script:DsmtSessions[$key].LastSeenUtc).TotalHours -ge $cfg.SessionHours) {
+        if (($now - $script:DsmtSessions[$key].LastSeenUtc).TotalMinutes -ge $cfg.SessionMinutes) {
             $stale += $key
         }
     }

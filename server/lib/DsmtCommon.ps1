@@ -16,11 +16,32 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.4.0'
+$script:DsmtVersion = '1.11.0'
+
+# ---------------------------------------------------------------------------
+# PUBLISHER - same rule as the version: defined once, read everywhere.
+# Shown in the About dialog and the sign-in footer, both fed from /api/meta.
+# Never type it into index.html or app.js.
+# ---------------------------------------------------------------------------
+$script:DsmtPublisher = 'Rendi Group'
+
+# ---------------------------------------------------------------------------
+# IDLE TIMEOUT bounds - defined once and enforced on every route that can set
+# the value: the -SessionMinutes parameter, config\dsmt.config.json, and the
+# runtime API. The maximum is deliberate: a session that can outlive a working
+# day is not an idle control, it is a formality.
+# ---------------------------------------------------------------------------
+$script:DsmtSessionMinutesDefault = 15
+$script:DsmtSessionMinutesMin     = 1
+$script:DsmtSessionMinutesMax     = 480   # 8 hours
 
 # Filled in by Start-DSMT.ps1 at startup.
 $script:DsmtConfig = @{
     Version       = $script:DsmtVersion
+    Publisher     = $script:DsmtPublisher
+    IdentityMode  = 'operator'
+    ServiceAccount = ''
+    AccountKind    = ''
     RootPath      = ''
     WebPath       = ''
     DataPath      = ''
@@ -30,9 +51,10 @@ $script:DsmtConfig = @{
     Server        = ''
     Port          = 8080
     ListenAddress = 'localhost'
-    SessionHours  = 8
+    SessionMinutes = 15
     PageSize      = 500
     LogFile       = ''
+    StartedUtc    = $null
 }
 
 function Initialize-DsmtConfig {
@@ -47,10 +69,27 @@ function Initialize-DsmtConfig {
         [string] $Server = '',
         [int]    $Port = 8080,
         [string] $ListenAddress = 'localhost',
-        [int]    $SessionHours = 8,
-        [int]    $PageSize = 500
+        [int]    $SessionHours = 0,
+        [int]    $SessionMinutes = 0,
+        [int]    $PageSize = 500,
+        [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator'
     )
 
+    # The idle timeout is held in MINUTES, in one field. -SessionHours is kept
+    # because it was the original parameter, but it is converted here rather
+    # than stored alongside: two fields that mean the same thing is how they
+    # end up disagreeing.
+    #
+    # Bounds live here so they hold no matter which route set the value -
+    # a parameter, the saved config file, or the runtime API.
+    if ($SessionMinutes -le 0 -and $SessionHours -gt 0) { $SessionMinutes = $SessionHours * 60 }
+    if ($SessionMinutes -le 0) { $SessionMinutes = $script:DsmtSessionMinutesDefault }
+
+    if ($SessionMinutes -lt $script:DsmtSessionMinutesMin) { $SessionMinutes = $script:DsmtSessionMinutesMin }
+    if ($SessionMinutes -gt $script:DsmtSessionMinutesMax) { $SessionMinutes = $script:DsmtSessionMinutesMax }
+
+    $script:DsmtConfig.SessionMinutes = $SessionMinutes
+    $script:DsmtConfig.IdentityMode  = $IdentityMode
     $script:DsmtConfig.RootPath      = $RootPath
     $script:DsmtConfig.WebPath       = Join-Path $RootPath 'web'
     $script:DsmtConfig.DataPath      = Join-Path $RootPath 'data'
@@ -59,7 +98,6 @@ function Initialize-DsmtConfig {
     $script:DsmtConfig.Server        = $Server
     $script:DsmtConfig.Port          = $Port
     $script:DsmtConfig.ListenAddress = $ListenAddress
-    $script:DsmtConfig.SessionHours  = $SessionHours
     $script:DsmtConfig.PageSize      = $PageSize
 
     # The design system lives in a folder whose name carries the design tool's
@@ -76,10 +114,30 @@ function Initialize-DsmtConfig {
         New-Item -ItemType Directory -Path $script:DsmtConfig.DataPath -Force | Out-Null
     }
     $script:DsmtConfig.LogFile = Join-Path $script:DsmtConfig.DataPath ('dsmt-' + (Get-Date -Format 'yyyy-MM-dd') + '.log')
+
+    # Stamped once, here, so the health page can report uptime. It answers the
+    # question that matters after an unattended weekend: did the process stay
+    # up, or did something restart it? See the 72-hour scheduled-task default
+    # in CLAUDE.md for why that is not a theoretical concern.
+    $script:DsmtConfig.StartedUtc = (Get-Date).ToUniversalTime()
 }
 
 function Get-DsmtConfig {
     return $script:DsmtConfig
+}
+
+function Get-DsmtSessionBounds {
+    <#
+    .SYNOPSIS
+        The allowed idle-timeout range, so the API and the UI enforce and
+        display exactly the numbers this file defines - rather than each
+        repeating its own copy of them.
+    #>
+    return @{
+        Default = $script:DsmtSessionMinutesDefault
+        Min     = $script:DsmtSessionMinutesMin
+        Max     = $script:DsmtSessionMinutesMax
+    }
 }
 
 function Get-DsmtSavedSettings {

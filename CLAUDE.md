@@ -92,11 +92,17 @@ always missed. A single source of truth makes that failure mode structurally
 impossible instead of relying on discipline to catch it every time.
 
 Check `CHANGELOG.md` (top entry) for the authoritative current version before
-picking the next number — don't trust a stale note elsewhere.
+picking the next number — don't trust a stale note elsewhere. Its "Version
+history at a glance" table is an index into the entries below it; when you add
+a release, add the row **and** the entry, and never let the row carry a detail
+that is not in the entry.
 
 **The one constant is `$script:DsmtVersion` in
 `server/lib/DsmtCommon.ps1`.** It is copied into `$script:DsmtConfig.Version`
 at startup and reaches every display spot from there:
+
+The publisher name (`$script:DsmtPublisher`, "Rendi Group") follows the exact
+same rule and lives beside it — one constant, surfaced through `/api/meta`.
 
 | Where it is shown | How it gets there |
 | --- | --- |
@@ -224,6 +230,33 @@ cause. Three shapes:
    fake-data section) — write down the pattern itself, not just each instance.
 
 ### Known instances
+- **[Shape 3] Modern CSS that degrades to nothing, with no error.** The first
+  real run of the console found every dialog, toast and popover invisible —
+  About, every action button, every result message. There was no JavaScript
+  error and every request returned 200; the handlers ran and the markup was
+  built. The cause was that all three overlays positioned themselves with
+  logical inset properties (`inset: 0`, `inset-inline-end`, `inset-block-end`)
+  which the browser ignored, dropping each element at its static position
+  behind an `overflow: hidden`. Fixed in 1.7.5 by using physical offsets.
+  **The pattern, not the instance: a CSS feature that is unsupported does not
+  fail loudly, it is discarded — and a layout that depends on it silently
+  becomes something else.** So in anything the console needs to be *visible*,
+  prefer the older property: `top/right/bottom/left` over `inset*`, `rgba()`
+  over `color-mix()`, `width`+`max-width` over `min()`, `vh` with `dvh` only
+  inside `@supports`. The rules and the reason are written at the top of
+  `web/app.css`. Note this cannot be caught by any check in this repo — the
+  dev container has no browser — so it is a code-review rule, not a test.
+- **[Shape 3] A platform default silently kills a long-running process.**
+  Task Scheduler stops a task after 72 hours by default, which would have
+  taken the console down every three days with no error — found by reading
+  the code, not by running it, and fixed in 1.4.0 with
+  `-ExecutionTimeLimit ([TimeSpan]::Zero)`. **The pattern, not the instance:
+  whenever a new way of running DSMT is added (service, task, container,
+  reverse proxy), enumerate the platform's default limits on a long-lived
+  process before calling it done** — idle timeouts, recycling, execution
+  caps, power policy. The acceptance test for any hosting change is to leave
+  it running for four days and confirm it still answers; nothing shorter
+  catches this class.
 - **[Shape 2] "The server won't start."** The three preflight checks in
   `Start-DSMT.ps1` each name their own fix: the RSAT `ActiveDirectory` module
   is missing (`Install-WindowsFeature RSAT-AD-PowerShell`), the domain is
