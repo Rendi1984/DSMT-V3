@@ -799,6 +799,12 @@ function Get-LocalSqlInstances {
     .SYNOPSIS
         Reads the installed SQL instance names from the registry. Returns an
         array of connectable names ('.\SQLEXPRESS', 'localhost', ...).
+    .NOTES
+        ALWAYS AN ARRAY, even with one element - hence the comma operator on
+        the return. Without it PowerShell unrolls a single-element array and
+        the caller receives a bare string, which indexes as characters. That
+        produced a real bug: one installed instance became an instance named
+        "l". Callers should still wrap the call in @( ) as a second guard.
     #>
     $key = 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL'
     if (-not (Test-Path -LiteralPath $key)) { return @() }
@@ -810,7 +816,7 @@ function Get-LocalSqlInstances {
         if ($p.Name -eq 'MSSQLSERVER') { $names += 'localhost' }
         else { $names += ('.\' + $p.Name) }
     }
-    return @($names)
+    return ,@($names)
 }
 
 if ($SkipSql) {
@@ -819,9 +825,20 @@ if ($SkipSql) {
 } else {
 
     if (-not $sqlTarget) {
-        $local = Get-LocalSqlInstances
+        # @( ) IS LOAD-BEARING, do not remove it.
+        #
+        # A PowerShell function that returns a one-element array unrolls it on
+        # assignment, so with exactly one SQL instance installed $local became
+        # the STRING 'localhost' rather than a one-element array. .Count on a
+        # string is 1, and $local[0] is its first CHARACTER - so the installer
+        # cheerfully announced 'Found a local SQL instance: l' and then tried
+        # to connect to a server called "l". Wrapping the call forces an array
+        # whatever the count. Same family as the ConvertTo-Json single-element
+        # collapse in CLAUDE.md.
+        $local = @(Get-LocalSqlInstances)
+
         if ($local.Count -gt 0) {
-            $sqlTarget = $local[0]
+            $sqlTarget = [string]$local[0]
             Write-Ok ('Found a local SQL instance: ' + $sqlTarget)
             if ($local.Count -gt 1) {
                 Write-Info ('Other instances present: ' + (($local | Select-Object -Skip 1) -join ', ') + ' - use -SqlServer to pick one.')
@@ -829,6 +846,14 @@ if ($SkipSql) {
         } else {
             Write-Info 'No SQL instance found on this machine.'
         }
+    }
+
+    # A one-character instance name is never real, and it is precisely what the
+    # bug above produced. Refuse it loudly rather than spending the next twenty
+    # minutes reading a "server was not found" message that names nothing.
+    if ($sqlTarget -and $sqlTarget.Length -le 1) {
+        Write-Fail ('Refusing to use "' + $sqlTarget + '" as a SQL Server instance name - that is not a real name. Pass -SqlServer explicitly, or -SkipSql to install without a database.')
+        $sqlTarget = ''
     }
 
     # Install SQL Express only from media the operator supplied. Nothing is
