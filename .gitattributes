@@ -1,0 +1,22 @@
+# DSMT targets Windows PowerShell 5.1 on Windows. The development container is
+# Linux, so without this every .ps1 is checked out and archived with LF-only
+# line endings. Windows PowerShell mostly tolerates that - but "mostly" is not
+# a property worth relying on for the one file an operator runs first, and
+# Notepad, older ISE versions and some editors mangle or refuse LF files.
+#
+# Forcing CRLF removes the whole class of question from any future
+# "it does not work on my machine" report.
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.psd1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.sql   text eol=crlf
+
+# Web and docs are served by DSMT itself and read by browsers, which do not
+# care. Left as LF so diffs stay clean.
+*.html  text eol=lf
+*.css   text eol=lf
+*.js    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
