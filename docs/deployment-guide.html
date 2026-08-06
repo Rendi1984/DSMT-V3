@@ -489,11 +489,11 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps1 `
     -Domain LAB.LOCAL -SqlServer SQL01 -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask
 
-<span class="c"># Minimal - finds a local SQL instance if there is one</span>
+<span class="c"># Minimal, and the quickest way to see it working - no database</span>
 .\server\Install-DSMT.ps1
 
-<span class="c"># No database at all</span>
-.\server\Install-DSMT.ps1 -SkipSql</code></pre>
+<span class="c"># With a database, finding a local SQL instance automatically</span>
+.\server\Install-DSMT.ps1 -UseSql</code></pre>
 
 <div class="note">
   <span class="box-title">Safe to re-run</span>
@@ -567,7 +567,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
   <tr>
     <td data-label="What">Download SQL Server Express</td>
     <td data-label="Why not">DSMT hosts usually sit on a network with no internet route, and a silent download would contradict the tool's disconnected-by-design principle</td>
-    <td data-label="What to do instead">If there is no SQL instance: fetch the media in advance and run with <code>-SqlExpressSetup &lt;path&gt;</code> - the install itself then runs unattended. Or simply <code>-SkipSql</code></td>
+    <td data-label="What to do instead">If there is no SQL instance: fetch the media in advance and run with <code>-SqlExpressSetup &lt;path&gt;</code> - the install itself then runs unattended. Or simply omit every SQL switch - no database is the default</td>
   </tr>
   <tr>
     <td data-label="What">Delegate rights to operators in AD</td>
@@ -682,9 +682,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
     <td data-label="What you get">Unattended install from media <em>you</em> supply - nothing is downloaded</td>
   </tr>
   <tr>
-    <td data-label="Form"><strong>No database</strong></td>
-    <td data-label="How to ask for it"><code>-SkipSql</code></td>
-    <td data-label="What you get">Audit log to JSONL files. Operators, sessions and the snapshot are <strong>not</strong> stored</td>
+    <td data-label="Form"><strong>No database &mdash; the default</strong></td>
+    <td data-label="How to ask for it">Nothing. Omit every SQL switch</td>
+    <td data-label="What you get">A fully usable console. Audit log to JSONL files; operators, sessions and the snapshot are <strong>not</strong> stored</td>
   </tr>
 </table>
 
@@ -716,7 +716,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
 <h3 id="forms-examples">Putting it together</h3>
 
 <pre><code><span class="c"># Simplest possible: try it out on this machine</span>
-.\server\Install-DSMT.ps1 -SkipSql -StartWhenDone
+.\server\Install-DSMT.ps1 -StartWhenDone
 
 <span class="c"># Typical lab: reachable on the network, SQL, starts at boot</span>
 .\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
@@ -727,7 +727,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
     -ServiceAccount "LAB\gmsa-dsmt$" -InstallAsService -StartWhenDone
 
 <span class="c"># Air-gapped Windows 10/11 client with FOD media on D:</span>
-.\server\Install-DSMT.ps1 -FeatureSource D:\sources\sxs -SkipSql
+.\server\Install-DSMT.ps1 -FeatureSource D:\sources\sxs
 
 <span class="c"># Later: move an existing installation onto a gMSA</span>
 .\server\Install-DSMT.ps1 -ChangeServiceAccount "LAB\gmsa-dsmt$"</code></pre>
@@ -848,7 +848,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
     Nothing in the table above is required. On a domain-joined machine, with an
     administrator shell, this works and needs no preparation at all:
   </p>
-  <pre><code>.\server\Install-DSMT.ps1 -SkipSql -StartWhenDone</code></pre>
+  <pre><code>.\server\Install-DSMT.ps1 -StartWhenDone</code></pre>
   <p>
     Add the database, the service account and HTTPS afterwards, in whatever
     order suits you.
@@ -1715,9 +1715,10 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td data-label="Parameter"><code>-ServiceAccount</code></td><td data-label="Default">Current user</td><td data-label="Description">The account that will run it. Accepts a user, a gMSA (trailing <code>$</code>) or <code>LocalSystem</code> - see <a href="#s4-account">4.2</a></td></tr>
   <tr><td data-label="Parameter"><code>-ChangeServiceAccount</code></td><td data-label="Default">-</td><td data-label="Description">Move an existing install to another account, updating all five dependent things - see <a href="#s4-change">4.3</a></td></tr>
   <tr><td data-label="Parameter"><code>-IdentityMode</code></td><td data-label="Default"><code>operator</code></td><td data-label="Description"><code>operator</code> or <code>hybrid</code> - see <a href="#s4-identity">4.4</a></td></tr>
-  <tr><td data-label="Parameter"><code>-SqlServer</code></td><td data-label="Default">Auto-detect</td><td data-label="Description">SQL instance to use</td></tr>
+  <tr><td data-label="Parameter"><code>-SqlServer</code></td><td data-label="Default">(empty)</td><td data-label="Description">SQL instance to use. Supplying it turns SQL on</td></tr>
+  <tr><td data-label="Parameter"><code>-UseSql</code></td><td data-label="Default">Off</td><td data-label="Description"><strong>SQL is off by default.</strong> This turns it on and finds a local instance</td></tr>
   <tr><td data-label="Parameter"><code>-SqlDatabase</code></td><td data-label="Default"><code>DSMT</code></td><td data-label="Description">Database name to create</td></tr>
-  <tr><td data-label="Parameter"><code>-SkipSql</code></td><td data-label="Default">Off</td><td data-label="Description">Install without any database</td></tr>
+  <tr><td data-label="Parameter"><code>-SkipSql</code></td><td data-label="Default">On</td><td data-label="Description">Install without any database. Now the default, so this only states the intent</td></tr>
   <tr><td data-label="Parameter"><code>-SqlExpressSetup</code></td><td data-label="Default">(empty)</td><td data-label="Description">Path to SQL Express media for an unattended install. Never downloads</td></tr>
   <tr><td data-label="Parameter"><code>-FeatureSource</code></td><td data-label="Default">(empty)</td><td data-label="Description">Feature-on-Demand source for installing RSAT on a disconnected host</td></tr>
   <tr><td data-label="Parameter"><code>-InstallScheduledTask</code></td><td data-label="Default">Off</td><td data-label="Description">Register a task that starts DSMT at boot</td></tr>

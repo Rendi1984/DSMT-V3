@@ -75,6 +75,15 @@ operator, the controller and a mandatory reason string.
 
 ---
 
+## Handing over a build
+Whenever a download link is given for this project, **name it `DSMT <version>`
+first** — "DSMT 1.13.0", then the link. A bare GitHub URL does not say which
+version is behind it, and branch zips move: the same URL served 1.8.1 and
+1.12.0 a day apart. State the version, then the link, then which files go
+where.
+
+---
+
 ## Versioning policy (MANDATORY)
 Format: `MAJOR.FEATURE.FIX`.
 - MAJOR: breaking change
