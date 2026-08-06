@@ -49,8 +49,7 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carried **1.11.0** after the `feature/service-identity` merge. 1.12.0
-is on `feature/tools-gmsa`. The last tag is `v1.4.0`.
+`main` carries **1.12.0**. The last tag is `v1.4.0`.
 
 ---
 
