@@ -109,9 +109,13 @@ Two consequences worth knowing before promising a filename:
   upload — neither possible from the dev container.
 
 When an exact filename is asked for, **build it locally and send the file**:
-`git archive --format=zip --prefix=DSMT-v1.13.1/ -o DSMT-v1.13.1.zip HEAD`.
-That is the only method here that produces the requested name, and the prefix
-keeps the extracted folder named for the version too.
+
+    git archive --format=zip -o DSMT-v1.13.1.zip HEAD
+
+That is the only method here that produces the requested name. **Do not pass
+`--prefix`** — the files go at the root of the archive, so extracting it gives
+`server\`, `web\`, `docs\` directly rather than a wrapper folder to dig
+through. (GitHub's own archives always add that wrapper; ours should not.)
 
 A git **tag** would be the proper mechanism and produces the same filename,
 but **tags cannot be pushed from the dev container** — the git proxy answers
