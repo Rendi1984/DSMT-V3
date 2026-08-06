@@ -82,6 +82,25 @@ version is behind it, and branch zips move: the same URL served 1.8.1 and
 1.12.0 a day apart. State the version, then the link, then which files go
 where.
 
+**The downloaded file must carry the version too.** GitHub names an archive
+after the ref, so `refs/heads/main.zip` always arrives as `DSMT-V3-main.zip` —
+three of those in a downloads folder are indistinguishable. So every release
+gets a **branch named exactly the version number** (`1.13.0`, no `v`, no
+prefix), cut from `main` at the release commit, and that is the link handed
+over:
+
+    https://github.com/Rendi1984/DSMT-V3/archive/refs/heads/1.13.0.zip
+    -> DSMT-V3-1.13.0.zip
+
+Do not name the branch `DSMT-1.13.0` — the repo name is already in the
+filename and it comes out as `DSMT-V3-DSMT-1.13.0.zip`.
+
+A git **tag** would be the proper mechanism and produces the same filename,
+but **tags cannot be pushed from the dev container** — the git proxy answers
+403 (`send-pack: unexpected disconnect`). Same for deleting a remote branch.
+Both have to be done by hand in the GitHub UI, so tag and release creation is
+a request to the operator, never a step to attempt silently.
+
 ---
 
 ## Versioning policy (MANDATORY)
