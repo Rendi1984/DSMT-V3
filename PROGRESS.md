@@ -506,6 +506,54 @@ retrofit:**
        halfway through.
      Show expiry as a plain "expires in N days" alongside the date - the
      number is what anyone actually looks for.
+23e. **Build a request from a template plus parameters, and have the CA sign
+     it.** Asked for 2026-07-31 as the main point of the PKI work, so treat
+     23a-d as the groundwork for this rather than as the goal.
+
+     **The form must be generated FROM the template, not fixed.** Templates
+     are published in AD at `CN=Certificate Templates,CN=Public Key Services,
+     CN=Services,CN=Configuration,<forest DN>` and are readable with
+     `-Credential`, so DSMT can know before asking anything:
+     - `msPKI-Certificate-Name-Flag` - whether the subject is **built from AD**
+       or **supplied in the request**. This single flag decides whether the
+       operator should be asked for a subject at all. Ask when the template
+       builds it from AD and the CA rejects the request; do not ask when the
+       template requires it and the certificate comes back naming the wrong
+       thing.
+     - `pKIExtendedKeyUsage` - the EKUs, which is what the certificate is
+       actually *for*, and the most useful thing to show when picking.
+     - `msPKI-Minimal-Key-Size`, `msPKI-Enrollment-Flag` (autoenrolment,
+       publish to AD), and whether approval is required - a request that goes
+       to **pending** rather than issued is a normal outcome and the UI has to
+       have a state for it, not treat it as failure.
+     - The template ACL decides who may enrol. Show templates the operator can
+       actually use, and say plainly when one is listed but not permitted.
+
+     **Where the key is generated decides the whole flow** - this is the
+     rule from the top of 23 applied concretely:
+     - Certificate **for the DSMT host itself**: direct enrolment with
+       `Get-Certificate -Template <name> -Credential` is fine, because the key
+       is generated where it belongs.
+     - Certificate **for any other machine**: DSMT must NOT generate the key.
+       Build the request definition (the `certreq` INF: subject, SANs, key
+       length, provider, exportable flag) from the template and the operator's
+       parameters, and either hand over the `certreq -new` / `-submit`
+       commands to run on the target, or accept a CSR the operator already
+       has (23d) and submit that. Same shape as the gMSA tool's step 4 -
+       generate the command where the console genuinely cannot act.
+
+     Traps to design for, all of which produce unhelpful CA errors:
+     - **SANs.** Most modern uses require a SAN, and a SAN in the request is
+       only honoured if the template allows it, or if the CA has
+       `EDITF_ATTRIBUTESUBJECTALTNAME2` set - which is a CA-wide setting with
+       real security implications and must not be suggested casually. Report
+       which of the two applies rather than letting the request fail.
+     - **Provider**: KSP versus legacy CSP, and whether the key is marked
+       exportable. Wrong choice, and the certificate issues but cannot be used
+       by the service it was meant for.
+     - Audit the whole thing: template, subject, SANs, CA, and the serial and
+       thumbprint that came back. A certificate nobody can trace to a request
+       is the PKI equivalent of an unaudited write.
 
 ### Roles from AD groups, and a dashboard (24-25) — raised 2026-07-31, NOT to be built yet
 
