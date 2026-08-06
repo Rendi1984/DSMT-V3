@@ -11,8 +11,8 @@
       4. Installs the RSAT ActiveDirectory PowerShell module
       5. Verifies the domain answers
       6. Creates data\ and grants the run account write access
-      7. Finds or installs SQL Server, then creates the DSMT database
-         and its tables
+      7. SQL Server, only when asked for with -UseSql or -SqlServer:
+         finds or installs the instance and creates the DSMT database
       8. Reserves the HTTP URL so the console can listen without elevation
       9. Opens the firewall port
      10. Optionally registers a scheduled task that starts DSMT at boot
@@ -60,12 +60,31 @@
     signed-in operator. 'hybrid' - reads run as the service account, writes
     still run as the operator. See Start-DSMT.ps1 for the full explanation.
 .PARAMETER SqlServer
-    SQL Server instance to use, e.g. 'SQL01' or 'SQL01\LAB'. Omit to have the
-    installer look for a local instance. Use -SkipSql to run without SQL.
+    SQL Server instance to use, e.g. 'SQL01' or 'SQL01\LAB'. Supplying this
+    turns SQL on - see -UseSql for what happens when you do not.
 .PARAMETER SqlDatabase
     Database to create. Default 'DSMT'.
+.PARAMETER UseSql
+    Configure SQL Server storage, finding a local instance automatically.
+
+    SQL IS OFF BY DEFAULT. DSMT is fully functional without it: every user,
+    group, membership and OU is read live from the directory either way, and
+    the audit log is written to JSONL files under data\. What a database adds
+    is history that survives a restart - stored operators, sessions and a
+    directory snapshot, and an audit log that can be queried rather than
+    grepped.
+
+    The default is off because it is the only part of the installation that
+    depends on a machine other than this one. Making it required turned a
+    ten-minute evaluation into a SQL support call, so it is now opt-in, it can
+    be turned on at any time from Settings -> Database without reinstalling,
+    and the console says on every screen that no database is configured.
+
+    -SqlServer implies -UseSql.
 .PARAMETER SkipSql
-    Do not configure SQL at all. The audit log then goes to JSONL files.
+    Explicitly skip SQL. Now the default, so this switch only documents the
+    intent; it is kept because existing scripts and the deployment guide use
+    it. If both -UseSql and -SkipSql are given, -SkipSql wins.
 .PARAMETER SqlExpressSetup
     Path to SQL Server Express setup media (SETUP.EXE or the downloaded
     installer). Supplied only when no SQL instance exists and you want the
@@ -101,15 +120,15 @@
     rights will be reported as failures instead.
 .EXAMPLE
     .\Install-DSMT.ps1
-    Installs prerequisites for LAB.LOCAL on port 8080, finds a local SQL
-    instance if there is one.
+    The quick start: prerequisites for LAB.LOCAL on port 8080, no database.
+    Ready to demonstrate in one step; add SQL later from Settings -> Database.
 .EXAMPLE
     .\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
                        -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask
     The full lab setup, ready to start at boot.
 .EXAMPLE
-    .\Install-DSMT.ps1 -SkipSql
-    No database: the console works, the audit log goes to files.
+    .\Install-DSMT.ps1 -UseSql
+    The same, plus a DSMT database on whatever local SQL instance is found.
 .NOTES
     Author  : IT Team
     Runtime : Windows PowerShell 5.1, run as administrator
@@ -124,6 +143,7 @@ param(
     [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
     [string] $SqlServer = '',
     [string] $SqlDatabase = 'DSMT',
+    [switch] $UseSql,
     [switch] $SkipSql,
     [string] $SqlExpressSetup = '',
     [string] $FeatureSource = '',
@@ -789,7 +809,7 @@ if ($runAccountKind -ne 'machine') {
 # 7. SQL Server
 # ---------------------------------------------------------------------------
 
-Write-Step 'SQL Server'
+Write-Step 'SQL Server (optional)'
 
 $sqlTarget  = $SqlServer
 $sqlReady   = $false
@@ -819,9 +839,31 @@ function Get-LocalSqlInstances {
     return ,@($names)
 }
 
-if ($SkipSql) {
-    Write-Skip 'Skipped with -SkipSql. The audit log will be written to JSONL files under data\.'
-    Write-Warn2 'Operators, sessions and the directory snapshot will NOT be stored anywhere.'
+# SQL is OPT-IN. It is the only step that depends on a machine other than this
+# one, and requiring it turned a ten-minute evaluation into a SQL support call.
+# Everything the console DISPLAYS is read live from the directory either way -
+# a database adds history that survives a restart, not correctness - so the
+# honest default is off, said out loud, and changeable at any time from
+# Settings -> Database without reinstalling.
+$sqlWanted = ($UseSql -or -not [string]::IsNullOrWhiteSpace($SqlServer) -or -not [string]::IsNullOrWhiteSpace($SqlExpressSetup))
+if ($SkipSql) { $sqlWanted = $false }
+
+if (-not $sqlWanted) {
+    Write-Skip 'Not configured - this is the default.'
+    Write-Info 'DSMT is fully usable like this: users, groups, membership and OUs are read live'
+    Write-Info 'from the directory, and every change is still audited to JSONL files under data\.'
+    Write-Warn2 'Without a database, operators, sessions and the directory snapshot are not stored,'
+    Write-Warn2 'and the audit log lives only as files on this machine.'
+    Write-Info ''
+    Write-Info 'To add one later, with no reinstall: sign in, then Settings -> Database.'
+    Write-Info 'To add one now: re-run this installer with -UseSql, or -SqlServer <instance>.'
+
+    # Said even when skipping, because "there was already a database here" is
+    # exactly what someone re-running the installer needs to be told.
+    $seen = @(Get-LocalSqlInstances)
+    if ($seen.Count -gt 0) {
+        Write-Info ('A local SQL instance is present (' + ($seen -join ', ') + ') if you want to use it.')
+    }
 } else {
 
     if (-not $sqlTarget) {
@@ -852,7 +894,7 @@ if ($SkipSql) {
     # bug above produced. Refuse it loudly rather than spending the next twenty
     # minutes reading a "server was not found" message that names nothing.
     if ($sqlTarget -and $sqlTarget.Length -le 1) {
-        Write-Fail ('Refusing to use "' + $sqlTarget + '" as a SQL Server instance name - that is not a real name. Pass -SqlServer explicitly, or -SkipSql to install without a database.')
+        Write-Fail ('Refusing to use "' + $sqlTarget + '" as a SQL Server instance name - that is not a real name. Pass -SqlServer explicitly, or drop -UseSql to install without a database.')
         $sqlTarget = ''
     }
 
@@ -888,8 +930,8 @@ if ($SkipSql) {
     }
 
     if (-not $sqlTarget) {
-        Write-Fail 'No SQL Server to use.' `
-                   'Either point -SqlServer at an existing instance, supply -SqlExpressSetup <path to SQL Express setup> to install one, or re-run with -SkipSql to run without a database.'
+        Write-Fail 'SQL was requested but no instance could be used.' `
+                   'Point -SqlServer at an existing instance, or supply -SqlExpressSetup <path to SQL Express setup> to install one. Re-running with no SQL switch at all installs without a database, which is the default and is fully usable.'
     } else {
         # Create the database and its tables by calling the server's own code,
         # so the schema created here can never drift from the one it expects.
@@ -1330,6 +1372,17 @@ if ($script:Outstanding.Count -eq 0) {
     Write-Host ('  Then open  http://localhost:' + $Port + '/  and sign in with a domain account.') -ForegroundColor Cyan
     Write-Host '  There is no default account: any valid account in the domain can sign in,' -ForegroundColor DarkGray
     Write-Host '  and what it may change is decided entirely by its delegation in AD.' -ForegroundColor DarkGray
+
+    # Never let someone walk away thinking there is a database when there is
+    # not. The console repeats this on the sign-in screen, in the bell and in
+    # Settings, and it is said once more here where the decision was made.
+    if (-not $sqlReady) {
+        Write-Host ''
+        Write-Host '  No database is configured, which is the default.' -ForegroundColor Yellow
+        Write-Host '  The console is fully usable: everything on screen is read live from the' -ForegroundColor DarkGray
+        Write-Host '  directory, and changes are audited to files under data\.' -ForegroundColor DarkGray
+        Write-Host '  Add SQL whenever you want from Settings -> Database - no reinstall needed.' -ForegroundColor DarkGray
+    }
 } else {
     Write-Host ('  Installation finished with ' + $script:Outstanding.Count + ' item(s) outstanding:') -ForegroundColor Yellow
     Write-Host ''

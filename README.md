@@ -51,11 +51,11 @@ every step checks the current state first.
 .\server\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
                           -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask -StartWhenDone
 
-# Minimal: finds a local SQL instance if there is one
+# Minimal, and the quickest way to see it working: no database
 .\server\Install-DSMT.ps1
 
-# No database at all
-.\server\Install-DSMT.ps1 -SkipSql
+# With a database, finding a local SQL instance automatically
+.\server\Install-DSMT.ps1 -UseSql
 ```
 
 Or edit the settings at the top of `Install-DSMT.cmd` and run it — the script
@@ -116,7 +116,7 @@ tool can fake that after the fact.
 | Not automated | Why | What to do |
 | --- | --- | --- |
 | Download RSAT on an offline Windows 10/11 client | `Add-WindowsCapability` fetches from Windows Update | Pass `-FeatureSource <FOD media or \sources\sxs>` |
-| Download SQL Server Express | DSMT hosts usually have no internet route, and a silent download would contradict that | Pass `-SqlExpressSetup <path to setup>` for an unattended install, or `-SkipSql` |
+| Download SQL Server Express | DSMT hosts usually have no internet route, and a silent download would contradict that | Pass `-SqlExpressSetup <path to setup>` for an unattended install, or omit every SQL switch - no database is the default |
 | Delegate AD rights to operators | A security decision that depends on your OU structure | Delegate per OU — see the deployment guide, step 4 |
 
 ### Running it unattended

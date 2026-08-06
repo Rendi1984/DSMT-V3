@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.13.0** | 2026-07-31 | **SQL is now opt-in.** A plain install needs no database, so the console can be demonstrated in one step; `-UseSql` turns it on | Re-run installer |
 | **1.12.1** | 2026-07-31 | Installer found one SQL instance and used the first **letter** of its name as the server | Re-run installer |
 | **1.12.0** | 2026-07-31 | A **Tools** tab with a rail of tools; the first is a guided gMSA setup, including enabling gMSAs for a forest that never used them | Restart + refresh |
 | **1.11.0** | 2026-07-31 | Undo a directory change from its audit entry; a Health section that says what is reachable and how to fix what is not | Restart + refresh |
@@ -50,7 +51,52 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.12.1**. The last tag is `v1.4.0`.
+`main` carries **1.13.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.13.0 — 2026-07-31
+
+**SQL Server is now opt-in. A plain `.\Install-DSMT.ps1` installs no database
+and that is a complete, working installation.**
+
+The option to skip SQL already existed — as `-SkipSql`, a switch you could
+only find by reading the script. That is not an option, it is a secret. And it
+was the wrong way round: **SQL is the only step of the installation that
+depends on a machine other than this one**, so making it the default turned a
+ten-minute evaluation into a SQL support call. The last install failed on
+exactly that step and nothing else.
+
+What changed:
+
+- **No SQL switch at all = no database**, reported as `[skip] Not configured -
+  this is the default` rather than as a failure.
+- **`-UseSql`** turns it on and finds a local instance, as before.
+  **`-SqlServer <instance>` and `-SqlExpressSetup <path>` imply it**, so an
+  existing command line that named an instance keeps working unchanged.
+- **`-SkipSql` still works** and now only states the intent. Existing scripts
+  and the deployment guide keep working. If both are given, `-SkipSql` wins.
+- The step still reports a local instance it noticed, even while skipping —
+  "there was already a database here" is exactly what someone re-running the
+  installer needs to hear.
+
+**Nothing is hidden by this.** Everything the console *displays* is read live
+from the directory either way: users, groups, membership, OUs, controllers,
+the signed-in operator. A database adds **history that survives a restart** —
+stored operators, sessions, a directory snapshot, and an audit log that can be
+queried rather than grepped. It does not add correctness. So the honest
+default is off, said out loud in four places: the installer step, the closing
+summary, the notification bell and Settings -> Database. And it can be turned
+on at any time from the console with no reinstall.
+
+Also updated so nothing contradicts the new default: `README.md`, and in
+`docs/deployment-guide.html` the storage-options table, the parameter
+reference (`-UseSql` added, `-SkipSql` marked as the default), and every
+example that passed `-SkipSql` to get the short path.
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`README.md`, `docs/deployment-guide.html`, `CLAUDE.md`. Copy the installer to
+the host and re-run it — it is safe to re-run.
 
 ---
 
