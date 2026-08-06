@@ -94,7 +94,24 @@ over:
     -> DSMT-V3-1.13.0.zip
 
 Do not name the branch `DSMT-1.13.0` — the repo name is already in the
-filename and it comes out as `DSMT-V3-DSMT-1.13.0.zip`.
+filename and it comes out as `DSMT-V3-DSMT-1.13.0.zip`. A `v` prefix is also
+pointless: **GitHub strips a leading `v` from the ref when naming an archive**,
+so branch `v1.13.1` still downloads as `DSMT-V3-1.13.1.zip`.
+
+**The archive name cannot be controlled beyond that.** GitHub always builds it
+as `<repo>-<ref>.zip`, and this repo is `DSMT-V3`, so the `-V3` is unavoidable.
+Two consequences worth knowing before promising a filename:
+
+- Some browsers ignore `Content-Disposition` and save the URL's last segment
+  instead, which is why `.../1.13.1.zip` can land on disk as `1.13.1.zip`.
+- The only way to a freely chosen name is a **release asset**
+  (`/releases/download/v1.13.1/DSMT-v1.13.1.zip`), which needs a tag and an
+  upload — neither possible from the dev container.
+
+When an exact filename is asked for, **build it locally and send the file**:
+`git archive --format=zip --prefix=DSMT-v1.13.1/ -o DSMT-v1.13.1.zip HEAD`.
+That is the only method here that produces the requested name, and the prefix
+keeps the extracted folder named for the version too.
 
 A git **tag** would be the proper mechanism and produces the same filename,
 but **tags cannot be pushed from the dev container** — the git proxy answers
