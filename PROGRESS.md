@@ -306,6 +306,86 @@ Ordered by value for the effort, highest first.
     - This is diagnostic reporting, not monitoring. If it grows scheduling and
       alerting it has become a different product; say no at that point.
 
+### Remote server management (15-18) — raised 2026-07-31, NOT to be built yet
+
+Four related requests: connect to servers with a PowerShell session and run
+commands remotely; kill processes; stop / start / restart services; schedule
+tasks. Recorded together because they are one feature with four faces, and
+because they share one decision that has to be made **before** any of them is
+written.
+
+**These change what DSMT is.** Every existing feature reads or writes the
+*directory*. This is remote administration of *machines* — a different product
+axis, a different failure surface, and by far the largest security change in
+the project's history: "run this command over there" is arbitrary remote code
+execution by definition. That is not an argument against building it. It is an
+argument for deciding deliberately, once, rather than discovering it halfway
+through feature 17.
+
+15. **Remote PowerShell session and command execution.**
+    - `New-PSSession` / `Invoke-Command -Credential $session.Credential`, so it
+      runs as the operator exactly like every directory write — WinRM and the
+      target machine's own ACLs decide what is allowed, and DSMT keeps having
+      no permission model of its own. Do not break that.
+    - **The second-hop problem is the known blocker**: a command that runs on
+      server A and then reaches server B or a file share fails, because the
+      operator's credential does not delegate past the first hop. CredSSP or
+      resource-based constrained delegation solves it and neither can be
+      designed blind — same shape as the delegation entry already recorded
+      under "attempted and deliberately NOT pursued".
+    - Environment prerequisites, which will otherwise be reported as bugs:
+      WinRM enabled and listening, the firewall open, and Kerberos (not
+      NTLM) so the machine name resolves properly. A health check per target
+      before offering a console is the honest way to handle it.
+    - **Audit the full command text, verbatim, with a mandatory reason.**
+      Anything less makes the audit log worthless for the one feature where it
+      matters most. Consider whether an allow-list of commands should be the
+      default posture, with free-form as an explicit opt-in.
+16. **Kill processes.** Read with `Get-Process` / `Get-CimInstance
+    Win32_Process` (owner and command line are worth showing), stop with
+    `Stop-Process`. Needs a confirmation naming the process and the machine,
+    and should warn — not silently refuse — on system-critical processes.
+17. **Services: stop, start, restart.** The most useful of the four and the
+    least dangerous. `Get-Service` for state and start type, with the
+    dependency list shown before a stop, because stopping a service with
+    dependents is how an afternoon disappears. Restart is the common case and
+    deserves to be one button.
+18. **Scheduled tasks.** List, run now, enable/disable, and possibly create.
+    Note the trap already recorded in this file: a task created without
+    `-ExecutionTimeLimit ([TimeSpan]::Zero)` is killed after 72 hours by
+    default. Anything DSMT creates must set it, and anything DSMT *shows*
+    should surface it, because the same default has already cost this project
+    once.
+
+**Where these belong — the placement question, thought through.**
+
+Not in `Tools`. Tools is "guided jobs against the directory", and the gMSA
+wizard sets the shape: a sequence of steps with an end state. These four are
+not wizards; they are a live view of a machine with actions on it — which is
+exactly the shape of `Users` and `Groups`.
+
+So: **a new top-level `Servers` tab, built like the directory tabs.** A
+searchable list of computer accounts read live from AD (DSMT already reads
+computers — `Get-DsmtComputerAccount` exists), a detail pane per machine, and
+the four features as sections within that pane: Services, Processes, Scheduled
+tasks, Run command. That gives every one of them an obvious home, reuses the
+list/detail/bulk-action machinery already built, and keeps the mental model
+simple:
+
+| Tab | Means |
+| --- | --- |
+| Users / Groups | Directory objects |
+| **Servers** | **Machines, and what is running on them** |
+| Tools | Guided jobs with an end state |
+| Audit log | What was done |
+| Settings | How this server is configured |
+
+Two consequences to accept before starting: the detail pane will need its own
+section rail (four sections is too many to stack), and **"Run command" should
+be the last of the four built, not the first** — the other three are bounded
+operations with clear audit records, and they will prove the remote-session
+plumbing before the unbounded one is exposed.
+
 ---
 
 ## Under consideration — asked about, not decided
