@@ -74,14 +74,19 @@ which are read by browsers that do not care. Archives built with
 `git archive` honour the same setting, so a downloaded zip now carries native
 Windows files.
 
-**Honest status of the "parameters do not work" report:** it is not yet
-diagnosed. The file on the reporting machine was confirmed byte-identical to
-the one shipped (64,580 bytes) and does contain the parameters, so the file
-itself is not the problem. This change removes one candidate and one class of
-future question; it is not a claimed fix. The two remaining candidates are
-**Mark-of-the-Web** (a file downloaded through a browser is blocked, so
-`Get-Item` works while `Get-Command` refuses it - `Unblock-File` clears it)
-and the invocation form.
+**Outcome of the "parameters do not work" report: not a DSMT fault.** The same
+files ran correctly inside a VMware Workstation virtual machine, and failed on
+the physical endpoint - so the block is endpoint policy on that workstation
+(Mark-of-the-Web, AppLocker/WDAC, or an endpoint protection product), not the
+script. Recorded as a Shape 2 entry in `CLAUDE.md`: on a repeat report, the
+first question is which machine it ran on, not what is wrong with the code.
+
+The file on the reporting machine had already been confirmed byte-identical to
+the one shipped (64,580 bytes) and did contain the parameters. So neither
+1.13.2 nor this release fixed the reported symptom - both are worth keeping
+anyway: 1.13.2's echo is what will make the next such report a one-line
+diagnosis, and CRLF removes a real difference between this repository and an
+ordinary Windows checkout.
 
 Files: **new** `.gitattributes`; `server/lib/DsmtCommon.ps1` (version).
 Re-copy `server\**` to the host - the content is unchanged, only the line

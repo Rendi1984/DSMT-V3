@@ -729,6 +729,11 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 2] "The parameters do not work."** 2026-08-06. Not a code fault:
+  the identical files ran correctly in a VMware Workstation VM and were
+  blocked on the physical endpoint. Ask which machine, and whether
+  `Unblock-File` has been run, before reading any code. Full entry in
+  `CLAUDE.md`.
 - **[Shape 3] A collection of one is not a collection.** Durable copy of the
   entry now in `CLAUDE.md`. Three instances so far: `ConvertTo-Json`
   collapsing a single-element array, `-Discover` returning `HostName` as a

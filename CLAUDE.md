@@ -328,6 +328,25 @@ cause. Three shapes:
   caps, power policy. The acceptance test for any hosting change is to leave
   it running for four days and confirm it still answers; nothing shorter
   catches this class.
+- **[Shape 2] "The script does nothing / the parameters do not work."** Found
+  2026-08-06. `Install-DSMT.ps1` accepted no parameters on a physical
+  workstation and ran correctly, from the identical files, inside a VMware
+  Workstation VM. The file was confirmed byte-identical to the one shipped, so
+  it was never a code fault: the endpoint was blocking the script -
+  Mark-of-the-Web on anything unzipped from a browser download, AppLocker or
+  WDAC policy, or an endpoint protection product. The tell is that `Get-Item`
+  reads the file happily while `Get-Command <script>` refuses it.
+  **On a repeat report the first question is WHICH MACHINE it ran on, and
+  whether `Get-ChildItem -Recurse <folder> | Unblock-File` has been run** -
+  not what is wrong with the script. Two commands settle it in seconds:
+  `(Get-Command .\server\Install-DSMT.ps1).Parameters.Keys` and
+  `Get-Item .\server\Install-DSMT.ps1 -Stream *`.
+  **The pattern, not the instance: a managed Windows endpoint can refuse to
+  run or even to inspect a script without producing an error the operator
+  recognises as a security block.** Nothing in this repository can fix that,
+  and no amount of code reading will find it - so when a script misbehaves
+  identically for every parameter, test it on a second machine before changing
+  a line.
 - **[Shape 2] "The server won't start."** The three preflight checks in
   `Start-DSMT.ps1` each name their own fix: the RSAT `ActiveDirectory` module
   is missing (`Install-WindowsFeature RSAT-AD-PowerShell`), the domain is
