@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.13.3** | 2026-08-06 | PowerShell files now ship with Windows (CRLF) line endings | Re-copy files |
 | **1.13.2** | 2026-08-06 | Installer parameters could be lost in the elevation relaunch; it now shows what it received and what it forwards | Re-run installer |
 | **1.13.1** | 2026-07-31 | The two `.cmd` wrappers are removed - both had drifted, and one silently overrode the saved settings | Copy files |
 | **1.13.0** | 2026-07-31 | **SQL is now opt-in.** A plain install needs no database, so the console can be demonstrated in one step; `-UseSql` turns it on | Re-run installer |
@@ -53,7 +54,38 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.13.2**. The last tag is `v1.4.0`.
+`main` carries **1.13.3**. The last tag is `v1.4.0`.
+
+---
+
+## 1.13.3 — 2026-08-06
+
+**PowerShell files now ship with CRLF line endings.**
+
+Every `.ps1` in this repository was written in a Linux container and so was
+checked out, archived and downloaded with **LF-only** line endings. Windows
+PowerShell mostly tolerates that - but "mostly" is not a property to rely on
+for the file an operator runs first, and it is one of the few differences
+between this repository and an ordinary Windows checkout.
+
+`.gitattributes` now forces `eol=crlf` on `.ps1`, `.psm1`, `.psd1`, `.cmd`,
+`.bat` and `.sql`, and keeps `eol=lf` on the web and documentation files,
+which are read by browsers that do not care. Archives built with
+`git archive` honour the same setting, so a downloaded zip now carries native
+Windows files.
+
+**Honest status of the "parameters do not work" report:** it is not yet
+diagnosed. The file on the reporting machine was confirmed byte-identical to
+the one shipped (64,580 bytes) and does contain the parameters, so the file
+itself is not the problem. This change removes one candidate and one class of
+future question; it is not a claimed fix. The two remaining candidates are
+**Mark-of-the-Web** (a file downloaded through a browser is blocked, so
+`Get-Item` works while `Get-Command` refuses it - `Unblock-File` clears it)
+and the invocation form.
+
+Files: **new** `.gitattributes`; `server/lib/DsmtCommon.ps1` (version).
+Re-copy `server\**` to the host - the content is unchanged, only the line
+endings.
 
 ---
 
