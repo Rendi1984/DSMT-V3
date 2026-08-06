@@ -460,10 +460,61 @@ plumbing before the unbounded one is exposed.
       `localStorage` would make them per-browser, which is wrong for something
       one administrator defines for the team.
 
+### Certificate services (23) — raised 2026-07-31, NOT to be built yet
+
+Four related asks: issue certificates against the CA servers, check CRL
+validity, create certificate requests, and read a CSR or PEM file and show the
+operator what is in it.
+
+**Two design rules to settle before any code, because they are hard to
+retrofit:**
+
+- **DSMT must never hold a private key.** If it generates a request, the key
+  belongs on the machine the certificate is for. The moment a private key
+  passes through this server, the whole "credentials only ever live in process
+  memory" posture in `README.md` is a different conversation. Read requests,
+  submit them, show what came back - do not generate keypairs server-side.
+- **Enrolment rights are AD template permissions**, so the existing model
+  holds perfectly: run as the operator, and the CA decides what they may
+  enrol. Do not build a permission model here either.
+
+23a. **Discover the CAs.** They are published in the forest configuration
+     partition under `CN=Enrollment Services,CN=Public Key Services,
+     CN=Services,CN=Configuration,<forest DN>`. DSMT already reads that
+     partition for the KDS root key (`Get-DsmtKdsStatus`), so the same
+     approach works and nothing has to be typed by hand. Show each CA, its
+     DNS name, and the templates it publishes.
+23b. **Issue / request.** `Get-Certificate` (the built-in `PKI` module,
+     Windows 8 / 2012 and later) enrols against a template and takes
+     `-Credential`. `certreq.exe` covers submitting an existing CSR.
+     **Do not plan on PSPKI** - it is a community module from the PowerShell
+     Gallery, and this project must keep working on an isolated network with
+     no package install. Every dependency here has to ship with Windows.
+23c. **CRL validity.** Read the CDP URLs from the CA or from a certificate,
+     fetch each CRL, and report `ThisUpdate` / `NextUpdate` with the time
+     remaining - an expired CRL fails validation everywhere at once and is a
+     classic silent outage, so this is the highest-value item of the four.
+     **The awkward part, stated in advance:** .NET Framework 4.x has no CRL
+     parser, so on PowerShell 5.1 there is no clean managed way to read one.
+     `certutil -dump` works but means parsing console text - exactly what the
+     `repadmin` note above says to avoid. Accept it here if there is no
+     alternative, but **isolate it in one function** with the raw output kept
+     on failure, rather than spreading `certutil` parsing through the codebase.
+23d. **Read a CSR or PEM and display it.** Two very different jobs:
+     - A **certificate** (`.cer`, `.pem`, base64 or DER) loads natively with
+       `X509Certificate2` - subject, issuer, validity, SANs, key usage,
+       thumbprint. Easy, and worth doing first.
+     - A **CSR** (PKCS#10) has no parser in .NET Framework at all. Same
+       `certutil -dump` compromise as the CRL. Plan for it; do not discover it
+       halfway through.
+     Show expiry as a plain "expires in N days" alongside the date - the
+     number is what anyone actually looks for.
+
 ### Where all of this goes — the tab count is the real constraint
 
 Today: Users, Groups, Audit log, Tools, Settings. The open proposals would add
-Servers (15-18), Reports (19) and DNS/DHCP (20-21) - eight or nine tabs, and
+Servers (15-18), Reports (19), DNS/DHCP (20-21) and certificates (23) - nine
+or ten tabs, and
 the header already moves tabs into the hamburger at 820px. Sprawl is the
 actual risk, not any individual feature.
 
@@ -473,7 +524,7 @@ The grouping that holds up:
 | --- | --- |
 | Users, Groups | Directory objects. 22 is a filter here, not a new tab |
 | Servers | Machines: services, processes, tasks, remote command (15-18) |
-| Infrastructure | A rail: DNS, DHCP (20-21) - both are separate RSAT modules against separate roles, and neither deserves a top-level tab alone |
+| Infrastructure | A rail: DNS, DHCP, Certificates (20-21, 23). None deserves a top-level tab alone, and all three are separate Windows roles read through separate modules |
 | Reports | A rail of report types (19) |
 | Tools | Guided jobs with an end state |
 | Audit log | What was **done** - distinct from Reports, which is what **is** |
