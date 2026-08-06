@@ -575,6 +575,57 @@ retrofit:**
     Whether it becomes a tab or replaces the default landing view is worth
     deciding at the time.
 
+### Running unattended, and the end of the installer (26-27) — raised 2026-07-31
+
+26. **"It runs in a window and somebody can close it."** Correct, and it
+    matters - but the fix already exists and the installer is not steering
+    people to it. **This is a discoverability problem, not a missing feature.**
+
+    `-InstallAsService` (1.4.0) registers a real Windows service: no window at
+    all, starts at boot, survives sign-out, and the service manager restarts
+    it if it dies. `-InstallScheduledTask` is the lighter alternative - runs
+    whether or not anyone is signed in, with
+    `-ExecutionTimeLimit ([TimeSpan]::Zero)` so the 72-hour default cannot
+    kill it. The visible window only happens with neither: the installer's
+    `default` start branch launches a plain PowerShell process, which is the
+    right behaviour for a first run and the wrong one to leave in place.
+
+    **`-WindowStyle Hidden` is NOT the answer and must not be offered as one.**
+    It hides the window without changing anything that matters: the process
+    still belongs to that sign-in session, so it still dies at sign-out, and
+    now nobody can tell it is running or read its output when it fails. It
+    trades a visible problem for an invisible one.
+
+    What to actually build:
+    - When DSMT is started as a bare process, **say so and say what to do**:
+      "running in this window - close it and the console stops. Re-run with
+      `-InstallAsService` to run it properly." One line, at the end of the
+      install.
+    - Consider making a service or task the **default** when the installer is
+      run interactively, with the bare process as the explicit fallback. Same
+      reasoning as making SQL opt-in in 1.13.0: the default should be the
+      thing that works unattended.
+    - Whatever is added, honour the acceptance test already recorded under
+      "recurring root causes": leave it running for four days and confirm it
+      still answers. Nothing shorter catches the platform-default class.
+
+27. **Ask at the end of the installation whether to open the browser.**
+    Today the summary prints the URL and stops. Small, and it is the last
+    thing between a finished install and seeing the console work.
+    - Prompt, do not just launch - an installer that opens a browser without
+      asking is rude on a server console. Default to yes on an interactive
+      run.
+    - **Must not prompt when there is nobody to answer.** A service install,
+      a scheduled task, or any unattended run has to skip the question rather
+      than block forever. Gate it on an interactive host, and add a switch
+      (`-OpenBrowser` / `-NoBrowser`) so an unattended caller can state its
+      intent.
+    - Only offer it when the install actually succeeded and DSMT was started -
+      opening a browser at a console that is not listening teaches the
+      operator that the tool is broken.
+    - It is a small change; build it with the next installer work rather than
+      on its own.
+
 ### Where all of this goes — the tab count is the real constraint
 
 Today: Users, Groups, Audit log, Tools, Settings. The open proposals would add
