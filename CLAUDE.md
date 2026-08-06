@@ -8,7 +8,7 @@ sign in with their own domain account, browse and filter live directory
 objects, act on them, and every write is recorded in an audit log with the
 operator, the controller and a mandatory reason string.
 
-- **Installer**: `server/Install-DSMT.ps1` (+ `Install-DSMT.cmd`) — installs
+- **Installer**: `server/Install-DSMT.ps1` — installs
   RSAT, prepares `data/` and `config/`, creates the SQL database via the
   server's own schema code, reserves the URL, opens the firewall, optionally
   registers a boot task, and writes `config/dsmt.config.json`. Idempotent.
@@ -22,6 +22,7 @@ operator, the controller and a mandatory reason string.
   - `DsmtSession.ps1` — sign-in, tokens, idle expiry
   - `DsmtAudit.ps1` — audit records (SQL primary, JSONL always)
   - `DsmtSql.ps1` — SQL Server connection, schema creation, snapshots
+  - `DsmtGmsa.ps1` — the gMSA tool: KDS root key, group, account
   - `DsmtHttp.ps1` — static files, API routing, bulk-action semantics
 - **Front end**: `web/index.html`, `web/app.css`, `web/app.js` — vanilla
   ES5-compatible JS, no framework, no build step, no external requests.
