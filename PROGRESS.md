@@ -386,6 +386,90 @@ be the last of the four built, not the first** — the other three are bounded
 operations with clear audit records, and they will prove the remote-session
 plumbing before the unbounded one is exposed.
 
+### Reports, DNS/DHCP, and sensitive-group filters (19-22) — raised 2026-07-31, NOT to be built yet
+
+19. **Reports out of Active Directory.** Named queries with an export, run
+    against the live directory. The four that earn their place immediately:
+    stale accounts (no logon in N days), password state (expiring, expired,
+    never expires), privileged group membership (see 22 — the same SID list
+    feeds both), and accounts created or disabled in a window.
+    - The engine is already there: `Get-DsmtUsers` reads every attribute these
+      need, and the CSV export exists. A report is a saved query plus a column
+      set, not new plumbing.
+    - **Reports must be dated on the page and in the export.** A directory
+      report with no "as at" stamp gets circulated for months as if it were
+      current — the same failure the fake-data rule guards against, in a form
+      that survives being emailed.
+    - Decide early whether a report may run from the SQL snapshot. If yes it
+      must be labelled a snapshot with its `LastSyncUtc`, never presented as
+      live. If no, say so and always read live.
+20. **DHCP.** Read scopes, leases, reservations; convert a lease to a
+    reservation. Notes before anyone starts:
+    - The `DhcpServer` module is a separate RSAT feature
+      (`RSAT-DHCP`) and is **not** installed by `Install-DSMT.ps1` today. It is
+      also not present on a machine that is not a DHCP server, so it must be a
+      checked prerequisite with a named fix, like the AD module.
+    - Authorised DHCP servers are listed in AD (`Get-DhcpServerInDC`), which is
+      the honest way to discover them rather than asking the operator to type
+      names.
+    - Leases are volatile: anything shown must be timestamped and refreshable,
+      and reservations are the only part worth writing.
+21. **DNS.** Read zones and records; create and delete A / CNAME / PTR. The
+    `DnsServer` module is again a separate RSAT feature.
+    - AD-integrated zones replicate, so a change made against one DC is not
+      instantly visible at another. Whatever is shown must name **which server
+      answered**, exactly as the directory views already do.
+    - Deleting a record is the destructive case here and needs the same
+      treatment as deleting a user: confirmation, mandatory reason, audit.
+    - PTR records are the classic trap - created in a different zone, easy to
+      orphan. Either handle the pair together or say plainly that it does not.
+22. **Sensitive-group filter on the Groups screen**, with editable filters.
+    The smallest of these four and probably the most useful day to day.
+    - **Match on SID, never on name.** `Domain Admins` can be renamed, and is
+      localised on a non-English install; the RIDs are fixed. Domain Admins
+      512, Domain Controllers 516, Schema Admins 518, Enterprise Admins 519,
+      Group Policy Creator Owners 520, plus the built-in aliases in the
+      `S-1-5-32-*` range (Administrators 544, Account Operators 548, Server
+      Operators 549, Backup Operators 551, Print Operators 550). A filter that
+      matches the string "Domain Admins" is a filter that silently returns
+      nothing on the day it matters most.
+    - `adminCount = 1` is a useful second signal - it marks objects protected
+      by AdminSDHolder - but it is **not** a substitute: it lingers on accounts
+      removed from a privileged group, so it over-reports. Show it, do not
+      filter solely on it.
+    - Shape it like the audit filter chips that already exist, so it is one
+      familiar control rather than a new idea.
+    - **Where custom filters are stored matters now that SQL is optional.**
+      Built-in filters belong in code (they are static facts about AD, not
+      configuration). Custom ones belong in `config\dsmt.config.json`, so they
+      are shared by everyone using that server and survive with no database.
+      `localStorage` would make them per-browser, which is wrong for something
+      one administrator defines for the team.
+
+### Where all of this goes — the tab count is the real constraint
+
+Today: Users, Groups, Audit log, Tools, Settings. The open proposals would add
+Servers (15-18), Reports (19) and DNS/DHCP (20-21) - eight or nine tabs, and
+the header already moves tabs into the hamburger at 820px. Sprawl is the
+actual risk, not any individual feature.
+
+The grouping that holds up:
+
+| Tab | Contains |
+| --- | --- |
+| Users, Groups | Directory objects. 22 is a filter here, not a new tab |
+| Servers | Machines: services, processes, tasks, remote command (15-18) |
+| Infrastructure | A rail: DNS, DHCP (20-21) - both are separate RSAT modules against separate roles, and neither deserves a top-level tab alone |
+| Reports | A rail of report types (19) |
+| Tools | Guided jobs with an end state |
+| Audit log | What was **done** - distinct from Reports, which is what **is** |
+| Settings | How this server is configured |
+
+Seven tabs, each with a one-sentence meaning. **Reports and Audit log must not
+be merged** even though both produce tables: one answers "what is true now",
+the other "what changed and who did it". Collapsing them would make both
+harder to explain.
+
 ---
 
 ## Under consideration — asked about, not decided
