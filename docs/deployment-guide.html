@@ -430,10 +430,10 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 <p>
   <strong>There is no MSI and no setup.exe</strong> - DSMT is not packaged as a
   Windows installer. <strong>But there is an install script that does
-  everything automatically:</strong> <code>Install-DSMT.ps1</code> (or
-  <code>Install-DSMT.cmd</code> for a double-click). It installs the RSAT
-  module, prepares the folders, creates the database, reserves the port, opens
-  the firewall and saves the settings. See
+  everything automatically:</strong> <code>server\Install-DSMT.ps1</code>. It
+  installs the RSAT module, prepares the folders, reserves the port, opens the
+  firewall, optionally sets up the database, and saves the settings. It asks
+  for elevation itself, so a normal PowerShell window is enough. See
   <a href="#auto">the fast path</a>.
 </p>
 
@@ -478,13 +478,11 @@ hr { border: 0; height: 1px; background: var(--n-800); margin: 40px 0; }
 
 <h3 id="auto-run">How to run it</h3>
 
-<p><strong>Option A - double-click:</strong></p>
-<ol>
-  <li>Edit the variables at the top of <code>Install-DSMT.cmd</code> (domain, port, service account, SQL server).</li>
-  <li>Run the file. The script requests elevation itself and opens an elevated window.</li>
-</ol>
-
-<p><strong>Option B - command line:</strong></p>
+<p>
+  Open PowerShell in the folder you copied the project to - it does
+  <em>not</em> need to be elevated, the script requests elevation itself and
+  opens an elevated window.
+</p>
 <pre><code><span class="c"># Full lab setup, including start at boot</span>
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps1 `
     -Domain LAB.LOCAL -SqlServer SQL01 -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask
@@ -899,12 +897,10 @@ Get-ADDomain -Identity LAB.LOCAL | Select-Object DNSRoot, NetBIOSName, Distingui
 <p>Copy the project folder as it is, for example to <code>C:\DSMT</code>. The structure must be preserved:</p>
 
 <pre><code>C:\DSMT\
-├── Install-DSMT.cmd        <span class="c">← the automated installer</span>
-├── Start-DSMT.cmd          <span class="c">← convenience launcher</span>
 ├── server\
-│   ├── Install-DSMT.ps1
+│   ├── Install-DSMT.ps1    <span class="c">← the automated installer</span>
 │   ├── Start-DSMT.ps1      <span class="c">← the entry point</span>
-│   └── lib\                <span class="c">← the six library files</span>
+│   └── lib\                <span class="c">← the seven library files</span>
 ├── web\                    <span class="c">← the front end (index.html, app.css, app.js)</span>
 ├── _ds\nocturne-...\       <span class="c">← the design system</span>
 ├── uploads\                <span class="c">← images</span>
@@ -1242,9 +1238,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Start-DSMT.ps1<
     -SqlServer SQL01 -SqlDatabase DSMT</code></pre>
 
 <p>
-  Alternatively: edit the variables at the top of <code>Start-DSMT.cmd</code>
-  (<code>DSMT_DOMAIN</code>, <code>DSMT_PORT</code>, <code>DSMT_SQLSERVER</code>)
-  and double-click it.
+  After the installer has run, none of those parameters are needed:
+  <code>Start-DSMT.ps1</code> reads <code>config\dsmt.config.json</code> and
+  starts with no arguments at all. Pass a parameter only to override what was
+  saved there.
 </p>
 
 <h3 id="s7-banner">7.2 Reading the preflight banner</h3>
@@ -1515,7 +1512,6 @@ jdoe</code></pre>
 <table class="cols">
   <tr><th></th><th>Scheduled task</th><th>Windows service</th></tr>
   <tr><td data-label="">Installer switch</td><td data-label="Scheduled task"><code>-InstallScheduledTask</code></td><td data-label="Windows service"><code>-InstallAsService</code></td></tr>
-  <tr><td data-label="">In <code>Install-DSMT.cmd</code></td><td data-label="Scheduled task"><code>set DSMT_AUTOSTART=1</code></td><td data-label="Windows service"><code>set DSMT_SERVICE=1</code></td></tr>
   <tr><td data-label="">Starts at boot</td><td data-label="Scheduled task">Yes</td><td data-label="Windows service">Yes</td></tr>
   <tr><td data-label="">Restarts on failure</td><td data-label="Scheduled task">Yes (3 attempts, 1 min apart)</td><td data-label="Windows service">Yes (5s, 10s, then every 30s)</td></tr>
   <tr><td data-label="">Managed with</td><td data-label="Scheduled task"><code>Get-ScheduledTask "DSMT Console"</code></td><td data-label="Windows service"><code>Get-Service DSMT</code></td></tr>
@@ -1785,7 +1781,7 @@ asmith,Anna Smith,Anna,Smith,Finance,Analyst,,OU=Finance,DC=lab,DC=local</code><
 
 <h3>E. Related files</h3>
 <table>
-  <tr><td><code>Install-DSMT.cmd</code> / <code>server\Install-DSMT.ps1</code></td><td><strong>The automated installer</strong></td></tr>
+  <tr><td><code>server\Install-DSMT.ps1</code></td><td><strong>The automated installer</strong></td></tr>
   <tr><td><code>config\dsmt.config.json</code></td><td>The settings saved at install time</td></tr>
   <tr><td><code>README.md</code></td><td>Technical overview of the project</td></tr>
   <tr><td><code>CLAUDE.md</code></td><td>Working rules for the project</td></tr>

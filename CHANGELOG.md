@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.13.1** | 2026-07-31 | The two `.cmd` wrappers are removed - both had drifted, and one silently overrode the saved settings | Copy files |
 | **1.13.0** | 2026-07-31 | **SQL is now opt-in.** A plain install needs no database, so the console can be demonstrated in one step; `-UseSql` turns it on | Re-run installer |
 | **1.12.1** | 2026-07-31 | Installer found one SQL instance and used the first **letter** of its name as the server | Re-run installer |
 | **1.12.0** | 2026-07-31 | A **Tools** tab with a rail of tools; the first is a guided gMSA setup, including enabling gMSAs for a forest that never used them | Restart + refresh |
@@ -51,7 +52,56 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.13.0**. The last tag is `v1.4.0`.
+`main` carries **1.13.1**. The last tag is `v1.4.0`.
+
+---
+
+## 1.13.1 — 2026-07-31
+
+**`Install-DSMT.cmd` and `Start-DSMT.cmd` are removed.**
+
+The question was fair: the documentation says to install with the `.ps1`
+scripts, so why were there `.cmd` files as well? They were double-click
+convenience wrappers, and by this version both were **actively wrong**:
+
+- **`Install-DSMT.cmd` had drifted.** It carried its own copy of the whole
+  parameter set as `set DSMT_*` variables — a second source of truth for
+  something that already has one. It still spoke of `DSMT_SKIPSQL` and of
+  leaving `DSMT_SQLSERVER` empty to auto-detect, neither of which is how
+  1.13.0 behaves. It would have installed something other than what it said.
+- **`Start-DSMT.cmd` was worse than stale: it silently overrode the saved
+  configuration.** It always passed `-Domain`, `-Port` and `-ListenAddress`
+  explicitly, and an explicit parameter beats `config\dsmt.config.json`. So
+  double-clicking it could quietly contradict what the installer had just
+  set up, on the port or even the domain, with nothing on screen to say so.
+
+Neither bought anything real. `Install-DSMT.ps1` **already asks for elevation
+itself**, so a plain PowerShell window is enough, and after the installer has
+run `Start-DSMT.ps1` needs no parameters at all. Deleting them removes a
+duplicate parameter list that could disagree with the real one — the same
+single-source-of-truth rule this project applies to the version number.
+
+The folder structure is now exactly what the documentation describes:
+
+    C:\DSMT\
+    +- server\        Install-DSMT.ps1, Start-DSMT.ps1, lib\
+    +- web\           index.html, app.css, app.js
+    +- _ds\           the Nocturne design system
+    +- uploads\       images
+    +- sql\           schema.sql, the schema standalone
+    +- docs\          deployment-guide.html
+    +- config\        created by the installer
+    +- data\          created at startup: logs, file audit
+
+Also corrected while in there: `DsmtGmsa.ps1` was missing from the file
+listings in `README.md` and `CLAUDE.md`, and the guide still said `lib\` held
+six files.
+
+Files: **deleted** `Install-DSMT.cmd`, `Start-DSMT.cmd`;
+`server/lib/DsmtCommon.ps1` (version), `README.md`, `CLAUDE.md`,
+`PROGRESS.md`, `docs/deployment-guide.html`. Nothing to restart — but delete
+the two `.cmd` files from any host they were copied to, so nobody
+double-clicks the stale one.
 
 ---
 

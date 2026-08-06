@@ -5,10 +5,10 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.13.0` — matches the top entry of `CHANGELOG.md` and
+`1.13.1` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
-Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
+Setup is now automated: `server/Install-DSMT.ps1`
 installs RSAT, prepares folders, creates the SQL database, reserves the port,
 opens the firewall, optionally registers a boot task, and saves
 `config/dsmt.config.json` — after which `Start-DSMT.ps1` needs no parameters.

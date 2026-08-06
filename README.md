@@ -58,8 +58,8 @@ every step checks the current state first.
 .\server\Install-DSMT.ps1 -UseSql
 ```
 
-Or edit the settings at the top of `Install-DSMT.cmd` and run it — the script
-asks for elevation itself.
+`Install-DSMT.ps1` asks for elevation itself, so a normal PowerShell window is
+enough.
 
 It installs the RSAT ActiveDirectory module (`Install-WindowsFeature` on
 Server, `Add-WindowsCapability` on client Windows), creates `data\` and
@@ -164,7 +164,8 @@ To run it without installing first, or to override the saved settings:
                         -SqlServer SQL01 -SqlDatabase DSMT
 ```
 
-Or edit the settings at the top of `Start-DSMT.cmd` and double-click it.
+After the installer has run, `Start-DSMT.ps1` needs no parameters at all — it
+reads `config\dsmt.config.json`.
 
 Then open `http://localhost:8080/` and sign in with a domain account.
 
@@ -193,6 +194,7 @@ just fail later in a way that looks like a code bug.
 | `server/lib/DsmtSession.ps1` | Sign-in, session tokens, idle expiry |
 | `server/lib/DsmtAudit.ps1` | Audit records (SQL primary, JSONL always) |
 | `server/lib/DsmtSql.ps1` | SQL Server connection, schema creation, snapshots |
+| `server/lib/DsmtGmsa.ps1` | The gMSA tool: KDS root key, permitted-computers group, the account |
 | `server/lib/DsmtHttp.ps1` | Static files, the JSON API, bulk-action semantics |
 | `web/index.html`, `web/app.css`, `web/app.js` | The front end |
 | `_ds/nocturne-.../` | The Nocturne design system (tokens + component CSS) |
