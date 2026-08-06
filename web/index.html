@@ -70,6 +70,7 @@
       <button class="tab" data-tab="users"  role="tab">Users</button>
       <button class="tab" data-tab="groups" role="tab">Groups</button>
       <button class="tab tab-audit" data-tab="audit" role="tab">Audit log</button>
+      <button class="tab" data-tab="tools" role="tab">Tools</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </nav>
 
@@ -105,6 +106,7 @@
     <button class="menu-item" data-tab="users">Users</button>
     <button class="menu-item" data-tab="groups">Groups</button>
     <button class="menu-item" data-tab="audit">Audit log</button>
+    <button class="menu-item" data-tab="tools">Tools</button>
     <button class="menu-item" data-tab="settings">Settings</button>
     <div class="menu-sep"></div>
     <button class="menu-item" id="menuAbout">About DSMT</button>
@@ -155,6 +157,25 @@
       <div id="detailBody"></div>
     </aside>
     <div class="detail-backdrop" id="detailBackdrop" hidden></div>
+  </div>
+
+  <!-- ---------- Tools ----------
+       Same shape as Settings by design: a rail of tools on the left, one open
+       at a time. Settings is "how this server is configured"; Tools is
+       "things I do to the directory" - keeping them apart keeps both
+       readable, and reusing the layout means one set of rules to maintain. -->
+  <div class="settings" id="toolsView" hidden>
+    <div class="settings-head">
+      <div class="settings-head-text">
+        <span class="kicker">Tools</span>
+        <h1 class="settings-title">Directory tools</h1>
+        <p class="muted-sm">Guided jobs that are not a single user or group.</p>
+      </div>
+    </div>
+    <div class="settings-main">
+      <nav class="set-nav" id="toolsNav" aria-label="Tools"></nav>
+      <div class="settings-body" id="toolsBody"></div>
+    </div>
   </div>
 
   <!-- ---------- Settings ----------

@@ -96,6 +96,7 @@ $repoRoot  = Split-Path -Parent $scriptDir
 . (Join-Path $scriptDir 'lib\DsmtSession.ps1')
 . (Join-Path $scriptDir 'lib\DsmtAudit.ps1')
 . (Join-Path $scriptDir 'lib\DsmtDirectory.ps1')
+. (Join-Path $scriptDir 'lib\DsmtGmsa.ps1')
 . (Join-Path $scriptDir 'lib\DsmtHttp.ps1')
 
 # Settings chosen by Install-DSMT.ps1 fill in for anything not passed on the

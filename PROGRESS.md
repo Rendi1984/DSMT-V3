@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.11.0` — matches the top entry of `CHANGELOG.md` and
+`1.12.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -189,7 +189,21 @@ its data is fabricated and every button is inert.
    check in before restarting that investigation.
 8. **Decide the fate of `prototype/`.** It is kept for reference; delete it
    once nobody needs the original design pass.
-9. **Verify 1.11.0 against LAB.LOCAL.** Undo and the health page have never
+9. **Verify the gMSA tool against LAB.LOCAL (1.12.0).** None of it has been
+   executed. Specifically:
+   - `Get-DsmtKdsStatus` builds the forest DN from `(Get-ADDomain).Forest` and
+     reads `CN=Master Root Keys,...`. Confirm the search base resolves in this
+     forest, and that a forest with **no** key returns Exists=false rather
+     than throwing on a missing container.
+   - The two confirmations are re-checked server-side; confirm a request with
+     one of them false is refused with 400.
+   - `Add-KdsRootKey` runs in-process. Confirm the audit record names both the
+     initiator and the executing account.
+   - Computer resolution accepts NAME, NAME$ and FQDN; the all-or-nothing
+     behaviour on an unresolvable name has not been exercised.
+   - `New-ADServiceAccount -PrincipalsAllowedToRetrieveManagedPassword` is
+     passed the group NAME, not its DN. Confirm AD accepts that here.
+10. **Verify 1.11.0 against LAB.LOCAL.** Undo and the health page have never
    been executed — there is no PowerShell in the dev container. Specifically
    worth watching on the first run:
    - `Get-DsmtObjectParent` resolves an identity that is a sAMAccountName and

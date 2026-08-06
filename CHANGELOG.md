@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.12.0** | 2026-07-31 | A **Tools** tab with a rail of tools; the first is a guided gMSA setup, including enabling gMSAs for a forest that never used them | Restart + refresh |
 | **1.11.0** | 2026-07-31 | Undo a directory change from its audit entry; a Health section that says what is reachable and how to fix what is not | Restart + refresh |
 | **1.10.0** | 2026-07-31 | Refresh button on the Audit log, with a stamp saying how stale the table is | Refresh |
 | **1.9.2** | 2026-07-31 | Database section states the live server and database as fields; a 404 on a new route now names the cause | Refresh |
@@ -48,8 +49,95 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.11.0**: 1.5.0 through 1.11.0 were merged from
-`feature/service-identity` in one pull request. The last tag is `v1.4.0`.
+`main` carried **1.11.0** after the `feature/service-identity` merge. 1.12.0
+is on `feature/tools-gmsa`. The last tag is `v1.4.0`.
+
+---
+
+## 1.12.0 — 2026-07-31
+
+**A Tools tab, and the first tool: gMSA.**
+
+### The tab
+
+`Tools` sits between `Audit log` and `Settings`, laid out exactly like
+Settings — a rail of tools on the left, one open at a time. The split is
+deliberate: **Settings is "how this server is configured", Tools is "things I
+do to the directory."** Mixing them would make both harder to read. The rail
+is data (`TOOLS` in `app.js`), so the next tool is one entry plus a render
+function.
+
+### gMSA — five steps, and an honest split between them
+
+| # | Step | Who does it |
+| --- | --- | --- |
+| 1 | KDS root key (once per forest) | DSMT, *in-process* — see below |
+| 2 | Group of permitted computers | DSMT, as **you** |
+| 3 | Computers in that group | DSMT, as **you** |
+| 4 | The gMSA itself | DSMT, as **you** |
+| 5 | Install it on the host | **You**, elevated — cannot run here |
+
+**Requirements are stated before any button**, not discovered by failure:
+domain functional level 2012+, a KDS root key, the ten-hour convergence wait,
+the specific rights each step needs, and Windows Server 2012+ on any machine
+that will use the account.
+
+**Enabling gMSAs for an organisation that never used them** is step 1, and it
+is guarded by **two confirmations that say different things** — one that this
+changes the *forest* and that nothing works for ten hours afterwards, one that
+the operator is authorised to make a forest-level change. Two different
+statements rather than "are you sure" twice, so ticking both is a second
+thought and not a reflex. **Both are re-checked on the server**, not only in
+the browser, and a reason is mandatory. A forest that already has a key is
+refused with an explanation rather than given a second one.
+
+**An attribution gap, recorded rather than hidden.** `Add-KdsRootKey` accepts
+neither `-Credential` nor `-Server`: it acts on the forest of the machine it
+runs on, as whoever runs it. So this one action runs as the account the DSMT
+*server* runs as, never as the operator. The screen says so plainly, the audit
+record names the operator as initiator and the service account as executor,
+and the equivalent command is always shown for running on a DC instead. Where
+the `Kds` module is absent locally, the button is disabled and only the
+command is offered.
+
+**The ten-hour wait is treated as a first-class state**, not an error. The key
+is read from the forest configuration partition (`msKds-ProvRootKey`), its
+effective time is compared against now, and a key that exists but has not
+converged reports *Waiting*, with the hours remaining and an explicit "this is
+not a fault". Creating a gMSA before then is refused with that same
+explanation, instead of AD's `Key does not exist`.
+
+**A lab shortcut, labelled as one.** Backdating the effective time makes the
+key usable immediately; the checkbox says *lab only* and explains why, and the
+audit record says the time was backdated.
+
+**Computers are resolved before anything changes.** `DSMT01`, `DSMT01$` and
+`dsmt01.lab.local` are all accepted; every name is looked up first, and if any
+one fails to resolve **nothing is changed** and the message names it. A typo
+that silently adds nothing is exactly how a correct-looking gMSA ends up
+refusing to install on the one host that was missed. The screen also says what
+no error message ever will: **a computer does not see a new group membership
+until it reboots.**
+
+**Everything is read live.** No step remembers what was clicked. State comes
+from the directory on every render, because a wizard showing a green tick
+because a button was pressed last week is the fake-data failure in `CLAUDE.md`
+wearing a different hat — and here it would send someone away believing a gMSA
+works when it does not.
+
+### Also
+
+The clipboard helper was duplicated (Settings had its own with a different
+fallback). There is now one `copyText()` for the whole console. Note the
+non-obvious part: `navigator.clipboard` needs a secure context, which
+`http://host:8080` is not, so the textarea fallback is the path that actually
+runs on most installations — not legacy cruft.
+
+Files: **new** `server/lib/DsmtGmsa.ps1`; `server/Start-DSMT.ps1` (loads it),
+`server/lib/DsmtHttp.ps1` (five `/api/tools/gmsa/*` routes),
+`server/lib/DsmtCommon.ps1` (version), `web/index.html`, `web/app.css`,
+`web/app.js`. **Copy `server/lib/*.ps1` including the new file, and restart
+`Start-DSMT.ps1`**, then copy `web/*` and hard-refresh.
 
 ---
 
