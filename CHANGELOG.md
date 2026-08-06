@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.12.1** | 2026-07-31 | Installer found one SQL instance and used the first **letter** of its name as the server | Re-run installer |
 | **1.12.0** | 2026-07-31 | A **Tools** tab with a rail of tools; the first is a guided gMSA setup, including enabling gMSAs for a forest that never used them | Restart + refresh |
 | **1.11.0** | 2026-07-31 | Undo a directory change from its audit entry; a Health section that says what is reachable and how to fix what is not | Restart + refresh |
 | **1.10.0** | 2026-07-31 | Refresh button on the Audit log, with a stamp saying how stale the table is | Refresh |
@@ -50,6 +51,49 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.12.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.12.1 — 2026-07-31
+
+**Fixed - the installer announced `Found a local SQL instance: l` and then
+failed to connect to a server called "l".**
+
+`Get-LocalSqlInstances` ends with `return @($names)`. With exactly one SQL
+instance installed, PowerShell **unrolls the single-element array on return**,
+so the caller got the plain string `localhost` rather than a one-element
+array. Both of the next two lines then lied convincingly:
+
+- `$local.Count` on a string is **1**, so the "did we find anything" test
+  passed.
+- `$local[0]` on a string is its **first character**, so the instance name
+  became `l`.
+
+Which is why the error named a server nobody had ever configured. In a
+console font `l` and `1` are near-identical, so the report read as
+`instance: 1` - the message was right and unreadable at the same time.
+
+Fixed in three places, because one is not enough for this class of bug:
+
+1. The call site wraps the call: `$local = @(Get-LocalSqlInstances)`. This is
+   the fix that matters, and the comment says the parentheses are
+   load-bearing.
+2. The function returns `,@($names)` - the comma operator stops the unroll at
+   the source, for any future caller.
+3. A new guard **refuses any instance name one character long** and says so,
+   rather than passing it to SQL and letting the operator read a
+   "server was not found" message that names nothing real.
+
+**This is the same root cause as two bugs already in `CLAUDE.md`**: the
+`HostName` returned as a collection by `-Discover`, and `ConvertTo-Json`
+collapsing a one-element array into a bare object. Single-element collections
+are the recurring defect in this codebase. The rule is now written down in
+`CLAUDE.md` rather than rediscovered each time: **any function returning a
+list must be called inside `@( )`, and should return `,@( )`.**
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`CLAUDE.md`, `PROGRESS.md`. Copy the installer to the host and **re-run it**
+- it is safe to re-run, and every step re-checks the current state.
 
 ---
 

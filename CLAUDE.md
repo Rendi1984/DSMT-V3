@@ -230,6 +230,27 @@ cause. Three shapes:
    fake-data section) — write down the pattern itself, not just each instance.
 
 ### Known instances
+- **[Shape 3] A collection of one is not a collection.** Three separate bugs,
+  one cause. `ConvertTo-Json` collapses a one-element array into a bare
+  object; `-Discover` returned `HostName` as a collection; and in 1.12.1 the
+  installer, on a machine with exactly one SQL instance, announced
+  `Found a local SQL instance: l` and then failed to reach a server called
+  `l` — because `return @($names)` **unrolls on return**, `.Count` on the
+  resulting string is 1 (so the guard passed), and `[0]` on a string is its
+  first *character*. Note how well it hid: the count test succeeded, the
+  message was printed correctly, and in a console font `l` and `1` are
+  indistinguishable, so the report read as `instance: 1`.
+  **The pattern, not the instance: PowerShell and `ConvertTo-Json` both treat
+  a one-element collection as a scalar, and every scalar in PowerShell answers
+  `.Count` with 1 and `[0]` with itself — so the usual defensive checks pass
+  while the value is wrong.** The rules, which apply to new code without
+  discussion:
+    - a function returning a list ends with `return ,@($list)`;
+    - **every call site wraps it: `$x = @(Get-Something)`** — this is the one
+      that actually protects you, because you do not control every callee;
+    - the front end funnels every list-shaped response through `asArray()`;
+    - where a value must look like something (a server name, a DN, an
+      account), validate it before use rather than passing nonsense onward.
 - **[Shape 3] Modern CSS that degrades to nothing, with no error.** The first
   real run of the console found every dialog, toast and popover invisible —
   About, every action button, every result message. There was no JavaScript

@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.12.0` — matches the top entry of `CHANGELOG.md` and
+`1.12.1` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1` (or `Install-DSMT.cmd`)
@@ -335,6 +335,13 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 3] A collection of one is not a collection.** Durable copy of the
+  entry now in `CLAUDE.md`. Three instances so far: `ConvertTo-Json`
+  collapsing a single-element array, `-Discover` returning `HostName` as a
+  collection, and 1.12.1's installer reading the first *character* of
+  `localhost` as a SQL instance name. Rules: return `,@($list)`, call inside
+  `@( )`, `asArray()` on the client, and validate values that must have a
+  shape.
 - **[Shape 2] "The server won't start."** Three preflight checks in
   `Start-DSMT.ps1` each name their own fix: RSAT `ActiveDirectory` module
   missing (`Install-WindowsFeature RSAT-AD-PowerShell`), domain unreachable,
