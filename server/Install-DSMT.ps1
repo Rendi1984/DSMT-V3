@@ -313,6 +313,23 @@ Write-Host '  ---------------------------------------------------------------' -
 Write-Host ('  Target domain  : ' + $Domain) -ForegroundColor DarkGray
 Write-Host ('  Install root   : ' + $repoRoot) -ForegroundColor DarkGray
 
+# Echo what this run actually received. It costs one line and it turns
+# "the parameters do not work" into a fact rather than a guess: either they
+# are listed here or they never arrived, and those are different faults with
+# different fixes. It also survives the elevation relaunch, so the elevated
+# window proves for itself what it was handed.
+if ($PSBoundParameters.Count -eq 0) {
+    Write-Host '  Parameters     : none given - every default applies, including no database' -ForegroundColor DarkGray
+} else {
+    $echo = @()
+    foreach ($key in $PSBoundParameters.Keys) {
+        $v = $PSBoundParameters[$key]
+        if ($v -is [System.Management.Automation.SwitchParameter]) { $echo += ('-' + $key) }
+        else { $echo += ('-' + $key + ' ' + [string]$v) }
+    }
+    Write-Host ('  Parameters     : ' + ($echo -join '  ')) -ForegroundColor DarkGray
+}
+
 # ---------------------------------------------------------------------------
 # 1. Elevation
 # ---------------------------------------------------------------------------
@@ -328,25 +345,46 @@ if ($isAdmin) {
     Write-Info 'Not elevated - re-launching this installer as administrator...'
 
     # Rebuild the original invocation so nothing the operator typed is lost.
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $MyInvocation.MyCommand.Path + '"'))
+    #
+    # ONE STRING, not an array. Start-Process -Verb RunAs hands the argument
+    # list to ShellExecute, and when it is given an array it re-quotes the
+    # elements itself - which is how a forwarded parameter can arrive mangled
+    # or not at all, and the operator sees an installer that ignores
+    # everything they typed. Building the command line here means what is
+    # printed below is exactly what runs.
+    $scriptPath = $MyInvocation.MyCommand.Path
+    $argLine = '-NoProfile -ExecutionPolicy Bypass -File "' + $scriptPath + '"'
+
     foreach ($key in $PSBoundParameters.Keys) {
         $value = $PSBoundParameters[$key]
-        if ($value -is [switch]) {
-            if ($value.IsPresent) { $argList += ('-' + $key) }
-        } else {
-            $argList += ('-' + $key)
-            $argList += ('"' + [string]$value + '"')
+
+        if ($value -is [System.Management.Automation.SwitchParameter]) {
+            if ($value.IsPresent) { $argLine += ' -' + $key }
+            continue
         }
+
+        $text = [string]$value
+        # Escape any embedded double quote before wrapping, or the command
+        # line ends early and every parameter after it is lost.
+        $text = $text.Replace('"', '\"')
+        $argLine += ' -' + $key + ' "' + $text + '"'
     }
 
+    # Printed before the relaunch, so "the parameters do not work" is a
+    # one-line diagnosis instead of a guess: what is on screen here is what
+    # the elevated window receives.
+    Write-Info ('Forwarding: powershell.exe ' + $argLine)
+
     try {
-        Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs | Out-Null
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $argLine -Verb RunAs | Out-Null
         Write-Host ''
         Write-Host '  An elevated window has been opened. Continue there.' -ForegroundColor Cyan
+        Write-Host '  This window is finished - nothing else happens here.' -ForegroundColor DarkGray
         Write-Host ''
         exit 0
     } catch {
-        Write-Fail 'Could not elevate automatically.' 'Right-click PowerShell, Run as administrator, and run this script again.'
+        Write-Fail 'Could not elevate automatically.' `
+                   'Right-click PowerShell, Run as administrator, then run the script again with the same parameters. Or pass -NoElevate to see exactly which steps need administrator rights.'
     }
 }
 

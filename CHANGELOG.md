@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.13.2** | 2026-08-06 | Installer parameters could be lost in the elevation relaunch; it now shows what it received and what it forwards | Re-run installer |
 | **1.13.1** | 2026-07-31 | The two `.cmd` wrappers are removed - both had drifted, and one silently overrode the saved settings | Copy files |
 | **1.13.0** | 2026-07-31 | **SQL is now opt-in.** A plain install needs no database, so the console can be demonstrated in one step; `-UseSql` turns it on | Re-run installer |
 | **1.12.1** | 2026-07-31 | Installer found one SQL instance and used the first **letter** of its name as the server | Re-run installer |
@@ -52,7 +53,55 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.13.1**. The last tag is `v1.4.0`.
+`main` carries **1.13.2**. The last tag is `v1.4.0`.
+
+---
+
+## 1.13.2 — 2026-08-06
+
+**Reported: "the parameters do not work at all."**
+
+Only one code path in the installer can accept a parameter and then act as
+though it were never given, and it is the one nobody looks at: **the elevation
+relaunch**. Run unelevated, the script does no work itself - it re-launches
+itself as administrator in a new window and forwards what you typed. If that
+forwarding is wrong, the installer runs to completion and ignores everything,
+which is exactly the reported symptom.
+
+Two changes, one a fix and one so this is never a guess again:
+
+**The relaunch now builds a single command-line string.** It was passing an
+**array** to `Start-Process -ArgumentList` with `-Verb RunAs`. That hands the
+list to ShellExecute, which re-quotes the elements itself, and the result is
+not reliably what was intended - a value can arrive mangled, or the command
+line can end early and drop every parameter after it. Building the string
+here means what is sent is what was meant. Any double quote inside a value is
+escaped first, for the same reason: one unescaped quote ends the command line
+and silently discards the rest.
+
+**The installer now prints what it received, and what it forwards.**
+- The banner gains a `Parameters :` line listing every bound parameter, or
+  `none given - every default applies, including no database`.
+- Before relaunching it prints `Forwarding: powershell.exe ...`, the exact
+  command line the elevated window will run.
+
+That turns the report into a one-line diagnosis. Either the parameters are
+listed in the elevated window's banner and the fault is elsewhere, or they are
+not and the forwarding is at fault. Those are different faults with different
+fixes, and until now there was no way to tell them apart from the outside.
+
+**Worth knowing while diagnosing:** `-SkipSql` is the default since 1.13.0, so
+passing it correctly changes nothing visible - that is not a broken parameter.
+The one that turns SQL **on** is `-UseSql`.
+
+**This is not confirmed as the reported fault.** It cannot be executed here -
+there is no PowerShell in the development container - so it is the one real
+defect found by reading the code on the only path that produces that symptom.
+If the elevated banner now lists the parameters correctly and the behaviour is
+still wrong, the cause is elsewhere and the banner will say so.
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtCommon.ps1` (version).
+Copy the installer to the host and re-run it.
 
 ---
 
