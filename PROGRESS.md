@@ -245,10 +245,7 @@ Ordered by value for the effort, highest first.
 6. **Audit retention and archive.** The table grows forever. Needs a retention
    setting, an archive table, and a deliberate decision about who may purge —
    an audit log that any operator can delete is not an audit log.
-7. **A read-only role.** DSMT has no permission model by design; AD enforces
-   everything. A UI-level read-only mode is *not* security, but it is useful
-   for a service desk that should look and not touch. Would need to be
-   labelled honestly as a guard rail, not a control.
+7. ~~A read-only role~~ — **superseded by 24**, which covers it properly.
 8. ~~Health check page~~ — **built in 1.11.0** as Settings -> Health.
 9. **Live session list with the ability to sign someone out.** DSMT already
    tracks sessions in `dbo.Sessions`. Useful with several operators, and
@@ -510,6 +507,74 @@ retrofit:**
      Show expiry as a plain "expires in N days" alongside the date - the
      number is what anyone actually looks for.
 
+### Roles from AD groups, and a dashboard (24-25) — raised 2026-07-31, NOT to be built yet
+
+24. **Application roles driven by AD group membership.** Members of one group
+    are administrators of DSMT; members of another get read-only.
+
+    **Read this before designing it, because it touches a decision recorded in
+    `CLAUDE.md`:** DSMT deliberately has no permission model of its own - every
+    directory write runs as the signed-in operator, so AD is the authority.
+    That decision is not overturned by this feature, and the distinction is the
+    whole design:
+
+    - **For directory operations, a role can only ever SUBTRACT.** Putting
+      someone in the "DSMT Admins" group cannot give them rights AD has not
+      granted - the write still runs as them and still fails. So "admin on the
+      system" means *nothing is hidden from them in this console*, not *they
+      can do more*. A read-only role is real and useful, but it constrains
+      **DSMT**, not the person: the same operator can still open ADUC or a
+      PowerShell prompt and do whatever AD permits. **It must be described
+      that way in the UI**, or it will be mistaken for a control that it is
+      not, and someone will rely on it.
+    - **For DSMT's OWN settings, a role has real teeth**, because nothing in
+      AD governs them. Who may change the idle timeout, point the console at a
+      different database, change the identity mode, create the forest KDS root
+      key, or (see 6) purge the audit log - these are application decisions
+      with no AD equivalent, and today any operator who can sign in can make
+      all of them. **This is the part that genuinely closes a gap**, and on its
+      own it may be the better first version.
+
+    Implementation notes:
+    - **Map SIDs, not group names** - same lesson as 22. Names are renameable
+      and localised.
+    - Resolve at sign-in and cache on the session. Use the token groups so
+      nested membership is included; a check against `memberOf` alone misses
+      a user who is an admin through a nested group, which is how most real
+      directories are arranged.
+    - **Enforce on the server, on every route.** Hiding a button is a
+      convenience, not an enforcement: the API is reachable directly. A role
+      that exists only in `app.js` is decoration.
+    - Store the mapping in `config\dsmt.config.json` so it works with no
+      database, and **fail open to the current behaviour** when no mapping is
+      configured - an upgrade must not lock everyone out of their own console.
+    - Decide explicitly what happens when the mapping names a group that no
+      longer exists, and when an operator matches both roles. Say it in the UI.
+
+25. **A dashboard summarising the current state**, per area.
+    Candidate tiles, all from data DSMT already reads: user and group counts,
+    accounts disabled or locked out, passwords expiring in the next N days,
+    stale accounts, recent audit activity, and the Health verdict that already
+    exists (1.11.0).
+
+    Three rules, because a dashboard is the single easiest place to reintroduce
+    the failure this project has a whole section about:
+    - **Every tile is live, or it is labelled with the time it was taken.**
+      A number on a dashboard is read as "now" by default. If a tile ever
+      comes from the SQL snapshot it must show its `LastSyncUtc`.
+    - **A tile that cannot be computed says so.** It shows the error, not a
+      zero. "0 locked-out accounts" and "the query failed" look identical and
+      mean opposite things.
+    - **Cost is the design constraint.** Counting every user in a large domain
+      on every page load is not free. Either use indexed counts, or load tiles
+      individually and let each report its own state, rather than blocking the
+      screen on the slowest one.
+
+    Placement: this is the natural landing screen after sign-in - the console
+    currently opens straight into the Users grid, which answers no question.
+    Whether it becomes a tab or replaces the default landing view is worth
+    deciding at the time.
+
 ### Where all of this goes — the tab count is the real constraint
 
 Today: Users, Groups, Audit log, Tools, Settings. The open proposals would add
@@ -528,9 +593,10 @@ The grouping that holds up:
 | Reports | A rail of report types (19) |
 | Tools | Guided jobs with an end state |
 | Audit log | What was **done** - distinct from Reports, which is what **is** |
-| Settings | How this server is configured |
+| Settings | How this server is configured - roles (24) are a section here |
 
-Seven tabs, each with a one-sentence meaning. **Reports and Audit log must not
+Seven tabs, each with a one-sentence meaning, plus the dashboard (25) as the
+landing screen rather than an eighth. **Reports and Audit log must not
 be merged** even though both produce tables: one answers "what is true now",
 the other "what changed and who did it". Collapsing them would make both
 harder to explain.
