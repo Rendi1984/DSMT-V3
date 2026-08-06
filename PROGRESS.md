@@ -287,12 +287,26 @@ Ordered by value for the effort, highest first.
     2026-07-31, alongside LAPS. **Not to be built yet.**
     Settings -> Health today answers "can DSMT reach AD". This would answer
     "is AD healthy", which is a different and much larger question. Sketch:
-    - **Replication** — `Get-ADReplicationPartnerMetadata -Scope Server` per
-      DC: last attempt, last success, consecutive failures. The single most
-      useful signal, and the one that goes unnoticed longest.
+    - **Replication** — asked for again on 2026-07-31 as "`repadmin /replsum`".
+      Give the operator that summary, but **do not shell out to `repadmin` and
+      parse its output**: it is console text, it is localised, and its layout
+      has changed between Windows versions - parsing it is a bug waiting for a
+      German server. The same numbers come back as objects from
+      `Get-ADReplicationPartnerMetadata -Scope Server` (last attempt, last
+      success, consecutive failures) and `Get-ADReplicationFailure`, both of
+      which take `-Credential`. Present it as `replsum` does - one row per DC,
+      largest delta first - because that is the view people know.
+      This is the single most useful signal here, and the one that goes
+      unnoticed longest.
     - **Per-controller reachability** — LDAP 389, LDAPS 636, Global Catalog
       3268, and DNS resolution of each DC. DSMT already lists every DC.
-    - **The five FSMO role holders** — named, and reachable.
+    - **The five FSMO role holders** — asked for again on 2026-07-31: show
+      where each role sits. Three come from `Get-ADDomain` (PDCEmulator,
+      RIDMaster, InfrastructureMaster) and two from `Get-ADForest`
+      (SchemaMaster, DomainNamingMaster) - no extra tooling needed, and both
+      cmdlets are already used in this codebase. Name the holder **and whether
+      it currently answers**: a role pointing at a decommissioned DC looks
+      perfectly healthy in a list and is the actual fault.
     - **Time skew** between DCs. Kerberos fails past five minutes, and the
       symptom looks like nothing to do with time.
     - **SYSVOL / DFSR state**, and whether every DC advertises itself.
