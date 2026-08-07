@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.15.0` — matches the top entry of `CHANGELOG.md` and
+`1.16.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -627,9 +627,9 @@ retrofit:**
 
 ### Running unattended, and the end of the installer (26-27) — raised 2026-07-31
 
-26. **"It runs in a window and somebody can close it."** Correct, and it
-    matters - but the fix already exists and the installer is not steering
-    people to it. **This is a discoverability problem, not a missing feature.**
+26. ~~"It runs in a window and somebody can close it."~~ — **fixed in 1.16.0**:
+    a Windows service running as LocalSystem is now the default, with a
+    scheduled-task fallback and `-NoAutoStart` to opt out. Original note:
 
     `-InstallAsService` (1.4.0) registers a real Windows service: no window at
     all, starts at boot, survives sign-out, and the service manager restarts

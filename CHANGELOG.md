@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.16.0** | 2026-08-06 | **DSMT now installs as a Windows service by default**, so it survives a closed window and a sign-out | Re-run installer |
 | **1.15.0** | 2026-08-06 | Sensitive-group filter on the Groups tab, matched on SID and extensible; installer stops leaving DSMT in a closable window without saying so | Restart + refresh |
 | **1.14.0** | 2026-08-06 | **Move OU never worked** - the identity was passed in a form `Move-ADObject` does not accept; plus System and Failed filters on the audit log | Restart + refresh |
 | **1.13.3** | 2026-08-06 | PowerShell files now ship with Windows (CRLF) line endings | Re-copy files |
@@ -56,7 +57,63 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.15.0**. The last tag is `v1.4.0`.
+`main` carries **1.16.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.16.0 — 2026-08-06
+
+**A plain install now registers DSMT as a Windows service. The closable
+window is gone as a default.**
+
+Raised three times: *"someone can just close my window and the product stops
+working."* 1.15.0 answered it with a warning, which was the wrong fix - a
+default that needs a warning is a default that is wrong. So the default has
+changed.
+
+### What a plain install does now
+
+    .\server\Install-DSMT.ps1 -StartWhenDone
+
+Registers the Windows service **DSMT**, running as **LocalSystem**, starting
+at boot, surviving sign-out, restarting itself on failure. No window to close.
+
+- **LocalSystem, deliberately.** No password to store, nothing to expire, and
+  nothing to re-enter when a service account is rotated. It costs nothing in
+  attribution: in the default `operator` identity mode every directory read
+  and write already runs as the **signed-in operator**, so the host identity
+  never touches AD. The one place it shows is SQL, where the machine account
+  needs rights - and the installer says so when it applies. Pass
+  `-ServiceAccount` to use a named account or a gMSA instead.
+- **`-InstallScheduledTask`** still registers a task instead.
+- **`-NoAutoStart`** is the new opt-out, for a five-minute look at the
+  console and nothing else. Its help text says exactly what it costs.
+- **`-InstallAsService`** still works and now only states the default
+  explicitly. Existing command lines are unaffected.
+
+### The failure path is a fallback, not a shrug
+
+If the service cannot be registered - the C# host will not compile, the
+service manager refuses - the installer **falls back to a scheduled task**
+rather than quietly leaving DSMT with no way to run. Only if that also fails
+is it reported as an outstanding failure, in the words that matter: *DSMT is
+not registered to run on its own; until one is, it stops when the window
+running it closes.*
+
+The summary now always states how DSMT will run once the installer's window
+is gone - service, task, or not at all. That sentence did not exist before,
+which is how this went unnoticed for twelve versions.
+
+### Independent of SQL, still
+
+Nothing here changes 1.13.0: **a database is not required.** The service runs,
+the console works, every user and group is read live from the directory, and
+the audit log is written to files. Add SQL whenever you want from
+Settings -> Database, with no reinstall and no restart.
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`docs/deployment-guide.html`. Copy the installer to the host and re-run it -
+it is safe to re-run, and it replaces any previous registration cleanly.
 
 ---
 

@@ -15,7 +15,7 @@
          finds or installs the instance and creates the DSMT database
       8. Reserves the HTTP URL so the console can listen without elevation
       9. Opens the firewall port
-     10. Optionally registers a scheduled task that starts DSMT at boot
+     10. Registers DSMT to run unattended - a Windows service by default
      11. Writes config\dsmt.config.json so Start-DSMT.ps1 remembers all of it
      12. Re-verifies everything and prints a summary
 
@@ -95,13 +95,27 @@
     \sources\sxs, or a WSUS/local FOD share). Needed on Windows 10/11 hosts
     with no internet access, where Add-WindowsCapability cannot fetch RSAT.
 .PARAMETER InstallScheduledTask
-    Register a scheduled task that starts DSMT at boot under -ServiceAccount.
-    The task is configured to run whether or not anyone is signed in, with no
-    execution time limit, and to restart itself if it fails.
+    Register a scheduled task instead of a Windows service. The task runs
+    whether or not anyone is signed in, with no execution time limit, and
+    restarts itself if it fails.
+.PARAMETER NoAutoStart
+    Do not register DSMT to run on its own.
+
+    READ THIS BEFORE USING IT. Without a service or a task, DSMT only exists
+    while a PowerShell window is open. Closing that window - or simply signing
+    out of Windows - stops the console for everybody, with no error message
+    anywhere and nothing in the event log that names DSMT. Somebody tidying up
+    a stray window takes the tool down and nobody knows why.
+
+    Use it for a five-minute look at the console, and for nothing else.
 .PARAMETER InstallAsService
-    Register DSMT as a real Windows service instead of a scheduled task, so it
-    responds to Get-Service / Start-Service / Restart-Service and to the
-    service manager's recovery settings.
+    Register DSMT as a real Windows service. THIS IS NOW THE DEFAULT and the
+    switch is only needed to state the intent explicitly; pass
+    -InstallScheduledTask for a task instead, or -NoAutoStart for neither.
+
+    The service responds to Get-Service / Start-Service / Restart-Service and
+    to the service manager's recovery settings, starts at boot, and survives
+    sign-out.
 
     PowerShell cannot be a service directly - the service control manager
     terminates any process that does not answer its protocol - so the
@@ -127,13 +141,16 @@
     Do not attempt to re-launch elevated. The steps that need administrator
     rights will be reported as failures instead.
 .EXAMPLE
-    .\Install-DSMT.ps1
-    The quick start: prerequisites for LAB.LOCAL on port 8080, no database.
-    Ready to demonstrate in one step; add SQL later from Settings -> Database.
+    .\Install-DSMT.ps1 -StartWhenDone
+    The quick start, and what most installations want: prerequisites for
+    LAB.LOCAL on port 8080, registered as a Windows service running as
+    LocalSystem, started immediately. No database - add one later from
+    Settings -> Database, with no reinstall.
 .EXAMPLE
     .\Install-DSMT.ps1 -Domain LAB.LOCAL -SqlServer SQL01 `
-                       -ServiceAccount "LAB\svc-dsmt" -InstallScheduledTask
-    The full lab setup, ready to start at boot.
+                       -ServiceAccount "LAB\svc-dsmt" -StartWhenDone
+    The full lab setup: a database, and the service running as a named account
+    instead of LocalSystem.
 .EXAMPLE
     .\Install-DSMT.ps1 -UseSql
     The same, plus a DSMT database on whatever local SQL instance is found.
@@ -157,6 +174,7 @@ param(
     [string] $FeatureSource = '',
     [switch] $InstallScheduledTask,
     [switch] $InstallAsService,
+    [switch] $NoAutoStart,
     [switch] $StartWhenDone,
     [switch] $OpenBrowser,
     [switch] $NoBrowser,
@@ -1068,7 +1086,7 @@ if ($ListenAddress -eq 'localhost') {
 # 10. Scheduled task
 # ---------------------------------------------------------------------------
 
-Write-Step 'Start automatically'
+Write-Step 'How DSMT will run'
 
 $script:StartMode = 'none'          # none | task | service
 $serviceName = 'DSMT'
@@ -1079,7 +1097,41 @@ $serviceExe  = Join-Path $scriptDir 'DsmtService.exe'
 # neither the task nor the service needs the settings on its command line.
 $startArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"'
 
-if ($InstallAsService) {
+# ---------------------------------------------------------------------------
+# WHAT RUNS DSMT, and why the default is a service.
+#
+# Until 1.16.0 the default was nothing: DSMT ran in whatever PowerShell window
+# happened to start it. That is not a lighter option, it is a fragile one -
+# closing the window, or signing out of Windows, stopped the console for
+# everybody, with no error anywhere and nothing in the event log naming DSMT.
+# A default should be the thing that survives Monday morning.
+#
+# So: a Windows service unless the operator says otherwise, and if the service
+# cannot be registered, a scheduled task rather than silently falling back to
+# the fragile option.
+#
+# The service runs as LOCALSYSTEM unless -ServiceAccount names something else.
+# That is deliberate: no password to store, nothing to expire, and nothing to
+# re-enter when a service account's password is rotated. It costs nothing in
+# attribution, because in the default 'operator' identity mode every directory
+# read and write already runs as the signed-in operator - the host identity
+# never touches AD. The one place it shows is SQL, where the machine account
+# needs rights; the installer says so when it applies.
+# ---------------------------------------------------------------------------
+$script:ServiceFailed = $false
+
+$wantService = $false
+$wantTask    = $false
+
+if ($NoAutoStart) {
+    # Explicitly asked for nothing.
+} elseif ($InstallScheduledTask) {
+    $wantTask = $true
+} else {
+    $wantService = $true
+}
+
+if ($wantService) {
 
     if (-not (Test-IsAdmin)) {
         Write-Fail 'Registering a service needs administrator rights.' 'Re-run this installer elevated.'
@@ -1226,6 +1278,7 @@ public class DsmtServiceHost : ServiceBase
                 Write-Warn2 ('It reaches AD and SQL as the computer account. Grant ' + $env:COMPUTERNAME + '$ rights on the SQL instance.')
             } else {
                 Write-Ok ('Registered service "' + $serviceName + '" running as ' + $runAccount)
+                Write-Info 'Starts at boot, survives sign-out, and restarts itself if it fails.'
             }
 
             # Restart after 5s, then 10s, then every 30s; reset the counter daily.
@@ -1235,12 +1288,19 @@ public class DsmtServiceHost : ServiceBase
             $script:StartMode = 'service'
 
         } catch {
-            Write-Fail ('Could not register the service: ' + $_.Exception.Message) `
-                       'Use -InstallScheduledTask instead, or register the service manually.'
+            # Not a hard failure yet: a scheduled task achieves the same thing
+            # and is attempted next. Only if that also fails is DSMT left with
+            # no way to run on its own, and that IS reported as a failure.
+            Write-Warn2 ('Could not register the service: ' + $_.Exception.Message)
+            Write-Info  'Falling back to a scheduled task, which does the same job.'
+            $script:ServiceFailed = $true
+            $wantTask = $true
         }
     }
 
-} elseif ($InstallScheduledTask) {
+}
+
+if ($wantTask) {
 
     if (-not (Test-IsAdmin)) {
         Write-Fail 'Needs administrator rights.' 'Re-run this installer elevated.'
@@ -1302,8 +1362,18 @@ public class DsmtServiceHost : ServiceBase
         }
     }
 
-} else {
-    Write-Skip 'Not requested. Use -InstallScheduledTask for a boot-time task, or -InstallAsService for a Windows service.'
+} elseif ($NoAutoStart) {
+    Write-Skip 'Skipped with -NoAutoStart.'
+    Write-Warn2 'DSMT will only run while a PowerShell window is open. Closing that window, or signing'
+    Write-Warn2 'out of Windows, stops the console for everyone - with no error and nothing in the event log.'
+    Write-Info  'Re-run without -NoAutoStart to register it as a service. Safe to do at any time.'
+}
+
+# Whatever happened above, the summary must be able to state plainly how DSMT
+# will run - so record the one case where the answer is "it will not".
+if ($script:StartMode -eq 'none' -and -not $NoAutoStart) {
+    Write-Fail 'DSMT is not registered to run on its own.' `
+               'Neither a service nor a scheduled task could be registered. Until one is, DSMT stops when the window running it closes.'
 }
 
 # ---------------------------------------------------------------------------
@@ -1436,9 +1506,10 @@ if ($script:Outstanding.Count -eq 0) {
             Write-Host '  DSMT only runs while a PowerShell window is open. Closing that window, or' -ForegroundColor Yellow
             Write-Host '  signing out of Windows, stops the console for everyone with no error shown.' -ForegroundColor Yellow
             Write-Host ''
-            Write-Host '  Register it properly - one command, safe to run now:' -ForegroundColor White
-            Write-Host '    .\server\Install-DSMT.ps1 -InstallAsService -StartWhenDone' -ForegroundColor Cyan
-            Write-Host '  It then starts at boot, survives sign-out, and restarts itself if it fails.' -ForegroundColor DarkGray
+            Write-Host '  Register it - one command, safe to run at any time:' -ForegroundColor White
+            Write-Host '    .\server\Install-DSMT.ps1 -StartWhenDone' -ForegroundColor Cyan
+            Write-Host '  A Windows service is the default: it starts at boot, survives sign-out,' -ForegroundColor DarkGray
+            Write-Host '  and restarts itself if it fails.' -ForegroundColor DarkGray
         }
     }
 

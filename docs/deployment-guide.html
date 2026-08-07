@@ -1717,7 +1717,9 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
   <tr><td data-label="Parameter"><code>-SkipSql</code></td><td data-label="Default">On</td><td data-label="Description">Install without any database. Now the default, so this only states the intent</td></tr>
   <tr><td data-label="Parameter"><code>-SqlExpressSetup</code></td><td data-label="Default">(empty)</td><td data-label="Description">Path to SQL Express media for an unattended install. Never downloads</td></tr>
   <tr><td data-label="Parameter"><code>-FeatureSource</code></td><td data-label="Default">(empty)</td><td data-label="Description">Feature-on-Demand source for installing RSAT on a disconnected host</td></tr>
-  <tr><td data-label="Parameter"><code>-InstallScheduledTask</code></td><td data-label="Default">Off</td><td data-label="Description">Register a task that starts DSMT at boot</td></tr>
+  <tr><td data-label="Parameter"><code>-InstallAsService</code></td><td data-label="Default"><strong>On</strong></td><td data-label="Description">Register a Windows service. This is the default; the switch only states it explicitly</td></tr>
+  <tr><td data-label="Parameter"><code>-InstallScheduledTask</code></td><td data-label="Default">Off</td><td data-label="Description">Register a boot-time task instead of a service</td></tr>
+  <tr><td data-label="Parameter"><code>-NoAutoStart</code></td><td data-label="Default">Off</td><td data-label="Description">Register neither. DSMT then only runs while a PowerShell window is open</td></tr>
   <tr><td data-label="Parameter"><code>-OpenBrowser</code></td><td data-label="Default">Ask</td><td data-label="Description">Open the console when the install finishes. Interactive runs are asked; this forces it from a script</td></tr>
   <tr><td data-label="Parameter"><code>-NoBrowser</code></td><td data-label="Default">Off</td><td data-label="Description">Never ask, never open. Unattended runs never prompt in any case</td></tr>
   <tr><td data-label="Parameter"><code>-NoElevate</code></td><td data-label="Default">Off</td><td data-label="Description">Do not attempt to self-elevate</td></tr>
