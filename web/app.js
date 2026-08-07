@@ -630,6 +630,7 @@ function setTab(tab, force) {
   $('createBtn').textContent = tab === 'groups' ? 'New group' : 'New user';
   $('importBtn').hidden = (tab === 'groups');
   $('colsBtn').hidden = false;
+  $('groupFilters').hidden = (tab !== 'groups');
 
   renderColPicker();
   loadRows();
@@ -642,13 +643,25 @@ function setTab(tab, force) {
 function loadRows() {
   var tab = state.tab;
   var path = (tab === 'groups' ? '/api/groups' : '/api/users');
-  if (state.query) { path += '?q=' + encodeURIComponent(state.query); }
+  var query = [];
+  if (state.query) { query.push('q=' + encodeURIComponent(state.query)); }
+  if (tab === 'groups' && state.groupFilter && state.groupFilter !== 'all') {
+    query.push('filter=' + encodeURIComponent(state.groupFilter));
+  }
+  if (query.length) { path += '?' + query.join('&'); }
 
   state.loadError = '';
   api(path).then(function (data) {
     if (state.tab !== tab) { return; }
     state.rows = asArray(data.items);
     state.limit = data.limit;
+
+    if (tab === 'groups') {
+      state.groupFilters = asArray(data.filters);
+      state.groupTotal = data.total || 0;
+      renderGroupFilters();
+    }
+
     renderTable();
     if (state.rows.length && !state.selectedId) {
       selectRow(state.rows[0].id, true);
@@ -659,6 +672,38 @@ function loadRows() {
     state.loadError = err.message;
     renderTable();
   });
+}
+
+/* ---------------------------------------------------------------------------
+   Group filters.
+
+   The chips are built from what the SERVER reports, not from a list in this
+   file, so a filter an administrator adds in Settings appears here with no
+   code change. "Privileged" is decided by SID on the server - see
+   Test-DsmtPrivilegedGroup - because group names are renameable and localised.
+   --------------------------------------------------------------------------- */
+
+function renderGroupFilters() {
+  var box = $('groupFilters');
+  var list = asArray(state.groupFilters);
+  if (!list.length) { box.hidden = true; return; }
+
+  box.hidden = false;
+  box.innerHTML = list.map(function (f) {
+    var on = (f.key === state.groupFilter) || (!state.groupFilter && f.key === 'all');
+    return '<button class="chip" type="button" data-gfilter="' + esc(f.key) + '" aria-pressed="' +
+           (on ? 'true' : 'false') + '">' + esc(f.label) + '</button>';
+  }).join('');
+
+  var chips = box.querySelectorAll('[data-gfilter]');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].onclick = function () {
+      state.groupFilter = this.getAttribute('data-gfilter');
+      state.selectedId = null;
+      closeDetail();
+      loadRows();
+    };
+  }
 }
 
 function renderTable() {
@@ -714,7 +759,15 @@ function renderTable() {
         else if (row.status === 'Disabled') { cls = 'cell-disabled'; }
       }
       if (c.key === 'ou' || c.key === 'upn') { cls += ' cell-wrap'; }
-      return '<td class="' + cls + '" data-label="' + esc(c.label) + '">' + esc(text) + '</td>';
+
+      // A privileged group is marked on the row, not only reachable through
+      // the filter chip - the whole point is that it should be impossible to
+      // scroll past one without noticing.
+      var badge = '';
+      if (c.key === 'name' && row.privileged) {
+        badge = ' <span class="tag-priv" title="A well-known privileged group, matched on its SID">Privileged</span>';
+      }
+      return '<td class="' + cls + '" data-label="' + esc(c.label) + '">' + esc(text) + badge + '</td>';
     }).join('');
 
     return '<tr data-id="' + esc(row.id) + '" aria-selected="' + selected + '">' +
@@ -725,6 +778,14 @@ function renderTable() {
 
   var noun = (state.tab === 'groups' ? 'groups' : 'users');
   var line = state.rows.length + ' ' + noun + ' from ' + (state.domainInfo ? state.domainInfo.domain : 'the directory');
+
+  // Say so when a filter is hiding rows. A filtered count that looks like a
+  // total is how someone concludes the directory has three groups.
+  if (state.tab === 'groups' && state.groupFilter && state.groupFilter !== 'all') {
+    var chip = asArray(state.groupFilters).filter(function (f) { return f.key === state.groupFilter; })[0];
+    line += ' - filtered to "' + (chip ? chip.label : state.groupFilter) + '"';
+    if (state.groupTotal) { line += ' out of ' + state.groupTotal + ' read'; }
+  }
 
   state.pageLimitHit = !!(state.limit && state.rows.length >= state.limit);
   if (state.pageLimitHit) {
@@ -2193,7 +2254,13 @@ function loadSettings() {
 
   api('/api/settings').then(function (data) {
     state.settings = data.settings;
-    renderSettings();
+    // The editor edits what the server has, not a stale copy from whenever
+    // the Groups tab last loaded.
+    api('/api/groups?limit=1').then(function (g) {
+      state.groupFilters = asArray(g.filters);
+      state.gfDraft = null;
+      renderSettings();
+    }).catch(function () { renderSettings(); });
   }).catch(function (err) {
     $('settingsBody').innerHTML = '<div class="error-box"><strong>Could not read the settings.</strong>' +
                                   esc(err.message) + '</div>';
@@ -2284,6 +2351,23 @@ function renderSettings() {
       '</div>' +
       '<div class="set-result" id="portResult"></div>' +
       '<div id="portCommands"></div>' });
+
+  sections.push({ key: 'groupfilters', label: 'Group filters', hint: 'Chips on the Groups tab', body:
+      '<h2 class="set-h">Group filters</h2>' +
+      '<p class="dialog-note"><strong>Privileged</strong> and <strong>AdminSDHolder</strong> are built in ' +
+      'and cannot be edited - they are facts about Active Directory, not settings. Privileged is matched ' +
+      'on <strong>SID</strong>, never on name: a group called Domain Admins can be renamed, and is ' +
+      'localised on a non-English install, so a name match would find nothing on exactly the domain ' +
+      'where it matters most.</p>' +
+      '<p class="dialog-note">Add your own below. A group matches when any term appears in its name, ' +
+      'sAMAccountName, description or OU. These are stored on the server, so everyone using this console ' +
+      'sees the same filters.</p>' +
+      '<div id="gfList"></div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="gfAdd">Add a filter</button>' +
+        '<button class="btn btn-primary" type="button" id="gfSave">Save filters</button>' +
+      '</div>' +
+      '<div class="set-result" id="gfResult"></div>' });
 
   sections.push({ key: 'sql', label: 'Database',
     hint: (s.sqlEnabled ? s.sqlServer + ' / ' + s.sqlDatabase : 'Not connected'), body:
@@ -2545,6 +2629,56 @@ function renderHealth(data) {
   if (stamp) { stamp.textContent = 'Checked ' + formatStamp(data.checkedAt); }
 }
 
+/* The custom filters only. Built-ins are not editable, so they are not shown
+   as rows that look editable. */
+function gfFromServer() {
+  var out = [];
+  asArray(state.groupFilters).forEach(function (f) {
+    if (f.kind !== 'custom') { return; }
+    out.push({ label: f.label, terms: asArray(f.terms).join(', ') });
+  });
+  return out;
+}
+
+function renderGroupFilterEditor() {
+  var box = $('gfList');
+  if (!box) { return; }
+
+  if (!state.gfDraft.length) {
+    box.innerHTML = '<p class="muted-sm">No custom filters yet.</p>';
+    return;
+  }
+
+  box.innerHTML = state.gfDraft.map(function (row, i) {
+    return '<div class="set-form gf-row">' +
+             '<div class="field"><label for="gfName' + i + '">Name</label>' +
+             '<input class="input" id="gfName' + i + '" data-gf="' + i + '" data-gffield="label" ' +
+             'placeholder="Service accounts" autocomplete="off" value="' + esc(row.label) + '"></div>' +
+             '<div class="field"><label for="gfTerms' + i + '">Match terms (comma separated)</label>' +
+             '<input class="input" id="gfTerms' + i + '" data-gf="' + i + '" data-gffield="terms" ' +
+             'placeholder="svc-, service, gmsa" autocomplete="off" value="' + esc(row.terms) + '"></div>' +
+             '<div class="set-actions"><button class="btn btn-ghost btn-undo" type="button" ' +
+             'data-gfdrop="' + i + '">Remove</button></div>' +
+           '</div>';
+  }).join('');
+
+  var inputs = box.querySelectorAll('[data-gf]');
+  var i;
+  for (i = 0; i < inputs.length; i++) {
+    inputs[i].oninput = function () {
+      state.gfDraft[parseInt(this.getAttribute('data-gf'), 10)][this.getAttribute('data-gffield')] = this.value;
+    };
+  }
+
+  var drops = box.querySelectorAll('[data-gfdrop]');
+  for (i = 0; i < drops.length; i++) {
+    drops[i].onclick = function () {
+      state.gfDraft.splice(parseInt(this.getAttribute('data-gfdrop'), 10), 1);
+      renderGroupFilterEditor();
+    };
+  }
+}
+
 function accountKindLabel(kind) {
   if (kind === 'gmsa') { return 'Group managed service account (no password)'; }
   if (kind === 'machine') { return 'Machine account (LocalSystem)'; }
@@ -2578,6 +2712,42 @@ function wireSettings(bounds) {
 
   // ---- health ----
   $('runHealth').addEventListener('click', function () { loadHealth(); });
+
+  // ---- group filters ----
+  // Edited as a local list and saved in one call, so a half-finished row
+  // never reaches the server and a mistake can be abandoned by leaving.
+  if (!state.gfDraft) { state.gfDraft = gfFromServer(); }
+  renderGroupFilterEditor();
+
+  $('gfAdd').addEventListener('click', function () {
+    state.gfDraft.push({ label: '', terms: '' });
+    renderGroupFilterEditor();
+  });
+
+  $('gfSave').addEventListener('click', function () {
+    var payload = [];
+    var i;
+    for (i = 0; i < state.gfDraft.length; i++) {
+      var label = (state.gfDraft[i].label || '').trim();
+      var terms = (state.gfDraft[i].terms || '').split(',').map(function (t) { return t.trim(); })
+                    .filter(function (t) { return t.length > 0; });
+      if (!label && !terms.length) { continue; }
+      if (!label) { setResult('gfResult', 'Every filter needs a name.', false); return; }
+      if (!terms.length) { setResult('gfResult', 'Filter "' + label + '" has no terms to match.', false); return; }
+      payload.push({ label: label, terms: terms });
+    }
+
+    setResult('gfResult', 'Saving...', true);
+    api('/api/settings/groupfilters', { method: 'POST', body: { filters: payload } })
+      .then(function (res) {
+        state.groupFilters = asArray(res.filters);
+        state.gfDraft = gfFromServer();
+        renderGroupFilterEditor();
+        setResult('gfResult', payload.length + ' custom filter(s) saved. They appear on the Groups tab.', true);
+        toast('Group filters saved.', 'good');
+      })
+      .catch(function (err) { setResult('gfResult', explainApiError(err.message), false); });
+  });
 
   // ---- SQL ----
   function sqlCredentials() {

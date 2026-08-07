@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.15.0** | 2026-08-06 | Sensitive-group filter on the Groups tab, matched on SID and extensible; installer stops leaving DSMT in a closable window without saying so | Restart + refresh |
 | **1.14.0** | 2026-08-06 | **Move OU never worked** - the identity was passed in a form `Move-ADObject` does not accept; plus System and Failed filters on the audit log | Restart + refresh |
 | **1.13.3** | 2026-08-06 | PowerShell files now ship with Windows (CRLF) line endings | Re-copy files |
 | **1.13.2** | 2026-08-06 | Installer parameters could be lost in the elevation relaunch; it now shows what it received and what it forwards | Re-run installer |
@@ -55,7 +56,82 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.14.0**. The last tag is `v1.4.0`.
+`main` carries **1.15.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.15.0 — 2026-08-06
+
+### Sensitive-group filter on the Groups tab
+
+Filter chips above the group list: **All**, **Privileged**, **AdminSDHolder**,
+plus any filter your organisation defines. Every privileged group is also
+marked on its own row, so it cannot be scrolled past unnoticed.
+
+**Matched on SID, never on name.** `Domain Admins` can be renamed by any
+administrator and is localised out of the box on a non-English installation -
+so a filter that looks for the string finds nothing on precisely the domain
+where finding it matters most. The RIDs are fixed by Windows and identical in
+every domain: 512 Domain Admins, 516 Domain Controllers, 518 Schema Admins,
+519 Enterprise Admins, 520 Group Policy Creator Owners, 521 RODCs, 526/527 Key
+Admins, plus the built-in aliases at `S-1-5-32-*` (Administrators, Account /
+Server / Print / Backup Operators, Replicator).
+
+**`adminCount` is shown, not used to filter.** It marks objects protected by
+AdminSDHolder, which is worth seeing - but it **lingers** on an account after
+it is removed from a privileged group, so filtering on it would over-report,
+and a security filter that over-reports is one that stops being read. It gets
+its own chip and stays out of the Privileged decision.
+
+**Custom filters, defined once for everyone.** Settings -> Group filters: a
+name and a list of terms, matched against the group name, sAMAccountName,
+description or OU. Stored in `config\dsmt.config.json` and served to every
+browser - **not** in `localStorage`, because a filter one administrator
+defines is one the whole team should see. Built-in filters are deliberately
+not editable: they are facts about Active Directory, not configuration.
+
+Two details that only matter when they are wrong:
+- The **SQL snapshot is written from the unfiltered read**, so browsing a
+  filtered view never truncates what the database believes the directory
+  contains.
+- A filter deleted while someone had it selected returns **everything**, not
+  nothing. An empty screen reads as "there are none", which would be a lie.
+- The result line says when a filter is narrowing the view, and out of how
+  many groups - a filtered count that looks like a total is how someone
+  concludes the domain has three groups.
+
+### The installer stops leaving DSMT in a closable window without saying so
+
+Raised twice: *"someone can just close my window and the product stops
+working."* Correct - and `-InstallAsService` has existed since 1.4.0 while the
+installer never once mentioned it.
+
+- When DSMT is started as a plain process, the installer now says so in the
+  step **and** in the summary: *that window IS the console; close it, or sign
+  out of Windows, and DSMT stops for everyone, with no error anywhere* - and
+  prints the one command that fixes it.
+- The summary always states how DSMT will run once the window is gone:
+  registered as a service, registered as a task, or **not registered at all**.
+
+**`-WindowStyle Hidden` is still not offered, and will not be.** It hides the
+window without changing anything that matters: the process still belongs to
+that sign-in session, so it still dies at sign-out, and now nobody can tell it
+is running or read its output when it fails.
+
+### Ask before opening the browser
+
+New `-OpenBrowser` and `-NoBrowser`. On an interactive run the installer asks
+(default yes). It **never** asks when there is nobody to answer - a redirected
+or non-interactive host skips the question rather than hanging a scripted
+deployment forever - and it only offers at all when nothing is outstanding and
+DSMT was actually started, because opening a browser at a port nothing is
+listening on teaches the operator that the tool is broken.
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtDirectory.ps1`,
+`server/lib/DsmtHttp.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`web/index.html`, `web/app.css`, `web/app.js`,
+`docs/deployment-guide.html`. **Copy `server/**` and restart
+`Start-DSMT.ps1`**, then copy `web/*` and hard-refresh.
 
 ---
 

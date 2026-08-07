@@ -353,8 +353,80 @@ function Get-DsmtUser {
 
 $script:DsmtGroupProperties = @(
     'name', 'sAMAccountName', 'distinguishedName', 'GroupCategory', 'GroupScope',
-    'description', 'managedBy', 'whenCreated', 'member', 'mail', 'objectGUID', 'info'
+    'description', 'managedBy', 'whenCreated', 'member', 'mail', 'objectGUID', 'info',
+    # objectSid identifies a privileged group; adminCount is the secondary
+    # signal. Both are needed by the sensitive-group filter - see
+    # Test-DsmtPrivilegedGroup for why the SID is the one that can be trusted.
+    'objectSid', 'adminCount'
 )
+
+# ---------------------------------------------------------------------------
+# Privileged groups.
+#
+# MATCHED ON SID, NEVER ON NAME. "Domain Admins" can be renamed by any
+# administrator, and on a non-English installation it is localised out of the
+# box - so a filter that looks for the string finds nothing on precisely the
+# domain where finding it matters most. The RIDs below are fixed by Windows
+# and are the same in every domain in the world.
+#
+# Domain-relative: the domain SID + RID.
+# ---------------------------------------------------------------------------
+$script:DsmtPrivilegedRids = @(
+    512,   # Domain Admins
+    516,   # Domain Controllers
+    518,   # Schema Admins            (forest root domain only)
+    519,   # Enterprise Admins        (forest root domain only)
+    520,   # Group Policy Creator Owners
+    521,   # Read-only Domain Controllers
+    526,   # Key Admins
+    527    # Enterprise Key Admins
+)
+
+# Built-in aliases. These live in the BUILTIN domain and always carry the
+# fixed prefix S-1-5-32, in every domain, so they are matched whole.
+$script:DsmtPrivilegedBuiltinSids = @(
+    'S-1-5-32-544',   # Administrators
+    'S-1-5-32-548',   # Account Operators
+    'S-1-5-32-549',   # Server Operators
+    'S-1-5-32-550',   # Print Operators
+    'S-1-5-32-551',   # Backup Operators
+    'S-1-5-32-552'    # Replicator
+)
+
+function Test-DsmtPrivilegedGroup {
+    <#
+    .SYNOPSIS
+        Is this group one of the well-known privileged groups?
+    .DESCRIPTION
+        Takes the group's SID as a string. A domain group is privileged when
+        its RID - the number after the last hyphen - is in the list above; a
+        built-in alias is matched on the whole SID.
+
+        adminCount is deliberately NOT used to decide this. It marks objects
+        protected by AdminSDHolder, which is a useful signal, but it LINGERS
+        on an account after it is removed from a privileged group. Filtering
+        on it would over-report, and an over-reporting security filter is one
+        that stops being read.
+    #>
+    param([string] $Sid)
+
+    if ([string]::IsNullOrWhiteSpace($Sid)) { return $false }
+
+    foreach ($builtin in $script:DsmtPrivilegedBuiltinSids) {
+        if ($Sid -eq $builtin) { return $true }
+    }
+
+    $lastDash = $Sid.LastIndexOf('-')
+    if ($lastDash -lt 0) { return $false }
+
+    $rid = 0
+    if (-not [int]::TryParse($Sid.Substring($lastDash + 1), [ref] $rid)) { return $false }
+
+    foreach ($known in $script:DsmtPrivilegedRids) {
+        if ($rid -eq $known) { return $true }
+    }
+    return $false
+}
 
 function ConvertTo-DsmtGroup {
     <#
@@ -374,6 +446,10 @@ function ConvertTo-DsmtGroup {
     $typeLabel = $category
     if ($category -and $scopeLabel) { $typeLabel = $category + ' - ' + $scopeLabel }
 
+    $sid = ''
+    if ($null -ne $AdGroup.objectSid) { $sid = [string]$AdGroup.objectSid.Value }
+    if ([string]::IsNullOrWhiteSpace($sid)) { $sid = [string]$AdGroup.objectSid }
+
     $map = [ordered]@{
         id       = [string]$AdGroup.objectGUID
         name     = [string]$AdGroup.name
@@ -385,6 +461,9 @@ function ConvertTo-DsmtGroup {
         category = $category
         scope    = $scopeLabel
         members  = $memberCount
+        sid      = $sid
+        privileged = (Test-DsmtPrivilegedGroup -Sid $sid)
+        protected  = ([int]$AdGroup.adminCount -eq 1)
         source   = 'AD'
     }
 
@@ -397,6 +476,101 @@ function ConvertTo-DsmtGroup {
     }
 
     return $map
+}
+
+function Get-DsmtGroupFilters {
+    <#
+    .SYNOPSIS
+        The filter chips the Groups screen offers.
+    .DESCRIPTION
+        Two kinds, and the difference is deliberate:
+
+          BUILT-IN - facts about Active Directory, not configuration. They are
+          defined in code because they cannot be got wrong by an operator and
+          must not be editable into something misleading.
+
+          CUSTOM - whatever this organisation cares about, defined once by an
+          administrator and stored in config\dsmt.config.json. NOT in the
+          browser: a filter one person defines is a filter the whole team
+          should see, and localStorage would make it personal to one machine.
+
+        A custom filter matches a group when any of its terms appears in the
+        group name, the sAMAccountName, the description or the OU.
+    .OUTPUTS
+        Array of hashtables: key, label, kind, terms.
+    #>
+
+    $filters = @(
+        @{ key = 'all';        label = 'All';        kind = 'builtin'; terms = @() }
+        @{ key = 'privileged'; label = 'Privileged'; kind = 'builtin'; terms = @() }
+        @{ key = 'protected';  label = 'AdminSDHolder'; kind = 'builtin'; terms = @() }
+    )
+
+    $cfg = Get-DsmtConfig
+    $saved = $null
+    try { $saved = Get-DsmtSavedSettings -RootPath $cfg.RootPath } catch { $saved = $null }
+
+    if ($null -ne $saved -and $saved.PSObject.Properties['GroupFilters']) {
+        foreach ($f in @($saved.GroupFilters)) {
+            if ($null -eq $f) { continue }
+            $label = [string]$f.label
+            if ([string]::IsNullOrWhiteSpace($label)) { continue }
+
+            $terms = @()
+            foreach ($t in @($f.terms)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$t)) { $terms += ([string]$t).Trim() }
+            }
+            if ($terms.Count -eq 0) { continue }
+
+            $filters += @{ key = ('custom:' + $label); label = $label; kind = 'custom'; terms = @($terms) }
+        }
+    }
+
+    return ,@($filters)
+}
+
+function Select-DsmtGroupsByFilter {
+    <#
+    .SYNOPSIS
+        Applies one filter key to a list of mapped group rows.
+    .DESCRIPTION
+        Applied AFTER the directory search rather than folded into the LDAP
+        filter, because "privileged" is decided by SID arithmetic that LDAP
+        cannot express, and because a custom filter has to match the OU, which
+        is derived here rather than stored.
+    #>
+    param([array] $Rows, [string] $Filter = 'all')
+
+    if ([string]::IsNullOrWhiteSpace($Filter) -or $Filter -eq 'all') { return ,@($Rows) }
+
+    if ($Filter -eq 'privileged') {
+        return ,@(@($Rows) | Where-Object { $_.privileged })
+    }
+    if ($Filter -eq 'protected') {
+        return ,@(@($Rows) | Where-Object { $_.protected })
+    }
+
+    $defined = @(Get-DsmtGroupFilters)
+    $wanted  = $null
+    foreach ($f in $defined) { if ($f.key -eq $Filter) { $wanted = $f } }
+
+    # An unknown key returns everything rather than nothing. A filter that
+    # was deleted from the configuration while someone had it selected must
+    # not silently produce an empty screen that reads as "there are none".
+    if ($null -eq $wanted) { return ,@($Rows) }
+
+    $terms = @($wanted.terms)
+    if ($terms.Count -eq 0) { return ,@($Rows) }
+
+    $kept = @()
+    foreach ($row in @($Rows)) {
+        $hay = (([string]$row.name) + ' ' + ([string]$row.sam) + ' ' +
+                ([string]$row.description) + ' ' + ([string]$row.ou)).ToLower()
+        foreach ($term in $terms) {
+            if ($hay.Contains($term.ToLower())) { $kept += $row; break }
+        }
+    }
+    return ,@($kept)
 }
 
 function Get-DsmtGroups {

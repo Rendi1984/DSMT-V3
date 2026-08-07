@@ -115,6 +115,14 @@
 .PARAMETER StartWhenDone
     Start DSMT as soon as the installation finishes - the service, the
     scheduled task, or a plain background process, whichever was set up.
+.PARAMETER OpenBrowser
+    Open the console in the default browser when the installation finishes.
+    On an interactive run you are asked instead, so this is only needed to
+    force it from a script.
+.PARAMETER NoBrowser
+    Never ask and never open a browser. Use in unattended runs. A run with no
+    console attached does not ask in any case - it cannot, and a question
+    nobody can answer would hang the install.
 .PARAMETER NoElevate
     Do not attempt to re-launch elevated. The steps that need administrator
     rights will be reported as failures instead.
@@ -150,6 +158,8 @@ param(
     [switch] $InstallScheduledTask,
     [switch] $InstallAsService,
     [switch] $StartWhenDone,
+    [switch] $OpenBrowser,
+    [switch] $NoBrowser,
     [switch] $NoElevate
 )
 
@@ -1370,6 +1380,14 @@ if (-not $StartWhenDone) {
                               -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"') `
                               -WorkingDirectory $repoRoot | Out-Null
                 Write-Ok 'Started in a new PowerShell window'
+
+                # Said here AND in the summary, because this is the one
+                # outcome where the console dies without anyone touching DSMT:
+                # a colleague closes a stray window, or the operator signs out,
+                # and the tool is simply gone with no error anywhere.
+                Write-Warn2 'That window IS the console. Close it, or sign out of Windows, and DSMT stops.'
+                Write-Info  'For anything but a quick look, register it properly instead:'
+                Write-Info  '  .\server\Install-DSMT.ps1 -InstallAsService -StartWhenDone'
             }
         }
     } catch {
@@ -1406,6 +1424,24 @@ if ($script:Outstanding.Count -eq 0) {
         }
     }
 
+    # How it will run once this window is gone. Stated as its own line
+    # because it is the difference between a tool that is there on Monday and
+    # one that is not, and until now the installer never mentioned it.
+    Write-Host ''
+    switch ($script:StartMode) {
+        'service' { Write-Host '  Runs unattended: registered as a Windows service.' -ForegroundColor Green }
+        'task'    { Write-Host '  Runs unattended: registered as a scheduled task.' -ForegroundColor Green }
+        default {
+            Write-Host '  NOT registered to run unattended.' -ForegroundColor Yellow
+            Write-Host '  DSMT only runs while a PowerShell window is open. Closing that window, or' -ForegroundColor Yellow
+            Write-Host '  signing out of Windows, stops the console for everyone with no error shown.' -ForegroundColor Yellow
+            Write-Host ''
+            Write-Host '  Register it properly - one command, safe to run now:' -ForegroundColor White
+            Write-Host '    .\server\Install-DSMT.ps1 -InstallAsService -StartWhenDone' -ForegroundColor Cyan
+            Write-Host '  It then starts at boot, survives sign-out, and restarts itself if it fails.' -ForegroundColor DarkGray
+        }
+    }
+
     Write-Host ''
     Write-Host ('  Then open  http://localhost:' + $Port + '/  and sign in with a domain account.') -ForegroundColor Cyan
     Write-Host '  There is no default account: any valid account in the domain can sign in,' -ForegroundColor DarkGray
@@ -1436,3 +1472,44 @@ if ($script:Outstanding.Count -eq 0) {
 Write-Host ''
 Write-Host ('  Full guide: ' + (Join-Path $repoRoot 'docs\deployment-guide.html')) -ForegroundColor DarkGray
 Write-Host ''
+
+# ---------------------------------------------------------------------------
+# Open the console?
+#
+# Three rules, and each one exists because the obvious implementation breaks
+# something:
+#   1. ASK, do not just launch. An installer that opens a browser uninvited is
+#      rude on a server console.
+#   2. NEVER ask when there is nobody to answer. An unattended run - a service
+#      install from a script, a scheduled deployment - would hang forever on a
+#      prompt. -NoBrowser, and a host with no interactive input, both skip it.
+#   3. Only offer it when DSMT was actually started and nothing is outstanding.
+#      Opening a browser at a port nothing is listening on teaches the operator
+#      that the tool is broken.
+# ---------------------------------------------------------------------------
+
+$dsmtUrl = 'http://localhost:' + $Port + '/'
+$canOffer = ($script:Outstanding.Count -eq 0 -and $StartWhenDone -and -not $NoBrowser)
+
+if ($canOffer -and $OpenBrowser) {
+    try { Start-Process $dsmtUrl | Out-Null } catch { Write-Warn2 ('Could not open a browser: ' + $_.Exception.Message) }
+} elseif ($canOffer) {
+    $interactive = $true
+    try { if ([System.Console]::IsInputRedirected) { $interactive = $false } } catch { $interactive = $false }
+    if (-not [Environment]::UserInteractive) { $interactive = $false }
+
+    if ($interactive) {
+        Write-Host ('  Open the console now? ' + $dsmtUrl) -ForegroundColor White
+        $answer = Read-Host '  [Y] Yes  [N] No  (default Y)'
+        if ([string]::IsNullOrWhiteSpace($answer) -or $answer -match '^(?i)y') {
+            try {
+                Start-Process $dsmtUrl | Out-Null
+                Write-Host '  Opening...' -ForegroundColor DarkGray
+            } catch {
+                Write-Warn2 ('Could not open a browser: ' + $_.Exception.Message)
+                Write-Info ('Open it by hand: ' + $dsmtUrl)
+            }
+        }
+        Write-Host ''
+    }
+}

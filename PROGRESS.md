@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.14.0` — matches the top entry of `CHANGELOG.md` and
+`1.15.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -434,7 +434,9 @@ plumbing before the unbounded one is exposed.
       treatment as deleting a user: confirmation, mandatory reason, audit.
     - PTR records are the classic trap - created in a different zone, easy to
       orphan. Either handle the pair together or say plainly that it does not.
-22. **Sensitive-group filter on the Groups screen**, with editable filters.
+22. ~~Sensitive-group filter on the Groups screen~~ — **built in 1.15.0.**
+    Original note kept below for the reasoning.
+22b. **Sensitive-group filter** (built) - the reasoning that shaped it:
     The smallest of these four and probably the most useful day to day.
     - **Match on SID, never on name.** `Domain Admins` can be renamed, and is
       localised on a non-English install; the RIDs are fixed. Domain Admins
@@ -657,7 +659,9 @@ retrofit:**
       "recurring root causes": leave it running for four days and confirm it
       still answers. Nothing shorter catches the platform-default class.
 
-27. **Ask at the end of the installation whether to open the browser.**
+27. ~~Ask at the end of the installation whether to open the browser~~ —
+    **built in 1.15.0**, along with the unattended-run steering from 26.
+    Original note:
     Today the summary prints the URL and stops. Small, and it is the last
     thing between a finished install and seeing the console work.
     - Prompt, do not just launch - an installer that opens a browser without

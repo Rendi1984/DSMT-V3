@@ -754,6 +754,43 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/settings/groupfilters$' {
+                if ($method -ne 'POST') { break }
+
+                $body    = Read-DsmtBody -Request $Request
+                $incoming = Get-DsmtBodyValue -Body $body -Name 'filters' -Default @()
+
+                $clean = @()
+                foreach ($f in @($incoming)) {
+                    if ($null -eq $f) { continue }
+                    $label = ([string]$f.label).Trim()
+                    if ([string]::IsNullOrWhiteSpace($label)) { continue }
+
+                    $terms = @()
+                    foreach ($t in @($f.terms)) {
+                        $text = ([string]$t).Trim()
+                        if (-not [string]::IsNullOrWhiteSpace($text)) { $terms += $text }
+                    }
+                    if ($terms.Count -eq 0) { continue }
+
+                    $clean += [ordered]@{ label = $label; terms = @($terms) }
+                }
+
+                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ GroupFilters = @($clean) }
+                if (-not $saved.Ok) {
+                    Send-DsmtError -Response $Response -Message ('Could not save the filters: ' + $saved.Error) -StatusCode 500
+                    return
+                }
+
+                Write-DsmtAudit -Action 'Change group filters' -Target ([string]$clean.Count + ' custom filter(s)') `
+                                -Operator $session.Account -Reason 'Settings change' -Result 'Success' `
+                                -Category 'session' -Detail 'Group filter presets updated'
+
+                Write-DsmtLog -Message ($session.Account + ' updated the group filters (' + [string]$clean.Count + ' custom)')
+                Send-DsmtJson -Response $Response -Data @{ ok = $true; filters = @(Get-DsmtGroupFilters) }
+                return
+            }
+
             '^/api/settings/network$' {
                 if ($method -ne 'POST') { break }
 
@@ -1101,11 +1138,29 @@ function Invoke-DsmtApi {
             '^/api/groups$' {
                 if ($method -eq 'GET') {
                     $q     = Get-DsmtQueryValue -Request $Request -Name 'q'
+                    $groupFilter = [string](Get-DsmtQueryValue -Request $Request -Name 'filter' -Default 'all')
                     $limit = 0
                     [int]::TryParse((Get-DsmtQueryValue -Request $Request -Name 'limit' -Default '0'), [ref] $limit) | Out-Null
-                    $rows  = Get-DsmtGroups -Credential $session.Credential -Query $q -Limit $limit
+
+                    $rows = @(Get-DsmtGroups -Credential $session.Credential -Query $q -Limit $limit)
+
+                    # The snapshot is written from the UNFILTERED read, so a
+                    # filtered view never truncates what SQL believes the
+                    # directory contains.
                     Sync-DsmtGroupsToSql -Groups $rows | Out-Null
-                    Send-DsmtJson -Response $Response -Data @{ ok = $true; items = @($rows); count = @($rows).Count; limit = $cfg.PageSize }
+
+                    $total = @($rows).Count
+                    $rows  = @(Select-DsmtGroupsByFilter -Rows $rows -Filter $groupFilter)
+
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok      = $true
+                        items   = @($rows)
+                        count   = @($rows).Count
+                        total   = $total
+                        filter  = $groupFilter
+                        filters = @(Get-DsmtGroupFilters)
+                        limit   = $cfg.PageSize
+                    }
                     return
                 }
 
