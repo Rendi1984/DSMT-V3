@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.18.3** | 2026-08-07 | The service now runs as **LocalSystem** by default - it was asking a Domain Admin to store their password | Re-run installer |
 | **1.18.2** | 2026-08-07 | AD health showed one row of blanks per table instead of no rows, and never said why a section was empty | Restart + refresh |
 | **1.18.1** | 2026-08-07 | **Fixes the Groups tab**, which 1.15.0 broke; the profile window read the wrong field so every section was empty; a Copy button on the generated password | Restart + refresh |
 | **1.18.0** | 2026-08-06 | Clicking a name opens a full profile window - identity, organisation, account and every group membership | Refresh |
@@ -61,7 +62,49 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.18.2**. The last tag is `v1.4.0`.
+`main` carries **1.18.3**. The last tag is `v1.4.0`.
+
+---
+
+## 1.18.3 — 2026-08-07
+
+**The service defaults to LocalSystem. It was asking for a Domain Admin
+password and storing it.**
+
+Asked from the lab: *what are the permissions in the installation for?* The
+honest answer was that the prompt should not have been there.
+
+**1.16.0's changelog said the service runs as LocalSystem unless
+`-ServiceAccount` names something else. That was wrong** - the code kept the
+pre-1.16.0 default of "the account running the installer", which for a service
+means the service control manager has to **store that account's password on
+disk**. On a lab installed by `LAB\Administrator`, the installer warned in
+step 7 that running DSMT as a privileged account makes it a target, and then
+four steps later asked that same Domain Admin for their password to keep.
+The installer was arguing with itself.
+
+The default of "the installing account" was right when the fallback was
+running in a window as that person, with nothing stored. **1.16.0 made a
+service the default and never revisited it.**
+
+Now, with no `-ServiceAccount`:
+- **A service or task runs as LocalSystem.** No password exists, so none is
+  stored and none can expire. No prompt.
+- **`-NoAutoStart` keeps the old behaviour** - nothing is registered, DSMT
+  runs in the operator's own window as them, and nothing is stored either way.
+- `-ServiceAccount` is unchanged: a named account still prompts once, a gMSA
+  still prompts for nothing.
+
+**This costs nothing in attribution**, which is the only reason it is safe: in
+the default `operator` identity mode every directory read and write already
+runs as the **signed-in operator**, so the host identity never touches AD and
+the domain controller still records the human. It shows in exactly one place -
+SQL, where the machine account needs rights - and the installer already says
+so when a database is configured.
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtCommon.ps1` (version).
+Re-run the installer. It replaces the existing service registration cleanly,
+and the password already stored for the old registration is discarded with it.
 
 ---
 

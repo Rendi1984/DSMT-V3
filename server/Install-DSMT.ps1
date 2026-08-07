@@ -37,12 +37,13 @@
     permissions, and the service or scheduled task. Four forms are accepted
     and the right handling is chosen automatically:
 
-      (omitted)             the account running this installer. The default,
-                            because it is the only choice that cannot fail:
-                            it already exists, and the installer just proved
-                            it can reach AD and SQL. You are prompted for its
-                            password once, because Windows has to store it to
-                            log on at boot.
+      (omitted)             LocalSystem - the default, and the only one with
+                            no password to store or expire. Directory reads
+                            and writes still run as the signed-in operator, so
+                            attribution is unaffected; the machine account
+                            needs rights on SQL if a database is used.
+                            With -NoAutoStart there is no service, so DSMT
+                            simply runs in your own window as you.
       LAB\svc-dsmt          a dedicated account. Prompts for the password.
       LAB\gmsa-dsmt$        a group managed service account - detected by the
                             trailing $. No password exists or is asked for.
@@ -812,21 +813,48 @@ foreach ($dir in @($dataPath, $configPath)) {
 
 Write-Step 'Run account'
 
-# The default is the account running this installer. It is the only choice
-# that cannot fail: it exists, and the steps above just proved it reaches the
-# directory. Everything else is opt-in.
+# WHICH ACCOUNT DSMT RUNS AS, when -ServiceAccount was not given.
+#
+# Until 1.18.3 this was always the account running the installer. That made
+# sense when the default was "run in a window as me" - but 1.16.0 made a
+# Windows service the default, and a service needs its password STORED by the
+# service control manager. So the installer was asking a Domain Admin to hand
+# over their password to be kept on disk, three lines after warning that
+# running DSMT as a privileged account is a bad idea. The installer was
+# arguing with itself.
+#
+# LocalSystem instead: no password exists, so none is stored and none expires.
+# It costs nothing in attribution, because in the default 'operator' identity
+# mode every directory read and write already runs as the SIGNED-IN OPERATOR -
+# the host identity never touches AD. It shows in exactly one place, SQL,
+# where the machine account needs rights, and that is called out below.
+#
+# -NoAutoStart keeps the old behaviour: with nothing registered, DSMT runs in
+# the operator's own window as them, and no password is stored either way.
 $runAccount = $ServiceAccount
 $accountWasChosen = $true
 if ([string]::IsNullOrWhiteSpace($runAccount)) {
-    $runAccount = $env:USERDOMAIN + '\' + $env:USERNAME
     $accountWasChosen = $false
+    if ($NoAutoStart) {
+        $runAccount = $env:USERDOMAIN + '\' + $env:USERNAME
+    } else {
+        $runAccount = 'LocalSystem'
+    }
 }
 
 $runAccountKind = Get-DsmtAccountKind -Account $runAccount
 
 switch ($runAccountKind) {
     'gmsa'    { Write-Info ('Group managed service account: ' + $runAccount) }
-    'machine' { Write-Info 'Machine account (LocalSystem)' }
+    'machine' {
+        if ($accountWasChosen) {
+            Write-Info 'Machine account (LocalSystem)'
+        } else {
+            Write-Info 'No -ServiceAccount given; DSMT will run as LocalSystem.'
+            Write-Info 'No password is stored and none can expire. Directory reads and writes still'
+            Write-Info 'run as the signed-in operator, so the domain controller records the human.'
+        }
+    }
     default   {
         if ($accountWasChosen) {
             Write-Info ('Dedicated account: ' + $runAccount)
