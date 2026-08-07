@@ -730,6 +730,61 @@ it at all - it is the first feature in this project that would let a web form
 write to an arbitrary directory attribute, and that deserves a conversation
 rather than an implementation.
 
+### Active Directory permissions and delegation (29) — raised 2026-08-06, NOT to be built yet
+
+"The permissions subject." Recorded as its own item because the two existing
+entries that sound like it are different things, and confusing them would
+send someone building the wrong feature:
+
+- **Item 24** is DSMT's *own* roles - who may change the console's settings.
+  Nothing to do with AD's access control.
+- **Open task 3** is a *document* listing the rights DSMT needs. Also not this.
+
+**29 is the directory's access control, seen and changed from the console.**
+It is the most-requested thing this project has never named, because it is the
+answer to the single most repeated support question here: *"it says access
+denied when I reset a password."* That is always a delegation gap, and today
+DSMT reports the refusal without being able to show why or fix it.
+
+29a. **Show effective permissions.** Pick an OU or an object and see who has
+     what on it - the ACL, resolved to readable rights rather than raw access
+     masks. Read-only, and useful on its own: it turns "access denied" from a
+     dead end into a named missing right.
+     - `Get-Acl "AD:\<DN>"` works and takes the operator's context, so the
+       existing identity model holds. It returns
+       `ActiveDirectoryAccessRule` objects with `ObjectType` GUIDs - those
+       GUIDs must be resolved against the schema and the extended-rights
+       container to become words like "Reset Password", or the screen is a
+       list of GUIDs and helps nobody.
+     - Inherited versus explicit must be distinguished. Most of what an ACL
+       contains is inherited, and showing it flat makes every OU look
+       identically complicated.
+29b. **Delegate rights.** The common grants as named tasks rather than raw
+     ACEs: reset passwords, unlock accounts, manage group membership, create
+     and delete users in an OU - the same verbs the console already performs,
+     which is what makes this coherent rather than a generic ACL editor.
+     - Writing an ACE is `Set-Acl` on the `AD:` drive, or the `dsacls`
+       command. **Generating the `dsacls` command is the honest first
+       version**, the same choice already made for `Install-ADServiceAccount`
+       in the gMSA tool: the operator runs it, sees exactly what was granted,
+       and DSMT never silently rewrites an ACL.
+     - **Removing a delegation is more dangerous than adding one** and must be
+       a separate, deliberate action. An ACL editor that makes revocation as
+       easy as a grant is how an OU loses an inherited right nobody noticed.
+29c. **Report on delegation.** Where is a given group or user granted
+     anything, across every OU. Slow - it walks the tree - so it belongs with
+     the other on-demand reports, not on a page that loads.
+
+**Placement:** a **Tools** sub-tool. It is a guided job with an end state,
+which is exactly what that rail is for, and 29a on its own would already earn
+its place there.
+
+**Before starting:** decide whether DSMT ever writes an ACL itself, or only
+ever generates the command. That single decision shapes all of 29b, and it is
+a security question rather than a technical one - the console would be
+granting directory rights through a web form, which is the same class of
+concern already flagged for attribute writes in 28c.
+
 ### Where all of this goes — the tab count is the real constraint
 
 Today: Users, Groups, Audit log, Tools, Settings. The open proposals would add
