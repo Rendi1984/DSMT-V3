@@ -548,7 +548,11 @@ function Get-DsmtGroupFilters {
         }
     }
 
-    return ,@($filters)
+    # NOT ",@($filters)". The call site wraps in @( ), and the comma operator
+    # then leaves the outer array in place - the whole list arrives as ONE
+    # element that is itself an array. That is what made the Groups tab render
+    # a single blank row: items serialised as [[ ...20 groups... ]].
+    return @($filters)
 }
 
 function Select-DsmtGroupsByFilter {
@@ -563,13 +567,13 @@ function Select-DsmtGroupsByFilter {
     #>
     param([array] $Rows, [string] $Filter = 'all')
 
-    if ([string]::IsNullOrWhiteSpace($Filter) -or $Filter -eq 'all') { return ,@($Rows) }
+    if ([string]::IsNullOrWhiteSpace($Filter) -or $Filter -eq 'all') { return @($Rows) }
 
     if ($Filter -eq 'privileged') {
-        return ,@(@($Rows) | Where-Object { $_.privileged })
+        return @(@($Rows) | Where-Object { $_.privileged })
     }
     if ($Filter -eq 'protected') {
-        return ,@(@($Rows) | Where-Object { $_.protected })
+        return @(@($Rows) | Where-Object { $_.protected })
     }
 
     $defined = @(Get-DsmtGroupFilters)
@@ -579,10 +583,10 @@ function Select-DsmtGroupsByFilter {
     # An unknown key returns everything rather than nothing. A filter that
     # was deleted from the configuration while someone had it selected must
     # not silently produce an empty screen that reads as "there are none".
-    if ($null -eq $wanted) { return ,@($Rows) }
+    if ($null -eq $wanted) { return @($Rows) }
 
     $terms = @($wanted.terms)
-    if ($terms.Count -eq 0) { return ,@($Rows) }
+    if ($terms.Count -eq 0) { return @($Rows) }
 
     $kept = @()
     foreach ($row in @($Rows)) {
@@ -592,7 +596,7 @@ function Select-DsmtGroupsByFilter {
             if ($hay.Contains($term.ToLower())) { $kept += $row; break }
         }
     }
-    return ,@($kept)
+    return @($kept)
 }
 
 function Get-DsmtGroups {

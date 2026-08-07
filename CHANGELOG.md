@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.19.0** | 2026-08-07 | **Groups tab fixed for real**; the AD health clock reads again; confirmations name the target; profile actions moved above the fold | Restart + refresh |
 | **1.18.3** | 2026-08-07 | The service now runs as **LocalSystem** by default - it was asking a Domain Admin to store their password | Re-run installer |
 | **1.18.2** | 2026-08-07 | AD health showed one row of blanks per table instead of no rows, and never said why a section was empty | Restart + refresh |
 | **1.18.1** | 2026-08-07 | **Fixes the Groups tab**, which 1.15.0 broke; the profile window read the wrong field so every section was empty; a Copy button on the generated password | Restart + refresh |
@@ -62,7 +63,65 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.18.3**. The last tag is `v1.4.0`.
+`main` carries **1.19.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.19.0 — 2026-08-07
+
+Four findings from the lab.
+
+### Fixed - the Groups tab, for real this time
+
+1.18.2 fixed the `adminCount` cast and I called it done. It was half the
+fault. The other half is the **comma operator that 1.18.2's own changelog
+warned about**, in the filter function added in 1.15.0:
+
+    Select-DsmtGroupsByFilter ... return ,@($Rows)
+
+The comma protects a single-element list from unrolling - but the route wraps
+the call in `@( )`, so the outer array survives and the whole group list
+arrives as **one element that is itself an array**. `items` serialised as
+`[[ ...20 groups... ]]`, the grid rendered that single element as one blank
+row, and the detail pane asked for `/api/groups/undefined`.
+
+All seven of those returns now use `@( )`. **This is the third instance of
+the same root cause in this project**, and the first where I had already
+written the rule down and then applied it to the wrong file. `CLAUDE.md` now
+says it in the form that would have caught this: the comma operator is wrong
+when the caller wraps the result.
+
+### Fixed - the AD health clock column
+
+`Exception calling "ParseExact" ... String was not recognized as a valid
+DateTime`. `Get-ADRootDSE` returns `currentTime` as a **DateTime object**,
+not the LDAP generalized-time string the parse assumed. `[string]` on it
+produced a culture-formatted date - `08/07/2026 19:28:10` - and taking the
+first 14 characters of that gives `08/07/2026 19:`, which is correctly
+refused. Both shapes are now handled, and a value that is neither says so.
+
+### Confirmations name what they act on
+
+"Disable account - 1 object" said nothing about which object - and the detail
+pane can be showing a different user than the one ticked in the grid. Every
+confirmation now names the target in the title **and** in the body, because a
+long name is truncated by the title's width and this is the one place it has
+to be unambiguous.
+
+For a bulk action, **every** name is listed rather than "and 12 more": a bulk
+change the operator cannot fully read is one they cannot check. The list
+scrolls inside its own box.
+
+### The profile window's actions moved above the content
+
+With six group memberships the buttons were past the fold, so the most-used
+controls moved further away the more there was to read - exactly backwards.
+They are now at the top, and stick there as the panel scrolls.
+
+Files: `server/lib/DsmtDirectory.ps1`, `server/lib/DsmtAdHealth.ps1`,
+`server/lib/DsmtCommon.ps1` (version), `web/app.js`, `web/app.css`,
+`CLAUDE.md`. **Copy `server/lib/*.ps1` and restart**, then `web/*` and
+hard-refresh.
 
 ---
 

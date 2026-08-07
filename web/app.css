@@ -733,10 +733,34 @@ body { overflow: hidden; }
 .profile-sec .detail-fields { margin: 0; }
 .profile-sec dd { word-break: break-word; }
 
+/* Above the content and sticky, so the actions stay reachable however long
+   the membership list is. */
 .profile-actions {
-  margin-top: var(--space-6); padding-top: var(--space-4);
-  border-top: 1px solid var(--color-neutral-800);
+  position: sticky; top: 0; z-index: 1;
+  margin: 0 0 var(--space-6);
+  padding: 0 0 var(--space-4);
+  border-bottom: 1px solid var(--color-neutral-800);
+  background: var(--color-surface);
 }
+
+/* Who an action applies to - stated in the dialog, not only in its title. */
+.target-box {
+  border-left: 2px solid var(--color-accent-500);
+  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.target-label {
+  font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+.target-name { font-size: 15px; color: var(--color-neutral-100); word-break: break-word; }
+.target-sub { font-size: 12.5px; color: var(--color-neutral-400); }
+.target-list {
+  margin: var(--space-2) 0 0; padding-left: var(--space-4);
+  max-height: 180px; overflow-y: auto;
+  font-size: 13.5px; color: var(--color-neutral-200);
+}
+.target-list li { margin-bottom: 3px; }
 .dialog-body { display: flex; flex-direction: column; gap: var(--space-4); opacity: 1; }
 .dialog-note { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--color-neutral-400); }
 .dialog select.input { appearance: none; -webkit-appearance: none; }

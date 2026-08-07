@@ -194,15 +194,33 @@ function Get-DsmtControllerHealth {
             try {
                 $rootDse = Get-ADRootDSE -Server $name -Credential $Credential -ErrorAction Stop
 
-                # currentTime is an LDAP generalized time: yyyyMMddHHmmss.0Z,
-                # always UTC. ParseExact on the fixed 14 characters, rather
-                # than [datetime]::Parse on a string whose format is not the
-                # host's culture.
-                $raw = [string]$rootDse.currentTime
-                $dcTime = [datetime]::ParseExact($raw.Substring(0, 14), 'yyyyMMddHHmmss',
-                              [System.Globalization.CultureInfo]::InvariantCulture,
-                              ([System.Globalization.DateTimeStyles]::AssumeUniversal -bor
-                               [System.Globalization.DateTimeStyles]::AdjustToUniversal))
+                # currentTime comes back in one of two shapes and the code has
+                # to handle both. Get-ADRootDSE usually converts it to a real
+                # DateTime; a raw LDAP read leaves it as generalized time,
+                # yyyyMMddHHmmss.0Z.
+                #
+                # 1.17.0 assumed the string form and cast with [string] first,
+                # which on the DateTime form produces a CULTURE-FORMATTED date
+                # like "08/07/2026 19:28:10". Slicing 14 characters off that
+                # gives "08/07/2026 19:", and ParseExact rightly refuses it -
+                # which is the "String was not recognized as a valid DateTime"
+                # in the clock column.
+                $value  = $rootDse.currentTime
+                $dcTime = $null
+
+                if ($value -is [datetime]) {
+                    $dcTime = ([datetime]$value).ToUniversalTime()
+                } else {
+                    $raw = [string]$value
+                    if ($raw.Length -ge 14) {
+                        $dcTime = [datetime]::ParseExact($raw.Substring(0, 14), 'yyyyMMddHHmmss',
+                                      [System.Globalization.CultureInfo]::InvariantCulture,
+                                      ([System.Globalization.DateTimeStyles]::AssumeUniversal -bor
+                                       [System.Globalization.DateTimeStyles]::AdjustToUniversal))
+                    } else {
+                        throw ('currentTime was not a time this code understands: "' + $raw + '"')
+                    }
+                }
 
                 $skew = [math]::Round((New-TimeSpan -Start $dcTime -End $now).TotalMinutes, 1)
             } catch {

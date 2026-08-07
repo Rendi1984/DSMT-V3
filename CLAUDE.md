@@ -295,6 +295,10 @@ cause. Three shapes:
   `.Count` with 1 and `[0]` with itself — so the usual defensive checks pass
   while the value is wrong.** The rules, which apply to new code without
   discussion:
+    - **do not use the comma operator when the CALL SITE wraps the result**
+      (`$x = @(Get-Something)`) — the outer array survives, the whole list
+      arrives as one element that is itself an array, and it serialises as
+      `[[...]]`. That is what broke the Groups tab twice;
     - a function returning a list ends with `return ,@($list)` — **but not
       when the list can be empty**: on an empty list the comma operator
       produces an array containing an empty array, which serialises as `[[]]`

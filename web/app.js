@@ -1426,9 +1426,10 @@ function refreshAfterWrite() {
 
 function actionResetPassword(rows) {
   openDialog({
-    title: 'Reset password - ' + rows.map(function (r) { return r.name; }).join(', '),
+    title: targetTitle('Reset password', rows),
     confirmLabel: 'Reset',
-    body: '<p class="dialog-note">The new password is written to the directory and the change is ' +
+    body: targetBlock(rows) +
+          '<p class="dialog-note">The new password is written to the directory and the change is ' +
           'recorded in the audit log with your account and the reason below.</p>' +
           '<div class="field"><label for="dlgPw">New password (leave blank to generate one)</label>' +
           '<input class="input" id="dlgPw" type="text" autocomplete="new-password" placeholder="Generate automatically"></div>' +
@@ -1448,6 +1449,43 @@ function actionResetPassword(rows) {
   });
 }
 
+/* ---------------------------------------------------------------------------
+   WHO an action applies to.
+
+   "Disable account - 1 object" says nothing about which object, and the
+   detail pane can be showing a different user than the one ticked in the
+   grid. Someone confirming a destructive change has to be able to see the
+   target without leaving the dialog.
+   --------------------------------------------------------------------------- */
+
+function targetTitle(verb, rows) {
+  if (rows.length === 1) { return verb + ' - ' + (rows[0].name || rows[0].sam); }
+  return verb + ' - ' + rows.length + ' objects';
+}
+
+/* Named in the body too, not only in the title: a long name is truncated by
+   the title's width, and this is the one place it must be unambiguous. */
+function targetBlock(rows) {
+  if (!rows.length) { return ''; }
+
+  if (rows.length === 1) {
+    var r = rows[0];
+    var sub = r.sam && r.sam !== r.name ? ' <span class="target-sub">' + esc(r.sam) + '</span>' : '';
+    return '<div class="target-box"><span class="target-label">Applies to</span>' +
+           '<span class="target-name">' + esc(r.name || r.sam) + '</span>' + sub + '</div>';
+  }
+
+  // Every name, not "and 12 more" - a bulk action the operator cannot fully
+  // read is a bulk action they cannot check.
+  return '<div class="target-box"><span class="target-label">Applies to ' + rows.length + ' objects</span>' +
+         '<ul class="target-list">' +
+         rows.map(function (r) {
+           return '<li>' + esc(r.name || r.sam) +
+                  (r.sam && r.sam !== r.name ? ' <span class="target-sub">' + esc(r.sam) + '</span>' : '') +
+                  '</li>';
+         }).join('') + '</ul></div>';
+}
+
 function actionSimple(kind, rows) {
   var config = {
     'unlock':  { path: '/api/actions/unlock', title: 'Unlock account', label: 'Unlock', extra: {} },
@@ -1456,9 +1494,10 @@ function actionSimple(kind, rows) {
   }[kind];
 
   openDialog({
-    title: config.title + ' - ' + rows.length + ' object' + (rows.length === 1 ? '' : 's'),
+    title: targetTitle(config.title, rows),
     confirmLabel: config.label,
-    body: '<p class="dialog-note">This change is written to the directory and recorded in the audit log ' +
+    body: targetBlock(rows) +
+          '<p class="dialog-note">This change is written to the directory and recorded in the audit log ' +
           'with your account and the reason below.</p>' + reasonField(),
     onConfirm: function () {
       var reason = readReason();
@@ -1473,9 +1512,10 @@ function actionSimple(kind, rows) {
 function actionMoveOu(rows) {
   withOus(function () {
     openDialog({
-      title: 'Move OU - ' + rows.length + ' object' + (rows.length === 1 ? '' : 's'),
+      title: targetTitle('Move OU', rows),
       confirmLabel: 'Move',
-      body: '<p class="dialog-note">Moving replicates to every domain controller.</p>' +
+      body: targetBlock(rows) +
+            '<p class="dialog-note">Moving replicates to every domain controller.</p>' +
             ouSelect(rows[0].ouDn) + reasonField(),
       onConfirm: function () {
         var reason = readReason();
@@ -1493,9 +1533,10 @@ function actionMoveOu(rows) {
 
 function actionAddToGroup(rows) {
   openDialog({
-    title: 'Add to group - ' + rows.length + ' user' + (rows.length === 1 ? '' : 's'),
+    title: targetTitle('Add to group', rows),
     confirmLabel: 'Add',
-    body: '<div class="field"><label for="dlgGroupSearch">Find the group</label>' +
+    body: targetBlock(rows) +
+          '<div class="field"><label for="dlgGroupSearch">Find the group</label>' +
           '<input class="input" id="dlgGroupSearch" placeholder="Type at least two characters" autocomplete="off"></div>' +
           '<div class="field"><label for="dlgGroup">Group</label>' +
           '<select class="input" id="dlgGroup"><option value="">Search for a group first</option></select></div>' +
@@ -2327,6 +2368,10 @@ function profileHtml(d, isGroup) {
   }
 
   return tags +
+    // Actions above the content, not below it. With six group memberships the
+    // buttons were past the fold, so the most-used controls moved further
+    // away the more there was to read - exactly backwards.
+    '<div class="set-actions profile-actions" id="profileActions"></div>' +
     '<div class="profile-grid">' +
       '<section class="profile-sec"><h4>Identity</h4>' + profileRows(identity) + '</section>' +
       '<section class="profile-sec"><h4>' + (isGroup ? 'Directory' : 'Organisation') + '</h4>' +
@@ -2334,8 +2379,7 @@ function profileHtml(d, isGroup) {
       '<section class="profile-sec profile-wide"><h4>Account</h4>' + profileRows(account) + '</section>' +
       '<section class="profile-sec profile-wide">' +
         '<h4>' + esc(memberTitle) + ' (' + members.length + ')</h4>' + memberBody + '</section>' +
-    '</div>' +
-    '<div class="set-actions profile-actions" id="profileActions"></div>';
+    '</div>';
 }
 
 function wireProfile(d, isGroup, rowId) {

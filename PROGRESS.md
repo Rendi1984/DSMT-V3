@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.18.3` — matches the top entry of `CHANGELOG.md` and
+`1.19.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -907,7 +907,7 @@ verification against LAB.LOCAL is still outstanding — see Open task 1.
 **Not started - the operator asked to hold.** Two have a diagnosed cause
 already; the rest are design work.
 
-### B1. Groups tab STILL returns one blank row — CAUSE FOUND, one-line fix
+### [FIXED in 1.19.0] B1. Groups tab STILL returns one blank row — CAUSE FOUND, one-line fix
 
 1.18.2 fixed the `adminCount` cast, but that was only half of it. The other
 half is the **same comma-operator trap 1.18.2 documented**, in the function
@@ -927,7 +927,7 @@ sites already wrap. **This is the third instance of the same root cause; the
 CLAUDE.md entry now needs "and do not use the comma operator on a list you are
 about to return through a wrapping call site" as well.**
 
-### B2. AD health clock column - CAUSE FOUND
+### [FIXED in 1.19.0] B2. AD health clock column - CAUSE FOUND
 
 `The clock could not be read: Exception calling "ParseExact" ... String was
 not recognized as a valid DateTime`.
@@ -938,7 +938,7 @@ culture-formatted date (`08/07/2026 19:28:10`), and `Substring(0,14)` slices
 that into nonsense. Fix: test for `[datetime]` first and use it directly; only
 parse when it really is a string.
 
-### B3. Confirmation dialogs must name the target
+### [FIXED in 1.19.0] B3. Confirmation dialogs must name the target
 
 "Disable account - 1 object" says nothing about WHICH object, and the detail
 pane can be showing a different user than the one ticked. Every confirmation
@@ -946,7 +946,7 @@ should name the target - one user by name, or "3 users" with the list.
 Highest-value small fix here: an operator confirming a destructive action must
 be able to see what it applies to without leaving the dialog.
 
-### B4. Profile window - move the actions off the bottom
+### [FIXED in 1.19.0] B4. Profile window - move the actions off the bottom
 
 With six group memberships the action buttons are below the fold. Move them
 to the top of the window or a side column so they do not move as the content
