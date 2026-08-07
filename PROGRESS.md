@@ -902,6 +902,96 @@ verification against LAB.LOCAL is still outstanding — see Open task 1.
 
 ---
 
+## Open bugs and requests from the 2026-08-07 lab session
+
+**Not started - the operator asked to hold.** Two have a diagnosed cause
+already; the rest are design work.
+
+### B1. Groups tab STILL returns one blank row — CAUSE FOUND, one-line fix
+
+1.18.2 fixed the `adminCount` cast, but that was only half of it. The other
+half is the **same comma-operator trap 1.18.2 documented**, in the function
+added in 1.15.0:
+
+    Select-DsmtGroupsByFilter ... return ,@($Rows)
+
+The comma protects a single-element list from unrolling, but here it wraps the
+whole list in an outer array. The route then does `@(Select-...)`, the outer
+array survives, and `items` serialises as `[[ ...20 groups... ]]` - **one
+element, which is an array**. The client renders that as one blank row, and
+the detail pane asks for `/api/groups/undefined`.
+
+Fix: `return @(...)` in all seven places in `Select-DsmtGroupsByFilter` and
+`Get-DsmtGroupFilters` (`DsmtDirectory.ps1` around lines 551-595). The call
+sites already wrap. **This is the third instance of the same root cause; the
+CLAUDE.md entry now needs "and do not use the comma operator on a list you are
+about to return through a wrapping call site" as well.**
+
+### B2. AD health clock column - CAUSE FOUND
+
+`The clock could not be read: Exception calling "ParseExact" ... String was
+not recognized as a valid DateTime`.
+
+`Get-ADRootDSE` returns `currentTime` as a **DateTime object**, not the LDAP
+generalized-time string the parse assumes. `[string]` on it produces a
+culture-formatted date (`08/07/2026 19:28:10`), and `Substring(0,14)` slices
+that into nonsense. Fix: test for `[datetime]` first and use it directly; only
+parse when it really is a string.
+
+### B3. Confirmation dialogs must name the target
+
+"Disable account - 1 object" says nothing about WHICH object, and the detail
+pane can be showing a different user than the one ticked. Every confirmation
+should name the target - one user by name, or "3 users" with the list.
+Highest-value small fix here: an operator confirming a destructive action must
+be able to see what it applies to without leaving the dialog.
+
+### B4. Profile window - move the actions off the bottom
+
+With six group memberships the action buttons are below the fold. Move them
+to the top of the window or a side column so they do not move as the content
+grows.
+
+### B5. Not a bug - HTTPS
+
+`https://app:8080` gives ERR_SSL_PROTOCOL_ERROR because **DSMT serves HTTP**.
+Use `http://app:8080`. Real HTTPS is a certificate bound to the port with
+`netsh http add sslcert` - worth adding to the installer as an option, and
+already the strongest argument in the parked IIS discussion.
+
+### B6. Not a bug - SQL times are UTC
+
+`dbo.AuditLog.TimeUtc` stores UTC, which is why SSMS shows 16:35 when the
+server clock says 19:35 in UTC+3. That is deliberate and correct for an audit
+log - a local-time column breaks the day a server moves timezone or DST
+shifts. The console converts for display. **Optional nicety:** ship a view
+(`vw_AuditLog`) with an added local-time column so SSMS reads naturally
+without changing what is stored.
+
+### B7. Automatic refresh from AD — design first, raised 2026-08-07
+
+Asked for, with the operator's own caveat already correct: a domain with
+thousands of users must not be re-read on a timer.
+
+Their proposal is the right shape - **cap the read (500-1000) and make the cap
+a setting.** `-PageSize` already exists and defaults to 500, so the cap is
+there; what is missing is the refresh and the control over it. Design notes
+before anyone starts:
+- **Refresh the VIEW, not the directory.** Re-running the current search is
+  cheap and bounded; walking the domain is not. Never fetch more than the page
+  size on a timer.
+- **Never refresh while the operator is working**: not with a row selected, a
+  dialog open, text in the search box, or checkboxes ticked. A grid that
+  reorders under a half-finished bulk selection is worse than a stale one.
+- **Off by default, with an interval the operator chooses** (30s / 1m / 5m).
+  Silent background traffic against a DC needs consent.
+- Show when the data was last read - the audit log's stamp pattern from
+  1.10.0 already does this and should be reused rather than reinvented.
+- The result line already says when the page cap is hit; that message becomes
+  more important, not less, once the grid refreshes itself.
+
+---
+
 ## Next in the queue — as at 1.15.0
 
 Written down so a session with no context knows where to pick up.
