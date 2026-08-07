@@ -143,7 +143,12 @@ function Get-DsmtFsmoRoles {
         }
     }
 
-    return ,@($roles)
+    # NOT ",@($roles)". The comma operator protects a SINGLE-element list from
+    # being unrolled, but on an EMPTY list it produces an array containing an
+    # empty array - which serialises as [[]] and renders as one row of blanks
+    # instead of no rows at all. Every call site here wraps in @( ) anyway,
+    # which is the guard that actually matters.
+    return @($roles)
 }
 
 function Get-DsmtControllerHealth {
@@ -248,7 +253,7 @@ function Get-DsmtControllerHealth {
         }
     }
 
-    return ,@($rows)
+    return @($rows)
 }
 
 function Get-DsmtReplicationSummary {
@@ -338,7 +343,7 @@ function Get-DsmtReplicationSummary {
     # Worst first: failures, then the longest gap.
     $sorted = @($rows | Sort-Object -Property @{ Expression = { $_.worstFailures }; Descending = $true },
                                               @{ Expression = { if ($null -eq $_.largestGapMin) { -1 } else { $_.largestGapMin } }; Descending = $true })
-    return ,@($sorted)
+    return @($sorted)
 }
 
 function Get-DsmtReplicationFailures {
@@ -354,7 +359,7 @@ function Get-DsmtReplicationFailures {
     try {
         $dcs = @(Get-ADDomainController @ad -Filter * -ErrorAction Stop)
     } catch {
-        return ,@($rows)
+        return @($rows)
     }
 
     foreach ($dc in $dcs) {
@@ -373,7 +378,7 @@ function Get-DsmtReplicationFailures {
         } catch { }
     }
 
-    return ,@($rows)
+    return @($rows)
 }
 
 function Get-DsmtAdHealth {
@@ -399,10 +404,31 @@ function Get-DsmtAdHealth {
         skewBad     = $script:DsmtSkewBadMinutes
     }
 
-    try { $result.fsmo        = @(Get-DsmtFsmoRoles -Credential $Credential) }        catch { $result.error = $_.Exception.Message }
-    try { $result.controllers = @(Get-DsmtControllerHealth -Credential $Credential) } catch { $result.error = $_.Exception.Message }
-    try { $result.replication = @(Get-DsmtReplicationSummary -Credential $Credential) } catch { $result.error = $_.Exception.Message }
-    try { $result.failures    = @(Get-DsmtReplicationFailures -Credential $Credential) } catch { }
+    # Each section reports its own failure. A section that cannot be produced
+    # must say why - a silently empty card reads as "there is nothing wrong
+    # here", which is the opposite of the truth.
+    $problems = @()
+
+    try   { $result.fsmo = @(Get-DsmtFsmoRoles -Credential $Credential) }
+    catch { $problems += ('FSMO roles: ' + $_.Exception.Message) }
+
+    try   { $result.controllers = @(Get-DsmtControllerHealth -Credential $Credential) }
+    catch { $problems += ('Domain controllers: ' + $_.Exception.Message) }
+
+    try   { $result.replication = @(Get-DsmtReplicationSummary -Credential $Credential) }
+    catch { $problems += ('Replication: ' + $_.Exception.Message) }
+
+    try   { $result.failures = @(Get-DsmtReplicationFailures -Credential $Credential) }
+    catch { $problems += ('Replication failures: ' + $_.Exception.Message) }
+
+    if (@($result.fsmo).Count -eq 0 -and $problems.Count -eq 0) {
+        $problems += 'The FSMO role holders came back empty. Get-ADDomain and Get-ADForest both returned nothing, which usually means the operator cannot read the forest configuration.'
+    }
+    if (@($result.controllers).Count -eq 0 -and $problems.Count -eq 0) {
+        $problems += 'No domain controllers were returned by Get-ADDomainController.'
+    }
+
+    if ($problems.Count -gt 0) { $result.error = ($problems -join '  |  ') }
 
     $worst = 'ok'
     foreach ($set in @($result.fsmo, $result.controllers, $result.replication)) {

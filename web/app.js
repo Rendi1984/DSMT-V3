@@ -2426,6 +2426,15 @@ function loadAdHealth() {
   });
 }
 
+/* Only real rows. A section that serialised oddly used to render one row of
+   blanks, which reads as data. An empty section must look empty. */
+function adhRows(value, key) {
+  return asArray(value).filter(function (r) {
+    return r && typeof r === 'object' && !(r instanceof Array) &&
+           r[key] !== undefined && r[key] !== null && String(r[key]).length > 0;
+  });
+}
+
 function adhWord(status) {
   if (status === 'ok') { return 'OK'; }
   if (status === 'warn') { return 'Attention'; }
@@ -2460,7 +2469,7 @@ function paintAdHealth(d) {
     '</section>';
 
   // ---- replication, laid out the way replsum is read: worst first ----
-  var repl = asArray(d.replication);
+  var repl = adhRows(d.replication, 'name');
   var replRows = repl.length
     ? '<div class="scroll-x"><table class="table dsmt-table tool-table"><thead><tr>' +
       '<th>Controller</th><th>Partners</th><th>Failures</th><th>Last success</th><th>Delta</th><th>Note</th>' +
@@ -2486,7 +2495,7 @@ function paintAdHealth(d) {
     'the most recent successful inbound replication.', replRows);
 
   // ---- FSMO ----
-  var fsmo = asArray(d.fsmo);
+  var fsmo = adhRows(d.fsmo, 'role');
   var fsmoRows = fsmo.length
     ? '<div class="health-list">' + fsmo.map(function (r) {
         return '<div class="health-item health-' + esc(r.status) + '">' +
@@ -2505,7 +2514,7 @@ function paintAdHealth(d) {
     'the actual fault.', fsmoRows);
 
   // ---- controllers ----
-  var dcs = asArray(d.controllers);
+  var dcs = adhRows(d.controllers, 'name');
   var dcRows = dcs.length
     ? '<div class="scroll-x"><table class="table dsmt-table tool-table"><thead><tr>' +
       '<th>Controller</th><th>Site</th><th>LDAP</th><th>LDAPS</th><th>GC</th><th>Clock</th><th>Note</th>' +
@@ -2532,7 +2541,7 @@ function paintAdHealth(d) {
     'symptom never mentions time.', dcRows);
 
   // ---- explicit failures, only when there are any ----
-  var fails = asArray(d.failures);
+  var fails = adhRows(d.failures, 'server');
   var failCard = '';
   if (fails.length) {
     failCard = adhCard('Replication failures',

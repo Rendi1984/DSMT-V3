@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.18.2** | 2026-08-07 | AD health showed one row of blanks per table instead of no rows, and never said why a section was empty | Restart + refresh |
 | **1.18.1** | 2026-08-07 | **Fixes the Groups tab**, which 1.15.0 broke; the profile window read the wrong field so every section was empty; a Copy button on the generated password | Restart + refresh |
 | **1.18.0** | 2026-08-06 | Clicking a name opens a full profile window - identity, organisation, account and every group membership | Refresh |
 | **1.17.0** | 2026-08-06 | **Tools -> AD health**: replication the way `replsum` reads, the five FSMO holders and whether each answers, per-controller ports and clock drift | Restart + refresh |
@@ -60,7 +61,42 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.18.1**. The last tag is `v1.4.0`.
+`main` carries **1.18.2**. The last tag is `v1.4.0`.
+
+---
+
+## 1.18.2 — 2026-08-07
+
+**Fixed - every AD health table showed a single row of blanks.**
+
+Replication, FSMO, controllers and failures each rendered one empty row with
+`undefined` in the numeric columns. The cause is the mirror image of the
+single-element problem already recorded in `CLAUDE.md`, and it is worth adding
+to that entry rather than treating it as a new bug:
+
+`return ,@($list)` protects a **one-element** list from being unrolled. On an
+**empty** list it does the opposite of what is wanted - it produces an array
+containing an empty array, which serialises as `[[]]`, and the front end
+faithfully renders that one element as a row where every field is missing.
+
+An empty section must look empty. Three changes:
+
+- The four AD-health readers return `@($list)`. Every call site already wraps
+  in `@( )`, which is the guard that actually protects against unrolling.
+- The front end filters each list to rows that are real objects carrying the
+  key that names them. A section that serialises oddly now renders as empty
+  rather than as one row of blanks - blanks read as data.
+- **Each section reports its own failure.** Previously one shared `error`
+  field was overwritten by whichever check failed last, and a section that
+  came back empty said nothing at all. Now every check that throws is named,
+  and an FSMO or controller list that is empty *without* an error says so
+  explicitly - usually the operator cannot read the forest configuration.
+
+A silently empty card reads as "nothing is wrong here", which is the opposite
+of the truth. That is the whole point of this screen.
+
+Files: `server/lib/DsmtAdHealth.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`web/app.js`.
 
 ---
 

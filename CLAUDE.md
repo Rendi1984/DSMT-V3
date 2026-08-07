@@ -295,7 +295,12 @@ cause. Three shapes:
   `.Count` with 1 and `[0]` with itself — so the usual defensive checks pass
   while the value is wrong.** The rules, which apply to new code without
   discussion:
-    - a function returning a list ends with `return ,@($list)`;
+    - a function returning a list ends with `return ,@($list)` — **but not
+      when the list can be empty**: on an empty list the comma operator
+      produces an array containing an empty array, which serialises as `[[]]`
+      and renders as one row of blanks. 1.18.2 shipped that in four tables at
+      once. Where empty is a normal outcome, `return @($list)` plus the
+      call-site wrap is correct;
     - **every call site wraps it: `$x = @(Get-Something)`** — this is the one
       that actually protects you, because you do not control every callee;
     - the front end funnels every list-shaped response through `asArray()`;
