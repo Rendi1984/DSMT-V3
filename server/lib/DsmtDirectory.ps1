@@ -525,6 +525,66 @@ function Set-DsmtAccountEnabled {
     }
 }
 
+function Resolve-DsmtObjectDn {
+    <#
+    .SYNOPSIS
+        Turns whatever the console holds for an object - normally a
+        sAMAccountName - into a distinguishedName.
+    .DESCRIPTION
+        NOT every AD cmdlet takes the same kind of identity, and the split is
+        not obvious:
+
+          Get-ADUser, Set-ADUser, Enable-ADAccount, Unlock-ADAccount,
+          Set-ADAccountPassword, Add-ADGroupMember -Members
+              accept a sAMAccountName.
+
+          Move-ADObject, Remove-ADObject and the other *-ADObject cmdlets
+              DO NOT. Their -Identity takes a distinguishedName, a GUID or a
+              SID, and nothing else.
+
+        Passing a sAMAccountName to Move-ADObject fails with
+        "Cannot find an object with identity: 'dv3' under: 'DC=LAB,DC=LOCAL'",
+        which reads exactly like a missing object and sends the operator
+        hunting for a user that is sitting right there. Every caller of an
+        *-ADObject cmdlet resolves through here first.
+    .OUTPUTS
+        The distinguishedName. Throws a message naming the identity if the
+        object cannot be found.
+    #>
+    param($Credential, [Parameter(Mandatory = $true)][string] $Identity)
+
+    $value = $Identity.Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) { throw 'No object was given to resolve.' }
+
+    # Already a DN - the only form with both an '=' and a ',' in it. Passed
+    # straight through so a caller that already did the work is not charged
+    # for a second lookup.
+    if ($value -match '^\s*[A-Za-z]+=.+,.+$') { return $value }
+
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
+    $escaped = ConvertTo-DsmtLdapEscape -Value $value
+
+    # One search across users, groups and computers: the console can hold any
+    # of the three, and the caller should not have to say which.
+    $found = @(Get-ADObject @ad -LDAPFilter ('(sAMAccountName=' + $escaped + ')') `
+                            -Properties 'distinguishedName' -ErrorAction SilentlyContinue)
+
+    if ($found.Count -eq 0) {
+        # A computer account is stored with a trailing $ - accept the bare name.
+        $found = @(Get-ADObject @ad -LDAPFilter ('(sAMAccountName=' + $escaped + '$)') `
+                                -Properties 'distinguishedName' -ErrorAction SilentlyContinue)
+    }
+
+    if ($found.Count -eq 0) {
+        throw ('No directory object found for "' + $value + '".')
+    }
+    if ($found.Count -gt 1) {
+        throw ('"' + $value + '" matches ' + [string]$found.Count + ' objects; it cannot be resolved unambiguously.')
+    }
+
+    return [string]$found[0].DistinguishedName
+}
+
 function Get-DsmtObjectParent {
     <#
     .SYNOPSIS
@@ -537,30 +597,33 @@ function Get-DsmtObjectParent {
     #>
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity)
 
-    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
-    $obj = Get-ADObject @ad -Filter { SamAccountName -eq $Identity } -Properties 'distinguishedName' -ErrorAction SilentlyContinue
-
-    if ($null -eq $obj) {
-        # Not every identity is a sAMAccountName - a DN was passed straight in.
-        try {
-            $obj = Get-ADObject @ad -Identity $Identity -Properties 'distinguishedName' -ErrorAction Stop
-        } catch {
-            return ''
-        }
+    $dn = ''
+    try {
+        $dn = Resolve-DsmtObjectDn -Credential $Credential -Identity $Identity
+    } catch {
+        return ''
     }
-    if ($null -eq $obj) { return '' }
+    if ([string]::IsNullOrWhiteSpace($dn)) { return '' }
 
-    $dn = [string]$obj.DistinguishedName
     $comma = $dn.IndexOf(',')
     if ($comma -lt 0) { return '' }
     return $dn.Substring($comma + 1)
 }
 
 function Move-DsmtObject {
+    <#
+    .SYNOPSIS
+        Moves a user, group or computer into another OU.
+    .DESCRIPTION
+        Move-ADObject does not accept a sAMAccountName, so the identity is
+        resolved to a distinguishedName first. See Resolve-DsmtObjectDn.
+    #>
     param($Credential, [Parameter(Mandatory = $true)][string] $Identity, [Parameter(Mandatory = $true)][string] $TargetOu)
 
+    $dn = Resolve-DsmtObjectDn -Credential $Credential -Identity $Identity
+
     $ad = Get-DsmtAdParams -Credential $Credential -Intent 'write'
-    Move-ADObject @ad -Identity $Identity -TargetPath $TargetOu -ErrorAction Stop
+    Move-ADObject @ad -Identity $dn -TargetPath $TargetOu -ErrorAction Stop
 }
 
 function Add-DsmtGroupMember {

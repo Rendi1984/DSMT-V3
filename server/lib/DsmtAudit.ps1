@@ -179,11 +179,16 @@ function Get-DsmtAuditEntries {
             }
         }
 
+        # Kept in step with Get-DsmtSqlAudit by hand - the two stores answer
+        # the same filter names, and a filter that means one thing in SQL and
+        # another in the file log would be worse than no filter at all.
         switch ($Filter) {
             'Users'      { if ($e.category -ne 'user')  { $keep = $false } }
             'Groups'     { if ($e.category -ne 'group') { $keep = $false } }
             'Passwords'  { if ($e.action -notmatch '(?i)password') { $keep = $false } }
             'Deletions'  { if ($e.action -notmatch '(?i)delet')    { $keep = $false } }
+            'System'     { if ($e.category -ne 'session') { $keep = $false } }
+            'Failed'     { if ($e.result -eq 'Success')  { $keep = $false } }
             default      { }
         }
 

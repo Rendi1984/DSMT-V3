@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.14.0** | 2026-08-06 | **Move OU never worked** - the identity was passed in a form `Move-ADObject` does not accept; plus System and Failed filters on the audit log | Restart + refresh |
 | **1.13.3** | 2026-08-06 | PowerShell files now ship with Windows (CRLF) line endings | Re-copy files |
 | **1.13.2** | 2026-08-06 | Installer parameters could be lost in the elevation relaunch; it now shows what it received and what it forwards | Re-run installer |
 | **1.13.1** | 2026-07-31 | The two `.cmd` wrappers are removed - both had drifted, and one silently overrode the saved settings | Copy files |
@@ -54,7 +55,68 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.13.3**. The last tag is `v1.4.0`.
+`main` carries **1.14.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.14.0 — 2026-08-06
+
+### Fixed - Move OU could never have worked
+
+Reported from the lab: moving a user reported
+`Cannot find an object with identity: 'dv3' under: 'DC=LAB,DC=LOCAL'`, and
+moving the account back by hand changed nothing - because the error was never
+about where the object was.
+
+**Not every AD cmdlet accepts the same kind of identity, and the split is not
+obvious.** `Get-ADUser`, `Enable-ADAccount`, `Unlock-ADAccount`,
+`Set-ADAccountPassword` and `Add-ADGroupMember -Members` all take a
+sAMAccountName. The `*-ADObject` cmdlets **do not**: `Move-ADObject -Identity`
+accepts a distinguishedName, a GUID or a SID, and nothing else.
+
+DSMT holds a sAMAccountName - `dv3` - and handed it straight to
+`Move-ADObject`. The resulting message reads exactly like a missing user and
+sends the operator hunting for an account that is sitting in front of them.
+
+- New `Resolve-DsmtObjectDn` turns whatever the console holds into a
+  distinguishedName: passes a DN straight through, otherwise searches users,
+  groups **and** computers by sAMAccountName, and throws a message naming the
+  identity when there is no match or more than one.
+- `Move-DsmtObject` resolves before calling `Move-ADObject`.
+- `Get-DsmtObjectParent` (which records where a move came *from*, so the move
+  can be undone) used the same wrong assumption and is now built on the same
+  resolver. It was silently returning nothing, so **Move OU records written
+  before this version cannot be undone** even though 1.11.0 said they could.
+- `Remove-DsmtObject` already resolved to a DN before calling
+  `Remove-ADObject`; checked, unchanged.
+
+**Why the review missed it:** every call in `DsmtDirectory.ps1` looked
+identical - `-Identity $Identity` - and only the cmdlet on the other side
+differs. It cannot be found by reading for consistency, only by running it.
+This is the first defect the lab session produced, and it argues for finishing
+that session before building anything else.
+
+### Audit log: two filters that answer the questions people actually ask
+
+`System` and `Failed` join the filter chips, in front of the existing ones.
+
+- **System** - what was done to **DSMT itself** rather than to the directory:
+  sign in and out, the idle timeout, the listening port, the identity mode,
+  the database, the KDS root key. They all carry the `session` category, which
+  is what separates them from directory work.
+- **Failed** - everything that did not succeed. Deliberately `Result <>
+  'Success'` rather than `Result = 'Failed'`, so it also catches **Denied**
+  (an AD permissions problem, not a DSMT one - the most useful thing on the
+  screen when someone reports "it will not let me") and the **Partial** result
+  a bulk action returns when some targets worked and others did not.
+
+Both are implemented in the SQL reader and the JSONL reader, so the filter
+means the same thing whether or not a database is configured.
+
+Files: `server/lib/DsmtDirectory.ps1`, `server/lib/DsmtSql.ps1`,
+`server/lib/DsmtAudit.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`web/app.js`. **Copy `server/lib/*.ps1` and restart `Start-DSMT.ps1`**, then
+copy `web/app.js` and hard-refresh.
 
 ---
 

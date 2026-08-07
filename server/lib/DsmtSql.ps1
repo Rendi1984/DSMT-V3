@@ -519,6 +519,21 @@ function Get-DsmtSqlAudit {
         'Groups'    { $where += 'Category = @cat';        $params['cat'] = 'group' }
         'Passwords' { $where += 'Action LIKE @actionLike'; $params['actionLike'] = '%password%' }
         'Deletions' { $where += 'Action LIKE @actionLike'; $params['actionLike'] = '%delet%' }
+
+        # The two categories an operator actually asks for.
+        #
+        # 'System' is everything done TO DSMT rather than to the directory -
+        # sign in and out, the idle timeout, the port, the identity mode, the
+        # database, the KDS root key. They are all written with Category
+        # 'session', which is what separates them from directory work.
+        'System'    { $where += 'Category = @cat';        $params['cat'] = 'session' }
+
+        # 'Failed' is anything that did not succeed: Failed, Denied, and the
+        # Partial results a bulk action produces. Denied matters most - it is
+        # an AD permissions problem, not a DSMT one - so it must not be
+        # filtered out by asking only for 'Failed'.
+        'Failed'    { $where += "Result <> 'Success'" }
+
         default     { }
     }
 

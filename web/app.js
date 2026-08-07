@@ -76,7 +76,11 @@ var GROUP_COLS = [
   { key: 'members', label: 'Members',     on: true }
 ];
 
-var AUDIT_FILTERS = ['All', 'Users', 'Groups', 'Passwords', 'Deletions'];
+/* Audit filters. 'System' is what was done to DSMT itself rather than to the
+   directory; 'Failed' is everything that did not succeed, including Denied -
+   which is an AD permissions problem, not a DSMT one. Both are answered
+   identically by the SQL and the file-log readers. */
+var AUDIT_FILTERS = ['All', 'System', 'Failed', 'Users', 'Groups', 'Passwords', 'Deletions'];
 
 /* Audit time windows. `hours` is how far back to look; null means no bound.
    'custom' is driven by the two datetime inputs instead. */
