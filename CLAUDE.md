@@ -347,6 +347,20 @@ cause. Three shapes:
   and no amount of code reading will find it - so when a script misbehaves
   identically for every parameter, test it on a second machine before changing
   a line.
+- **[Shape 3] A cast that throws inside a hashtable literal loses the whole
+  object.** 1.15.0 added two attribute reads to the group mapping, one of them
+  `[int]$AdGroup.adminCount -eq 1`. **AD returns an unset attribute as an
+  empty `ADPropertyValueCollection`, not `$null`**, and casting that to `[int]`
+  throws. Because the cast sat inside the `[ordered]@{ }` literal that builds
+  the row, the failure did not lose one field - the entire assignment failed,
+  the mapping function returned nothing, and the Groups tab rendered blank
+  rows with no error. The visible symptom was three steps away:
+  `GET /api/groups/undefined`.
+  **The pattern: compute anything that can throw BEFORE the literal, into its
+  own variable, wrapped.** A hashtable literal is all-or-nothing, and "all"
+  includes the fields that were fine. This applies to every
+  `ConvertTo-Dsmt*` mapping function, which is exactly where new attributes
+  get added.
 - **[Shape 2] "The server won't start."** The three preflight checks in
   `Start-DSMT.ps1` each name their own fix: the RSAT `ActiveDirectory` module
   is missing (`Install-WindowsFeature RSAT-AD-PowerShell`), the domain is

@@ -446,9 +446,31 @@ function ConvertTo-DsmtGroup {
     $typeLabel = $category
     if ($category -and $scopeLabel) { $typeLabel = $category + ' - ' + $scopeLabel }
 
+    # BOTH of these are wrapped, and the reason is a real bug rather than
+    # caution: AD returns an absent attribute as an EMPTY
+    # ADPropertyValueCollection, not as $null. Casting that to [int] throws,
+    # and because these values sit inside the [ordered]@{ } literal below, a
+    # throw here does not just lose one field - the whole hashtable assignment
+    # fails, ConvertTo-DsmtGroup returns nothing, and the Groups tab renders
+    # blank rows with no error anywhere. That is exactly what 1.15.0 shipped.
     $sid = ''
-    if ($null -ne $AdGroup.objectSid) { $sid = [string]$AdGroup.objectSid.Value }
-    if ([string]::IsNullOrWhiteSpace($sid)) { $sid = [string]$AdGroup.objectSid }
+    try {
+        if ($null -ne $AdGroup.objectSid) {
+            $sid = [string]$AdGroup.objectSid.Value
+            if ([string]::IsNullOrWhiteSpace($sid)) { $sid = [string]$AdGroup.objectSid }
+        }
+    } catch { $sid = '' }
+
+    $isPrivileged = $false
+    try { $isPrivileged = Test-DsmtPrivilegedGroup -Sid $sid } catch { $isPrivileged = $false }
+
+    $isProtected = $false
+    try {
+        $ac = $AdGroup.adminCount
+        if ($null -ne $ac -and -not [string]::IsNullOrWhiteSpace([string]$ac)) {
+            $isProtected = ([int][string]$ac -eq 1)
+        }
+    } catch { $isProtected = $false }
 
     $map = [ordered]@{
         id       = [string]$AdGroup.objectGUID
@@ -461,9 +483,9 @@ function ConvertTo-DsmtGroup {
         category = $category
         scope    = $scopeLabel
         members  = $memberCount
-        sid      = $sid
-        privileged = (Test-DsmtPrivilegedGroup -Sid $sid)
-        protected  = ([int]$AdGroup.adminCount -eq 1)
+        sid        = $sid
+        privileged = $isPrivileged
+        protected  = $isProtected
         source   = 'AD'
     }
 

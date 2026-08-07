@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.18.1** | 2026-08-07 | **Fixes the Groups tab**, which 1.15.0 broke; the profile window read the wrong field so every section was empty; a Copy button on the generated password | Restart + refresh |
 | **1.18.0** | 2026-08-06 | Clicking a name opens a full profile window - identity, organisation, account and every group membership | Refresh |
 | **1.17.0** | 2026-08-06 | **Tools -> AD health**: replication the way `replsum` reads, the five FSMO holders and whether each answers, per-controller ports and clock drift | Restart + refresh |
 | **1.16.0** | 2026-08-06 | **DSMT now installs as a Windows service by default**, so it survives a closed window and a sign-out | Re-run installer |
@@ -59,7 +60,59 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.18.0**. The last tag is `v1.4.0`.
+`main` carries **1.18.1**. The last tag is `v1.4.0`.
+
+---
+
+## 1.18.1 — 2026-08-07
+
+Three faults from the lab, one of them mine from two versions ago.
+
+### Fixed - the Groups tab showed one blank row
+
+**1.15.0 broke it**, and the way it broke is worth writing down.
+
+Adding the privileged-group filter meant reading two more attributes on every
+group. The mapping did `[int]$AdGroup.adminCount -eq 1` - and **Active
+Directory returns an attribute that is not set as an empty
+`ADPropertyValueCollection`, not as `$null`**. Casting that to `[int]` throws.
+
+The cast sat inside the `[ordered]@{ }` literal that builds the whole row, so
+the throw did not lose one field: **the entire hashtable assignment failed**,
+`ConvertTo-DsmtGroup` returned nothing, and the tab rendered blank rows. The
+detail pane then asked for `/api/groups/undefined`, which is the error in the
+log - a symptom three steps from the cause.
+
+Both new reads are now wrapped and fall back to a safe default. The pattern to
+remember: **a cast inside a hashtable literal takes the whole object with it
+when it fails.** Compute values that can throw *before* the literal.
+
+### Fixed - the profile window was empty and Enable did not work
+
+`GET /api/users/<id>` answers `{ ok, item }`. The profile window read the
+response object directly instead of `res.item`, so every field was
+`undefined`: all four sections said "nothing recorded in the directory", and
+the button could not tell whether the account was enabled or disabled.
+Pressing an action then said *"select at least one row first"*, because the id
+it looked up was undefined too.
+
+Fixed, and the actions now use the **grid row's** id rather than one from the
+detail payload - the actions operate on the list, so that is the id that has
+to match.
+
+### The generated password can be copied
+
+When a new user is created with no password, DSMT generates one and shows it
+once. There was no way to get it out except selecting the text by hand.
+
+There is now a **Copy password** button. It reads the value from the element
+on screen rather than from a captured variable, so what lands on the clipboard
+is provably what is displayed. The password is still never written to the
+audit log, and still shown only once.
+
+Files: `server/lib/DsmtDirectory.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`web/app.js`. **Copy `server/lib/*.ps1` and restart**, then `web/app.js` and
+hard-refresh.
 
 ---
 

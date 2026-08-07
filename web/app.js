@@ -1395,8 +1395,20 @@ function showGeneratedPassword(password) {
     hideConfirm: true,
     cancelLabel: 'Done',
     body: '<p class="dialog-note">DSMT generated this password because none was supplied. ' +
-          'It is shown once and is not written to the audit log - copy it now and hand it over securely.</p>' +
-          '<div class="secret">' + esc(password) + '</div>'
+          '<strong>It is shown once</strong> and is deliberately never written to the audit log - ' +
+          'copy it now and hand it over securely.</p>' +
+          '<div class="secret" id="genPassword">' + esc(password) + '</div>' +
+          '<div class="set-actions">' +
+            '<button class="btn btn-primary" type="button" id="copyGenPassword">Copy password</button>' +
+          '</div>' +
+          '<div class="set-result" id="genPasswordResult"></div>',
+    onOpen: function () {
+      $('copyGenPassword').addEventListener('click', function () {
+        // Reads the element rather than closing over the string, so what is
+        // copied is provably what is on screen.
+        copyText($('genPassword').textContent, 'genPasswordResult');
+      });
+    }
   });
 }
 
@@ -2234,9 +2246,18 @@ function openProfile(id) {
       var box = el('.dialog');
       if (box) { box.className = 'dialog dialog-wide elev-lg'; }
 
-      api(path).then(function (d) {
+      api(path).then(function (res) {
+        // The endpoint wraps the object: { ok, item }. Reading `res` directly
+        // gave a profile where every field was undefined, so every section
+        // said "nothing recorded" and the Enable/Disable button could not
+        // tell which state the account was in.
+        var d = res.item;
+        if (!d) {
+          $('dialogBody').innerHTML = '<div class="error-box"><strong>The directory returned no object.</strong></div>';
+          return;
+        }
         $('dialogBody').innerHTML = profileHtml(d, isGroup);
-        wireProfile(d, isGroup);
+        wireProfile(d, isGroup, id);
       }).catch(function (err) {
         $('dialogBody').innerHTML = '<div class="error-box"><strong>Could not read this object.</strong>' +
                                     esc(explainApiError(err.message)) + '</div>';
@@ -2317,7 +2338,7 @@ function profileHtml(d, isGroup) {
     '<div class="set-actions profile-actions" id="profileActions"></div>';
 }
 
-function wireProfile(d, isGroup) {
+function wireProfile(d, isGroup, rowId) {
   // The same actions the detail pane offers, so there is one set of verbs in
   // the console and they behave identically wherever they are pressed.
   var actions = isGroup
@@ -2338,8 +2359,12 @@ function wireProfile(d, isGroup) {
       // Select the row first so the existing action handlers act on it, then
       // close - the actions open their own dialogs and two stacked dialogs
       // would fight over the backdrop.
-      var row = state.rows.filter(function (r) { return r.id === d.id; });
-      selectRow(d.id, true);
+      // The grid row's own id, not the one in the detail payload: the actions
+      // operate on the list, and an id that does not match anything there
+      // fails with "select at least one row first" - which is true and
+      // useless.
+      var row = state.rows.filter(function (r) { return r.id === rowId; });
+      selectRow(rowId, true);
       closeDialog();
       var box = el('.dialog');
       if (box) { box.className = 'dialog elev-lg'; }
