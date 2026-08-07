@@ -1445,7 +1445,27 @@ try {
 Write-Step 'Start DSMT'
 
 if (-not $StartWhenDone) {
-    Write-Skip 'Not requested. Re-run with -StartWhenDone to start it as soon as the install finishes.'
+    # Name the command that starts what was just registered. The old message
+    # only mentioned re-running the installer, so an operator who had a
+    # perfectly good service sitting there stopped reading and started
+    # Start-DSMT.ps1 by hand in a window - the exact thing the service exists
+    # to avoid. A skip message has to say what to do instead, not only what
+    # was not done.
+    switch ($script:StartMode) {
+        'service' {
+            Write-Skip 'Not started. The service is registered and ready:'
+            Write-Info ('    Start-Service ' + $serviceName)
+            Write-Info 'Or re-run this installer with -StartWhenDone.'
+        }
+        'task' {
+            Write-Skip 'Not started. The task is registered and starts at the next boot:'
+            Write-Info '    Start-ScheduledTask "DSMT Console"'
+            Write-Info 'Or re-run this installer with -StartWhenDone.'
+        }
+        default {
+            Write-Skip 'Not requested. Re-run with -StartWhenDone to start it as soon as the install finishes.'
+        }
+    }
 } elseif ($script:Outstanding.Count -gt 0) {
     Write-Skip 'Skipped - fix the outstanding items first, then start it.'
 } else {
@@ -1527,7 +1547,14 @@ if ($script:Outstanding.Count -eq 0) {
     # one that is not, and until now the installer never mentioned it.
     Write-Host ''
     switch ($script:StartMode) {
-        'service' { Write-Host '  Runs unattended: registered as a Windows service.' -ForegroundColor Green }
+        'service' {
+            Write-Host '  Runs unattended: registered as a Windows service.' -ForegroundColor Green
+            if (-not $StartWhenDone) {
+                Write-Host '  It is NOT running yet. Start it, then this window can be closed:' -ForegroundColor Yellow
+                Write-Host ('    Start-Service ' + $serviceName) -ForegroundColor Cyan
+                Write-Host '  Do not run Start-DSMT.ps1 by hand as well - two instances collide on the port.' -ForegroundColor DarkGray
+            }
+        }
         'task'    { Write-Host '  Runs unattended: registered as a scheduled task.' -ForegroundColor Green }
         default {
             Write-Host '  NOT registered to run unattended.' -ForegroundColor Yellow

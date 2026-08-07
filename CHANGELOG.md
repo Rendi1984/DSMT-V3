@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.19.1** | 2026-08-07 | The installer now names `Start-Service DSMT` when it registers a service it did not start | Re-run installer |
 | **1.19.0** | 2026-08-07 | **Groups tab fixed for real**; the AD health clock reads again; confirmations name the target; profile actions moved above the fold | Restart + refresh |
 | **1.18.3** | 2026-08-07 | The service now runs as **LocalSystem** by default - it was asking a Domain Admin to store their password | Re-run installer |
 | **1.18.2** | 2026-08-07 | AD health showed one row of blanks per table instead of no rows, and never said why a section was empty | Restart + refresh |
@@ -63,7 +64,43 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.19.0**. The last tag is `v1.4.0`.
+`main` carries **1.19.1**. The last tag is `v1.4.0`.
+
+---
+
+## 1.19.1 — 2026-08-07
+
+**The installer registered a service, did not start it, and never said how.**
+
+Asked from the lab: *does the window still have to stay open?* It does not,
+and has not since 1.16.0 - but the installer's own output led straight to
+running `Start-DSMT.ps1` by hand anyway.
+
+Step 13 said only:
+
+    [skip] Not requested. Re-run with -StartWhenDone to start it as soon as
+           the install finishes.
+
+Two steps earlier it had registered the `DSMT` service successfully. So the
+service was sitting there, ready, stopped - and the only instruction on screen
+was to run the whole installer again. An operator who wants the console
+working in the next thirty seconds runs the start script in a window instead,
+which is exactly what the service exists to avoid.
+
+Now, when a service or task was registered but not started, the step names the
+one command that starts it:
+
+    [skip] Not started. The service is registered and ready:
+               Start-Service DSMT
+           Or re-run this installer with -StartWhenDone.
+
+and the closing summary repeats it, with the warning that matters:
+**do not run `Start-DSMT.ps1` by hand as well - two instances collide on the
+port.**
+
+**A skip message has to say what to do instead, not only what was not done.**
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtCommon.ps1` (version).
 
 ---
 
