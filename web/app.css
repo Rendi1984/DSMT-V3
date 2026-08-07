@@ -625,6 +625,12 @@ body { overflow: hidden; }
 }
 .tool-check input { margin-top: 3px; flex: none; }
 
+/* A wide table inside a settings card scrolls in its own box - the page body
+   must never scroll sideways. */
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; width: 100%; }
+.scroll-x .table { min-width: 620px; }
+@media (max-width: 640px) { .scroll-x .table { min-width: 0; } }
+
 .tool-table { margin: 0; }
 .tool-table td, .tool-table th { font-size: 13px; }
 

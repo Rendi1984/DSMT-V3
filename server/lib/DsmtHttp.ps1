@@ -1554,6 +1554,15 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/tools/adhealth$' {
+                if ($method -ne 'GET') { break }
+                # Deliberately slow and deliberately on demand: several remote
+                # calls per domain controller. Never called on page load.
+                Write-DsmtLog -Message ($session.Account + ' ran the AD health checks')
+                Send-DsmtJson -Response $Response -Data (Get-DsmtAdHealth -Credential $session.Credential)
+                return
+            }
+
             '^/api/health$' {
                 if ($method -ne 'GET') { break }
                 Send-DsmtJson -Response $Response -Data (Get-DsmtHealth -Session $session)

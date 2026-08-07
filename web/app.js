@@ -1717,7 +1717,8 @@ function storageLine() {
 // ---------------------------------------------------------------------------
 
 var TOOLS = [
-  { key: 'gmsa', label: 'gMSA', hint: 'Service account for DSMT', render: renderGmsaTool }
+  { key: 'gmsa',     label: 'gMSA',      hint: 'Service account for DSMT', render: renderGmsaTool },
+  { key: 'adhealth', label: 'AD health', hint: 'Replication, FSMO, clocks', render: renderAdHealthTool }
 ];
 
 var TOOL_KEY = 'dsmt.tools.current';
@@ -2191,6 +2192,194 @@ function wireGmsa() {
       copyText($('gmsaInstallCmd').textContent, '');
     });
   }
+}
+
+/* ---------------------------------------------------------------------------
+   AD health.
+
+   Never auto-runs. Every other screen in this console loads its data on open;
+   this one does not, because it makes several remote calls per domain
+   controller and a slow tab that nobody asked for is how a diagnostic tool
+   becomes the thing people blame.
+   --------------------------------------------------------------------------- */
+
+function renderAdHealthTool() {
+  $('toolsBody').innerHTML =
+    '<section class="set-card">' +
+      '<h2 class="set-h">Active Directory health</h2>' +
+      '<p class="dialog-note">Different question from <strong>Settings -> Health</strong>, which asks ' +
+      'whether DSMT can reach the directory. This asks whether the directory itself is well: ' +
+      'replication, the FSMO roles, per-controller reachability and clock drift.</p>' +
+      '<p class="dialog-note">It makes several remote calls to every domain controller, so it runs only ' +
+      'when you ask. Nothing here changes anything - it is safe to repeat.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-primary" type="button" id="runAdHealth">Run the checks</button>' +
+        '<span class="audit-stamp" id="adhStamp"></span>' +
+      '</div>' +
+      '<div class="set-result" id="adhResult"></div>' +
+    '</section>' +
+    '<div id="adhBody"></div>';
+
+  $('runAdHealth').addEventListener('click', loadAdHealth);
+
+  // Repainted from the last run if there is one, so switching away and back
+  // does not silently throw away a report that took thirty seconds.
+  if (state.adHealth) { paintAdHealth(state.adHealth); }
+}
+
+function loadAdHealth() {
+  var btn = $('runAdHealth');
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+  setResult('adhResult', 'Querying every domain controller. This can take a while on a large domain.', true);
+  $('adhBody').innerHTML = '';
+
+  api('/api/tools/adhealth').then(function (data) {
+    state.adHealth = data;
+    setResult('adhResult', '', true);
+    paintAdHealth(data);
+  }).catch(function (err) {
+    $('adhBody').innerHTML = '<div class="error-box"><strong>The checks could not run.</strong>' +
+      esc(explainApiError(err.message)) + '</div>';
+  }).then(function () {
+    btn.disabled = false;
+    btn.textContent = 'Run the checks again';
+  });
+}
+
+function adhWord(status) {
+  if (status === 'ok') { return 'OK'; }
+  if (status === 'warn') { return 'Attention'; }
+  return 'Failing';
+}
+
+function adhCard(title, note, bodyHtml) {
+  return '<section class="set-card">' +
+           '<h2 class="set-h">' + esc(title) + '</h2>' +
+           (note ? '<p class="dialog-note">' + note + '</p>' : '') +
+           bodyHtml +
+         '</section>';
+}
+
+function paintAdHealth(d) {
+  var stamp = $('adhStamp');
+  if (stamp) { stamp.textContent = 'Checked ' + formatStamp(d.checkedAt); }
+
+  var head =
+    '<section class="set-card">' +
+      '<div class="set-state set-state-' + esc(d.overall) + '">' +
+        '<div class="set-state-head"><span class="set-state-dot"></span>' +
+        '<span>' + esc(adhWord(d.overall)) + '</span></div>' +
+        '<p class="muted-sm">' +
+          (d.overall === 'ok'
+            ? 'Replication, roles, reachability and clocks all look healthy.'
+            : 'Something needs attention. The worst individual result decides this verdict - it is never an average.') +
+        '</p>' +
+      '</div>' +
+      (d.error ? '<div class="error-box"><strong>Part of the report could not be produced.</strong>' +
+                 esc(d.error) + '</div>' : '') +
+    '</section>';
+
+  // ---- replication, laid out the way replsum is read: worst first ----
+  var repl = asArray(d.replication);
+  var replRows = repl.length
+    ? '<div class="scroll-x"><table class="table dsmt-table tool-table"><thead><tr>' +
+      '<th>Controller</th><th>Partners</th><th>Failures</th><th>Last success</th><th>Delta</th><th>Note</th>' +
+      '</tr></thead><tbody>' +
+      repl.map(function (r) {
+        var delta = (r.largestGapMin === null || r.largestGapMin === undefined)
+          ? '-' : adhDelta(r.largestGapMin);
+        return '<tr>' +
+          '<td data-label="Controller" class="cell-name">' + esc(r.name) + '</td>' +
+          '<td data-label="Partners" class="cell-muted">' + esc(String(r.partners)) + '</td>' +
+          '<td data-label="Failures" class="' + (r.worstFailures > 0 ? 'res-other' : 'res-success') + '">' +
+            esc(String(r.worstFailures)) + '</td>' +
+          '<td data-label="Last success" class="cell-muted">' + esc(r.lastSuccess || '-') + '</td>' +
+          '<td data-label="Delta" class="cell-muted">' + esc(delta) + '</td>' +
+          '<td data-label="Note" class="cell-wrap cell-muted">' + esc(r.note || '') + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table></div>'
+    : '<p class="muted-sm">No replication data was returned.</p>';
+
+  var replCard = adhCard('Replication', 
+    'One row per controller, worst first - the same view as <code>repadmin /replsum</code>, ' +
+    'built from objects rather than parsed console output. <strong>Delta</strong> is the time since ' +
+    'the most recent successful inbound replication.', replRows);
+
+  // ---- FSMO ----
+  var fsmo = asArray(d.fsmo);
+  var fsmoRows = fsmo.length
+    ? '<div class="health-list">' + fsmo.map(function (r) {
+        return '<div class="health-item health-' + esc(r.status) + '">' +
+                 '<div class="health-item-head"><span class="set-state-dot"></span>' +
+                 '<span class="health-name">' + esc(r.role) + '</span>' +
+                 '<span class="health-verdict">' + esc(r.scope) + '</span></div>' +
+                 '<p class="health-detail">' + esc(r.holder || 'unknown') + '</p>' +
+                 (r.note ? '<p class="health-fix">' + esc(r.note) + '</p>' : '') +
+               '</div>';
+      }).join('') + '</div>'
+    : '<p class="muted-sm">The role holders could not be read.</p>';
+
+  var fsmoCard = adhCard('FSMO roles',
+    'Where each role sits, <strong>and whether that holder answers</strong>. A role pointing at a ' +
+    'controller that was decommissioned without transferring it looks correct in every list, and is ' +
+    'the actual fault.', fsmoRows);
+
+  // ---- controllers ----
+  var dcs = asArray(d.controllers);
+  var dcRows = dcs.length
+    ? '<div class="scroll-x"><table class="table dsmt-table tool-table"><thead><tr>' +
+      '<th>Controller</th><th>Site</th><th>LDAP</th><th>LDAPS</th><th>GC</th><th>Clock</th><th>Note</th>' +
+      '</tr></thead><tbody>' +
+      dcs.map(function (r) {
+        var skew = (r.skew === null || r.skew === undefined) ? '-' : (r.skew + ' min');
+        return '<tr>' +
+          '<td data-label="Controller" class="cell-name">' + esc(r.name) + '</td>' +
+          '<td data-label="Site" class="cell-muted">' + esc(r.site || '-') + '</td>' +
+          '<td data-label="LDAP" class="' + (r.ldap ? 'res-success' : 'res-other') + '">' + (r.ldap ? 'open' : 'closed') + '</td>' +
+          '<td data-label="LDAPS" class="cell-muted">' + (r.ldaps ? 'open' : 'closed') + '</td>' +
+          '<td data-label="GC" class="' + (!r.isGc ? 'cell-muted' : (r.gc ? 'res-success' : 'res-other')) + '">' +
+            (!r.isGc ? 'n/a' : (r.gc ? 'open' : 'closed')) + '</td>' +
+          '<td data-label="Clock" class="cell-muted">' + esc(skew) + '</td>' +
+          '<td data-label="Note" class="cell-wrap cell-muted">' + esc(r.note || '') + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table></div>'
+    : '<p class="muted-sm">No controllers were returned.</p>';
+
+  var dcCard = adhCard('Domain controllers',
+    'LDAP 389, LDAPS 636 and Global Catalog 3268, plus clock drift against this host. ' +
+    '<strong>A closed 636 is information, not a fault</strong> - plenty of healthy domains do not ' +
+    'publish LDAPS. Kerberos rejects a skew past ' + esc(String(d.skewBad)) + ' minutes, and the ' +
+    'symptom never mentions time.', dcRows);
+
+  // ---- explicit failures, only when there are any ----
+  var fails = asArray(d.failures);
+  var failCard = '';
+  if (fails.length) {
+    failCard = adhCard('Replication failures',
+      'Recorded by Active Directory itself. These are not inferred.',
+      '<div class="scroll-x"><table class="table dsmt-table tool-table"><thead><tr>' +
+      '<th>Controller</th><th>Partner</th><th>Count</th><th>Since</th><th>Reason</th>' +
+      '</tr></thead><tbody>' +
+      fails.map(function (f) {
+        return '<tr>' +
+          '<td data-label="Controller" class="cell-name">' + esc(f.server) + '</td>' +
+          '<td data-label="Partner" class="cell-muted cell-wrap">' + esc(f.partner) + '</td>' +
+          '<td data-label="Count" class="res-other">' + esc(String(f.count)) + '</td>' +
+          '<td data-label="Since" class="cell-muted">' + esc(f.firstAt || '') + '</td>' +
+          '<td data-label="Reason" class="cell-wrap cell-muted">' + esc(f.reason || '') + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table></div>');
+  }
+
+  $('adhBody').innerHTML = head + replCard + fsmoCard + dcCard + failCard;
+}
+
+/* Minutes into something a person reads without converting. */
+function adhDelta(mins) {
+  if (mins < 60) { return mins + ' min'; }
+  if (mins < 1440) { return Math.round(mins / 60) + ' h'; }
+  return Math.round(mins / 1440) + ' d';
 }
 
 /* A bulk-action response reports per target; with one target the useful

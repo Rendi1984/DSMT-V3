@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.16.0` — matches the top entry of `CHANGELOG.md` and
+`1.17.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -280,8 +280,8 @@ Ordered by value for the effort, highest first.
       rule for the audit entries; and does an expiry-time write
       (`msLAPS-PasswordExpirationTime`, forcing a rotation) belong here too.
 
-14. **Health checks for the Active Directory services themselves.** Raised
-    2026-07-31, alongside LAPS. **Not to be built yet.**
+14. ~~Health checks for the Active Directory services themselves~~ —
+    **built in 1.17.0** as Tools -> AD health. Original note:
     Settings -> Health today answers "can DSMT reach AD". This would answer
     "is AD healthy", which is a different and much larger question. Sketch:
     - **Replication** — asked for again on 2026-07-31 as "`repadmin /replsum`".

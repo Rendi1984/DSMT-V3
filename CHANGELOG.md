@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.17.0** | 2026-08-06 | **Tools -> AD health**: replication the way `replsum` reads, the five FSMO holders and whether each answers, per-controller ports and clock drift | Restart + refresh |
 | **1.16.0** | 2026-08-06 | **DSMT now installs as a Windows service by default**, so it survives a closed window and a sign-out | Re-run installer |
 | **1.15.0** | 2026-08-06 | Sensitive-group filter on the Groups tab, matched on SID and extensible; installer stops leaving DSMT in a closable window without saying so | Restart + refresh |
 | **1.14.0** | 2026-08-06 | **Move OU never worked** - the identity was passed in a form `Move-ADObject` does not accept; plus System and Failed filters on the audit log | Restart + refresh |
@@ -57,7 +58,73 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.16.0**. The last tag is `v1.4.0`.
+`main` carries **1.17.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.17.0 — 2026-08-06
+
+**Tools -> AD health.** Settings -> Health asks whether DSMT can reach the
+directory. This asks whether the directory itself is well.
+
+### What it reports
+
+**Replication**, one row per controller, **worst first** - the same view as
+`repadmin /replsum`: partner count, worst consecutive-failure count, the most
+recent successful inbound replication, and the delta since. Over three hours
+with no success is a warning; any consecutive failure is a fault.
+
+**FSMO roles** - all five, where each sits, **and whether that holder
+answers**. Naming the holder is the easy half and the useless half: a role
+pointing at a controller that was decommissioned without transferring it looks
+correct in every list, and is the actual fault. Each holder is probed on LDAP.
+
+**Domain controllers** - LDAP 389, LDAPS 636 and Global Catalog 3268, per
+controller, plus clock drift. Three deliberate decisions:
+- **A closed 636 is information, not a fault.** Plenty of healthy domains do
+  not publish LDAPS, and failing on it would train people to ignore the page.
+- **3268 is only expected on a controller that is a GC**, read from the
+  directory rather than assumed. A GC advertising itself with 3268 closed
+  breaks logons for reasons that look nothing like DNS - that one **is** a
+  fault.
+- **Clock drift comes from the controller's own RootDSE `currentTime`**, an
+  ordinary LDAP read that takes `-Credential`. Warns at 2 minutes, fails at 5,
+  because Kerberos rejects past 5 and the symptom never mentions time.
+
+**Replication failures** - the list AD keeps itself, shown only when there is
+one. Not inferred.
+
+### Three rules the implementation follows
+
+1. **It never shells out to `repadmin`.** Everybody knows `/replsum`, and its
+   output is console text: localised, and reformatted between Windows
+   versions. Parsing it is a bug waiting for a German server.
+   `Get-ADReplicationPartnerMetadata` returns the same numbers as objects and
+   takes `-Credential`. The **display** is laid out like replsum, because that
+   is the view people know; the data never goes near a parser.
+2. **Every check degrades to "could not check, and why."** These calls need
+   rights the operator may not have, against controllers that may be down.
+   Each controller is wrapped individually: one unreachable DC reports itself
+   and leaves the rest of the report intact, and a check that cannot run is
+   never reported as green.
+3. **It never runs on page load.** Several remote calls per controller. There
+   is an explicit **Run the checks** button, the result is kept when you
+   switch away and back, and nothing it does changes anything - it is safe to
+   repeat.
+
+The overall verdict is the **worst individual result**, never an average.
+
+Files: **new** `server/lib/DsmtAdHealth.ps1`; `server/Start-DSMT.ps1` (loads
+it), `server/lib/DsmtHttp.ps1` (`GET /api/tools/adhealth`),
+`server/lib/DsmtCommon.ps1` (version), `web/app.js`, `web/app.css`.
+**Copy `server/**` including the new file and restart `Start-DSMT.ps1`**, then
+copy `web/*` and hard-refresh.
+
+Not runtime-verified: there is no PowerShell here. The parts most worth
+watching on the first run are the `currentTime` parse (an LDAP generalized
+time, parsed with `ParseExact` on the fixed 14 characters) and
+`Get-ADReplicationPartnerMetadata` on a single-controller domain, which
+correctly returns nothing and is reported as normal rather than as a fault.
 
 ---
 
