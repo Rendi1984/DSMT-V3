@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.17.0` — matches the top entry of `CHANGELOG.md` and
+`1.18.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -677,6 +677,58 @@ retrofit:**
       operator that the tool is broken.
     - It is a small change; build it with the next installer work rather than
       on its own.
+
+### Attributes: view, add, search (28) — raised 2026-08-06, NOT to be built yet
+
+Asked for directly after the profile window shipped in 1.18.0, and explicitly
+to live **inside that window**: show a user's attributes, add or set one, and
+search for a specific value - "integrated so it fits nicely and does not
+crowd the screen."
+
+**The placement is already decided and it is the right one.** The profile
+window is the only screen in the console with room for this, and putting it
+anywhere else would mean a second way to look at one user. Build it as a
+**section of that window that is closed until asked for** - the profile stays
+what it is, and the attribute list appears under it. Never as a permanently
+expanded list: a user object has well over a hundred populated attributes and
+a wall of them is the definition of crowding the screen.
+
+Three parts, in the order they should be built:
+
+28a. **View.** Every populated attribute, name and value, in the profile
+     window behind a disclosure. Points to settle first:
+     - `Get-ADUser -Properties *` returns constructed and operational
+       attributes alongside real ones; decide whether to show them and label
+       them, or hide them. Showing everything unlabelled is how someone tries
+       to "fix" `canonicalName`.
+     - Multi-valued attributes (`memberOf`, `proxyAddresses`,
+       `servicePrincipalName`) need a shape that does not become a wall.
+     - Binary and large values (`thumbnailPhoto`, `objectSid`, `userCertificate`)
+       must be shown as "binary, N bytes", never as decoded noise.
+28b. **Search by attribute.** Find every object where an attribute has a
+     value, or is empty. Naturally an LDAP filter, which the directory layer
+     already builds - `ConvertTo-DsmtLdapEscape` exists and must be used, and
+     an attribute name has to be validated against the schema rather than
+     concatenated into a filter.
+28c. **Add or change an attribute.** The dangerous third. Requirements that
+     are not negotiable:
+     - **An allow-list, or at minimum a deny-list**, kept in configuration.
+       Letting an operator write to any attribute from a web form includes
+       `userAccountControl`, `adminCount`, `sIDHistory` and
+       `msDS-AllowedToDelegateTo`. Some of those are a privilege escalation
+       with a friendly UI in front of it.
+     - **Show the old value and the new one before writing**, and audit both.
+       Every other write in DSMT records what happened; an attribute edit that
+       records only the new value is the one place the log would be useless.
+     - Clearing an attribute must be a distinct, deliberate action, not an
+       empty text box that saves.
+     - Type awareness: an integer attribute given text fails with an AD error
+       that names nothing useful. Read the schema syntax and validate first.
+
+**Do not start 28c without 28a and 28b in use**, and check in before building
+it at all - it is the first feature in this project that would let a web form
+write to an arbitrary directory attribute, and that deserves a conversation
+rather than an implementation.
 
 ### Where all of this goes — the tab count is the real constraint
 

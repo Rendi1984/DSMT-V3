@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.18.0** | 2026-08-06 | Clicking a name opens a full profile window - identity, organisation, account and every group membership | Refresh |
 | **1.17.0** | 2026-08-06 | **Tools -> AD health**: replication the way `replsum` reads, the five FSMO holders and whether each answers, per-controller ports and clock drift | Restart + refresh |
 | **1.16.0** | 2026-08-06 | **DSMT now installs as a Windows service by default**, so it survives a closed window and a sign-out | Re-run installer |
 | **1.15.0** | 2026-08-06 | Sensitive-group filter on the Groups tab, matched on SID and extensible; installer stops leaving DSMT in a closable window without saying so | Restart + refresh |
@@ -58,7 +59,55 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.17.0**. The last tag is `v1.4.0`.
+`main` carries **1.18.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.18.0 — 2026-08-06
+
+**Clicking a name opens a profile window.**
+
+The detail pane on the right is good for glancing while working down a list,
+and it has to abbreviate to fit. This is for stopping and looking at one
+object properly.
+
+- The name in the grid is now a button. **The rest of the row still selects**,
+  so the pane behaves exactly as it did - this adds a way in rather than
+  replacing one.
+- Four sections: **Identity**, **Organisation** (Directory, for a group),
+  **Account**, and every **group membership** - or every member, for a group.
+  Two columns at desk width, one on a phone.
+- The same actions the pane offers - reset password, unlock, enable/disable,
+  move OU, add to group - so there is one set of verbs in the console and they
+  behave identically wherever they are pressed.
+
+Three details that are only visible when they are wrong:
+- It reads the **same endpoint** the detail pane reads. One fetch, one shape
+  of data; a section added here never means a second API.
+- A section with nothing in it says **"nothing recorded in the directory for
+  these fields"** rather than rendering an empty list. An empty list reads as
+  "there is none", when the truth is "nothing was filled in".
+- The dialog is widened **only while a profile is open**, so every other
+  dialog keeps the measure it was designed at. Pressing an action closes the
+  profile first, because two stacked dialogs would fight over one backdrop.
+
+### Recorded, not built
+
+The attribute work asked for alongside this - view a user's attributes, add
+one, search for a specific value - is written up as **item 28** in
+`PROGRESS.md`, in three parts, and **not started**. The placement asked for is
+already the right one: a section of this profile window, closed until asked
+for. A user object has well over a hundred populated attributes, so a
+permanently expanded list is the definition of crowding the screen.
+
+The note records what has to be settled first, including the part that
+deserves a conversation rather than an implementation: writing to an arbitrary
+attribute from a web form covers `userAccountControl`, `adminCount` and
+`sIDHistory`, some of which are privilege escalation with a friendly UI in
+front. That part needs an allow-list and a check-in before anyone starts.
+
+Files: `web/app.js`, `web/app.css`, `server/lib/DsmtCommon.ps1` (version).
+Copy `web/*` and hard-refresh; no server change beyond the version.
 
 ---
 

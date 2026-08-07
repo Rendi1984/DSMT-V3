@@ -767,6 +767,15 @@ function renderTable() {
       if (c.key === 'name' && row.privileged) {
         badge = ' <span class="tag-priv" title="A well-known privileged group, matched on its SID">Privileged</span>';
       }
+
+      // The name opens the full profile. The rest of the row still selects,
+      // so the detail pane keeps working exactly as it did - this adds a way
+      // in, it does not replace one.
+      if (c.key === 'name' && text) {
+        return '<td class="' + cls + '" data-label="' + esc(c.label) + '">' +
+               '<button class="name-link" type="button" data-profile="' + esc(row.id) + '">' +
+               esc(text) + '</button>' + badge + '</td>';
+      }
       return '<td class="' + cls + '" data-label="' + esc(c.label) + '">' + esc(text) + badge + '</td>';
     }).join('');
 
@@ -2195,6 +2204,151 @@ function wireGmsa() {
 }
 
 /* ---------------------------------------------------------------------------
+   The profile window.
+
+   The detail pane on the right stays exactly as it was - this is a second way
+   in, not a replacement. The pane is for glancing while working down a list;
+   this is for stopping and looking at one object properly, and it has the
+   room for everything the pane has to abbreviate.
+
+   It reads the SAME endpoint the pane reads, so there is one fetch and one
+   shape of data. Adding a section here never means adding a second API.
+   --------------------------------------------------------------------------- */
+
+function openProfile(id) {
+  var row = state.rows.filter(function (r) { return r.id === id; })[0];
+  if (!row) { return; }
+
+  var isGroup = (state.tab === 'groups');
+  var path = (isGroup ? '/api/groups/' : '/api/users/') + encodeURIComponent(row.sam || row.dn);
+
+  openDialog({
+    title: row.name || row.sam,
+    confirmLabel: '',
+    hideConfirm: true,
+    cancelLabel: 'Close',
+    body: '<p class="muted-sm">Reading from the directory...</p>',
+    onOpen: function () {
+      // Widened only while a profile is open, so every other dialog keeps the
+      // measure it was designed at.
+      var box = el('.dialog');
+      if (box) { box.className = 'dialog dialog-wide elev-lg'; }
+
+      api(path).then(function (d) {
+        $('dialogBody').innerHTML = profileHtml(d, isGroup);
+        wireProfile(d, isGroup);
+      }).catch(function (err) {
+        $('dialogBody').innerHTML = '<div class="error-box"><strong>Could not read this object.</strong>' +
+                                    esc(explainApiError(err.message)) + '</div>';
+      });
+    },
+    onCancel: function () {
+      var box = el('.dialog');
+      if (box) { box.className = 'dialog elev-lg'; }
+    }
+  });
+}
+
+function profileRows(pairs) {
+  var rows = pairs.filter(function (p) {
+    return p[1] !== undefined && p[1] !== null && String(p[1]).length > 0;
+  }).map(function (p) {
+    return '<div class="detail-row"><dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd></div>';
+  }).join('');
+
+  // An empty section is worse than an absent one: it reads as "there is
+  // nothing here" when the truth is "nothing was filled in".
+  if (!rows) { return '<p class="muted-sm">Nothing recorded in the directory for these fields.</p>'; }
+  return '<dl class="detail-fields">' + rows + '</dl>';
+}
+
+function profileHtml(d, isGroup) {
+  var members = asArray(d.memberships);
+
+  var tags =
+    '<div class="profile-tags">' +
+      (isGroup
+        ? '<span class="tag tag-outline">' + esc(d.scope || '') + '</span>' +
+          '<span class="tag tag-neutral">' + members.length + ' members</span>'
+        : '<span class="tag tag-outline">' + esc(d.source || 'AD') + '</span>' +
+          '<span class="tag tag-neutral">' + esc(d.status || '') + '</span>' +
+          (d.privileged ? '<span class="tag-priv">Privileged</span>' : '')) +
+    '</div>';
+
+  var identity = isGroup
+    ? [['Group name', d.name], ['samAccountName', d.sam], ['Type / scope', d.type],
+       ['Description', d.description], ['Email', d.mail]]
+    : [['Display name', d.name], ['samAccountName', d.sam], ['UPN', d.upn], ['Email', d.mail]];
+
+  var org = isGroup
+    ? [['Container', d.ou], ['Managed by', d.managedBy], ['Created', d.created], ['Notes', d.notes]]
+    : [['Department', d.dept], ['Title', d.title], ['Manager', d.manager],
+       ['Office', d.office], ['Phone', d.phone], ['Company', d.company]];
+
+  var account = isGroup
+    ? [['Distinguished name', d.dn]]
+    : [['Status', d.status], ['OU / container', d.ou], ['Last logon', d.logon],
+       ['Password expiry', d.pwd], ['Created', d.created], ['Employee ID', d.employeeId],
+       ['Distinguished name', d.dn]];
+
+  var memberTitle = isGroup ? 'Members' : 'Group memberships';
+  var memberBody;
+  if (!members.length) {
+    memberBody = '<p class="muted-sm">' +
+      (isGroup ? 'This group has no members.' : 'This account is in no groups.') + '</p>';
+  } else {
+    memberBody =
+      '<ul class="member-list">' + members.map(function (m) {
+        return '<li><span class="member-dot"></span>' +
+               '<span class="member-name" title="' + esc(m.dn) + '">' + esc(m.name) + '</span>' +
+               '<span class="member-meta">' + esc(m.meta) + '</span></li>';
+      }).join('') + '</ul>';
+  }
+
+  return tags +
+    '<div class="profile-grid">' +
+      '<section class="profile-sec"><h4>Identity</h4>' + profileRows(identity) + '</section>' +
+      '<section class="profile-sec"><h4>' + (isGroup ? 'Directory' : 'Organisation') + '</h4>' +
+        profileRows(org) + '</section>' +
+      '<section class="profile-sec profile-wide"><h4>Account</h4>' + profileRows(account) + '</section>' +
+      '<section class="profile-sec profile-wide">' +
+        '<h4>' + esc(memberTitle) + ' (' + members.length + ')</h4>' + memberBody + '</section>' +
+    '</div>' +
+    '<div class="set-actions profile-actions" id="profileActions"></div>';
+}
+
+function wireProfile(d, isGroup) {
+  // The same actions the detail pane offers, so there is one set of verbs in
+  // the console and they behave identically wherever they are pressed.
+  var actions = isGroup
+    ? [['add-members', 'Add members'], ['move-ou', 'Move OU']]
+    : [['reset-password', 'Reset password'], ['unlock', 'Unlock'],
+       [d.enabled ? 'disable' : 'enable', d.enabled ? 'Disable' : 'Enable'],
+       ['move-ou', 'Move OU'], ['group-add', 'Add to group']];
+
+  $('profileActions').innerHTML = actions.map(function (a) {
+    return '<button class="btn btn-secondary" type="button" data-paction="' + a[0] + '">' +
+           esc(a[1]) + '</button>';
+  }).join('');
+
+  var buttons = $('profileActions').querySelectorAll('[data-paction]');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].onclick = function () {
+      var verb = this.getAttribute('data-paction');
+      // Select the row first so the existing action handlers act on it, then
+      // close - the actions open their own dialogs and two stacked dialogs
+      // would fight over the backdrop.
+      var row = state.rows.filter(function (r) { return r.id === d.id; });
+      selectRow(d.id, true);
+      closeDialog();
+      var box = el('.dialog');
+      if (box) { box.className = 'dialog elev-lg'; }
+      dispatchAction(verb, row);
+    };
+  }
+}
+
+/* ---------------------------------------------------------------------------
    AD health.
 
    Never auto-runs. Every other screen in this console loads its data on open;
@@ -3461,6 +3615,15 @@ function wireEvents() {
       updateBulkBar();
       return;
     }
+    // The name button opens the profile. Handled before the row handler so
+    // clicking a name does not also re-select and scroll the row.
+    var nameBtn = e.target.closest('[data-profile]');
+    if (nameBtn) {
+      e.stopPropagation();
+      openProfile(nameBtn.getAttribute('data-profile'));
+      return;
+    }
+
     var tr = e.target.closest('tr[data-id]');
     if (tr) { selectRow(tr.getAttribute('data-id')); }
   });
