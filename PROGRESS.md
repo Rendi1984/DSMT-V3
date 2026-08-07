@@ -795,6 +795,48 @@ verification against LAB.LOCAL is still outstanding — see Open task 1.
 
 ---
 
+## Next in the queue — as at 1.15.0
+
+Written down so a session with no context knows where to pick up.
+
+**Before more features: test 1.15.0 and finish the lab pass.** Two releases
+were shipped unrun (1.11.0 undo and health, 1.12.0 the gMSA tool), and the one
+lab test that has been done found Move OU broken in a way no amount of reading
+would have caught. Specifically not yet exercised:
+
+1. **1.15.0 — the Privileged chip.** Confirm it returns Domain Admins,
+   Enterprise Admins and Administrators. This is SID arithmetic
+   (`Test-DsmtPrivilegedGroup`) that has never run. On a forest-root domain
+   Schema and Enterprise Admins should appear; in a child domain they will
+   not, and that is correct.
+2. **1.15.0 — a custom group filter.** Add one in Settings -> Group filters,
+   confirm it is written to `config\dsmt.config.json` and appears as a chip.
+3. **1.14.0 — Move OU**, now that the identity is resolved to a DN.
+4. **1.11.0 — undo** on a disable, and the dash-with-a-reason on a password
+   reset row.
+5. **1.12.0 — the gMSA tool**, per the five points already listed in item 9
+   of the open tasks.
+
+**Then, in this order** - the shortlist the operator was given and agreed to:
+
+1. **AD service health: replication and FSMO** (item 14). Highest value of
+   what is left. Read the note in that item first: do **not** parse
+   `repadmin` output, and report FSMO holders with whether each one answers.
+2. **Roles from AD groups - the settings half only** (item 24). Restrict who
+   may change DSMT's own configuration. Deliberately NOT the read-only
+   directory role, which can only ever be a guard rail.
+3. **Reports** (item 19), or **the remaining Servers work** (15-18) starting
+   with services, whichever the operator prefers at that point.
+
+**Still awaiting a decision from the operator**: whether `prototype/` stays,
+and the IIS question. Both are in the sections below.
+
+**Still needs doing by hand in the GitHub UI** (the proxy blocks both): the
+`v1.13.3` tag or a later one, and deleting the stray branches
+`DSMT-1.13.0`, `v1.13.1` and `claude/new-session-6q2ky9`.
+
+---
+
 ## Notes for next session
 - **The version lives in exactly one place**: `$script:DsmtVersion` in
   `server/lib/DsmtCommon.ps1`. It reaches the sign-in footer and the About
