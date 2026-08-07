@@ -127,17 +127,26 @@
     If -ServiceAccount is given you are prompted for its password, because the
     service control manager has to store it. Without it the service runs as
     LocalSystem, which reaches AD and SQL as the computer account.
+.PARAMETER NoStart
+    Do not start DSMT when the installation finishes.
+
+    STARTING IS NOW THE DEFAULT. An installer that registers a service and
+    leaves it stopped has not finished the job - it has left the operator to
+    work out the last step from a skip message, which is exactly what
+    happened before 1.20.0.
 .PARAMETER StartWhenDone
-    Start DSMT as soon as the installation finishes - the service, the
-    scheduled task, or a plain background process, whichever was set up.
+    Kept for compatibility. Starting is the default since 1.20.0, so this
+    switch now only states the intent; -NoStart is the way to opt out.
 .PARAMETER OpenBrowser
-    Open the console in the default browser when the installation finishes.
-    On an interactive run you are asked instead, so this is only needed to
-    force it from a script.
+    Kept for compatibility. Opening the console is the default since 1.20.0;
+    -NoBrowser is the way to opt out.
 .PARAMETER NoBrowser
-    Never ask and never open a browser. Use in unattended runs. A run with no
-    console attached does not ask in any case - it cannot, and a question
-    nobody can answer would hang the install.
+    Do not open a browser when the installation finishes. Use in unattended
+    runs.
+
+    The browser only ever opens when the console actually answered on its
+    port and nothing is outstanding - opening one at a dead port teaches the
+    operator that the install failed when it did not.
 .PARAMETER NoElevate
     Do not attempt to re-launch elevated. The steps that need administrator
     rights will be reported as failures instead.
@@ -177,6 +186,7 @@ param(
     [switch] $InstallAsService,
     [switch] $NoAutoStart,
     [switch] $StartWhenDone,
+    [switch] $NoStart,
     [switch] $OpenBrowser,
     [switch] $NoBrowser,
     [switch] $NoElevate
@@ -219,6 +229,45 @@ function Write-Fail {
 function Write-Warn2 {
     param([string] $Message)
     Write-Host ('       [warn] ' + $Message) -ForegroundColor Yellow
+}
+
+function Wait-DsmtConsole {
+    <#
+    .SYNOPSIS
+        Waits until the console actually answers on its port.
+    .DESCRIPTION
+        "The service reported Running" is not the same as "DSMT is working".
+        The service host starts, launches PowerShell, which loads six library
+        files, runs three preflight checks and only then opens the listener -
+        several seconds on a cold start, and it can fail at any point in that
+        sequence while the service still says Running.
+
+        So the installer waits for the PORT, which is the only thing that
+        proves the console is serving. Without this, opening a browser
+        immediately after Start-Service shows a connection error and teaches
+        the operator that the install failed when it did not.
+    .OUTPUTS
+        $true when the port answers within the timeout.
+    #>
+    param([int] $Port, [int] $TimeoutSeconds = 45)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    while ((Get-Date) -lt $deadline) {
+        $client = New-Object System.Net.Sockets.TcpClient
+        try {
+            $async = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+            if ($async.AsyncWaitHandle.WaitOne(1500, $false)) {
+                $client.EndConnect($async)
+                return $true
+            }
+        } catch {
+        } finally {
+            try { $client.Close() } catch { }
+        }
+        Start-Sleep -Milliseconds 800
+    }
+    return $false
 }
 
 function Get-DsmtAccountKind {
@@ -1117,6 +1166,7 @@ if ($ListenAddress -eq 'localhost') {
 Write-Step 'How DSMT will run'
 
 $script:StartMode = 'none'          # none | task | service
+$script:ConsoleUp = $false          # set once the port actually answers
 $serviceName = 'DSMT'
 $startPath   = Join-Path $scriptDir 'Start-DSMT.ps1'
 $serviceExe  = Join-Path $scriptDir 'DsmtService.exe'
@@ -1444,7 +1494,11 @@ try {
 
 Write-Step 'Start DSMT'
 
-if (-not $StartWhenDone) {
+# Starting is the default. -NoStart opts out; -StartWhenDone is now a no-op
+# kept so existing command lines keep working.
+$shouldStart = (-not $NoStart)
+
+if (-not $shouldStart) {
     # Name the command that starts what was just registered. The old message
     # only mentioned re-running the installer, so an operator who had a
     # perfectly good service sitting there stopped reading and started
@@ -1463,7 +1517,7 @@ if (-not $StartWhenDone) {
             Write-Info 'Or re-run this installer with -StartWhenDone.'
         }
         default {
-            Write-Skip 'Not requested. Re-run with -StartWhenDone to start it as soon as the install finishes.'
+            Write-Skip 'Skipped with -NoStart.'
         }
     }
 } elseif ($script:Outstanding.Count -gt 0) {
@@ -1473,22 +1527,35 @@ if (-not $StartWhenDone) {
         switch ($script:StartMode) {
 
             'service' {
-                Start-Service -Name $serviceName -ErrorAction Stop
-                Start-Sleep -Seconds 3
-                $svc = Get-Service -Name $serviceName
-                if ($svc.Status -eq 'Running') {
-                    Write-Ok ('Service "' + $serviceName + '" is running')
+                $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                if ($null -ne $existing -and $existing.Status -eq 'Running') {
+                    Restart-Service -Name $serviceName -Force -ErrorAction Stop
+                    Write-Info 'Restarted the running service so it picks up these files'
                 } else {
-                    Write-Fail ('The service is ' + $svc.Status + ' rather than Running.') `
-                               ('Check ' + (Join-Path $dataPath 'dsmt-*.log') + ' - the preflight failure is recorded there.')
+                    Start-Service -Name $serviceName -ErrorAction Stop
+                }
+
+                Write-Info 'Waiting for the console to answer...'
+                if (Wait-DsmtConsole -Port $Port) {
+                    Write-Ok ('Service "' + $serviceName + '" is running and answering on port ' + $Port)
+                    $script:ConsoleUp = $true
+                } else {
+                    $svc = Get-Service -Name $serviceName
+                    Write-Fail ('The service is ' + $svc.Status + ' but nothing answered on port ' + $Port + ' within 45 seconds.') `
+                               ('Read ' + (Join-Path $dataPath 'dsmt-*.log') + ' - the preflight failure is recorded there. A port already in use by another process is the other common cause.')
                 }
             }
 
             'task' {
                 Start-ScheduledTask -TaskName 'DSMT Console' -ErrorAction Stop
-                Start-Sleep -Seconds 3
-                Write-Ok 'Scheduled task started'
-                Write-Info ('If the console does not answer, check ' + (Join-Path $dataPath 'dsmt-*.log'))
+                Write-Info 'Waiting for the console to answer...'
+                if (Wait-DsmtConsole -Port $Port) {
+                    Write-Ok ('Scheduled task started and answering on port ' + $Port)
+                    $script:ConsoleUp = $true
+                } else {
+                    Write-Fail ('The task started but nothing answered on port ' + $Port + ' within 45 seconds.') `
+                               ('Read ' + (Join-Path $dataPath 'dsmt-*.log') + '.')
+                }
             }
 
             default {
@@ -1497,7 +1564,13 @@ if (-not $StartWhenDone) {
                 Start-Process -FilePath 'powershell.exe' `
                               -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"') `
                               -WorkingDirectory $repoRoot | Out-Null
-                Write-Ok 'Started in a new PowerShell window'
+                Write-Info 'Waiting for the console to answer...'
+                if (Wait-DsmtConsole -Port $Port) {
+                    Write-Ok ('Started in a new PowerShell window, answering on port ' + $Port)
+                    $script:ConsoleUp = $true
+                } else {
+                    Write-Warn2 ('Nothing answered on port ' + $Port + ' within 45 seconds. The window it opened will show why.')
+                }
 
                 # Said here AND in the summary, because this is the one
                 # outcome where the console dies without anyone touching DSMT:
@@ -1600,42 +1673,24 @@ Write-Host ('  Full guide: ' + (Join-Path $repoRoot 'docs\deployment-guide.html'
 Write-Host ''
 
 # ---------------------------------------------------------------------------
-# Open the console?
-#
-# Three rules, and each one exists because the obvious implementation breaks
-# something:
-#   1. ASK, do not just launch. An installer that opens a browser uninvited is
-#      rude on a server console.
-#   2. NEVER ask when there is nobody to answer. An unattended run - a service
-#      install from a script, a scheduled deployment - would hang forever on a
-#      prompt. -NoBrowser, and a host with no interactive input, both skip it.
-#   3. Only offer it when DSMT was actually started and nothing is outstanding.
-#      Opening a browser at a port nothing is listening on teaches the operator
-#      that the tool is broken.
+# Open the console
 # ---------------------------------------------------------------------------
 
 $dsmtUrl = 'http://localhost:' + $Port + '/'
-$canOffer = ($script:Outstanding.Count -eq 0 -and $StartWhenDone -and -not $NoBrowser)
 
-if ($canOffer -and $OpenBrowser) {
-    try { Start-Process $dsmtUrl | Out-Null } catch { Write-Warn2 ('Could not open a browser: ' + $_.Exception.Message) }
-} elseif ($canOffer) {
-    $interactive = $true
-    try { if ([System.Console]::IsInputRedirected) { $interactive = $false } } catch { $interactive = $false }
-    if (-not [Environment]::UserInteractive) { $interactive = $false }
-
-    if ($interactive) {
-        Write-Host ('  Open the console now? ' + $dsmtUrl) -ForegroundColor White
-        $answer = Read-Host '  [Y] Yes  [N] No  (default Y)'
-        if ([string]::IsNullOrWhiteSpace($answer) -or $answer -match '^(?i)y') {
-            try {
-                Start-Process $dsmtUrl | Out-Null
-                Write-Host '  Opening...' -ForegroundColor DarkGray
-            } catch {
-                Write-Warn2 ('Could not open a browser: ' + $_.Exception.Message)
-                Write-Info ('Open it by hand: ' + $dsmtUrl)
-            }
-        }
+# The browser opens on its own. It used to ASK, which was the polite default
+# and the wrong one: the operator has just watched thirteen steps go green
+# and wants the console, not one more question. It only happens when the port
+# actually answered - opening a browser at a dead port teaches the operator
+# that the tool is broken - and -NoBrowser turns it off for an unattended run.
+if ($script:ConsoleUp -and -not $NoBrowser -and $script:Outstanding.Count -eq 0) {
+    try {
+        Start-Process $dsmtUrl | Out-Null
+        Write-Host ('  Opening ' + $dsmtUrl) -ForegroundColor Cyan
+        Write-Host ''
+    } catch {
+        Write-Host ('  Could not open a browser: ' + $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host ('  Open it by hand: ' + $dsmtUrl) -ForegroundColor Cyan
         Write-Host ''
     }
 }

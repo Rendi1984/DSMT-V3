@@ -36,9 +36,6 @@ operator, the controller and a mandatory reason string.
   under `data/`, and that fallback is announced at startup and in **About**.
 - **Directory access**: the RSAT `ActiveDirectory` module, called with the
   signed-in operator's own credentials.
-- **`prototype/`**: the original design-tool mock-up. Everything in it is
-  fabricated and every button is inert. It is reference material only — see
-  `prototype/README.md`. Do not use it to check whether a feature works.
 
 ---
 
@@ -230,9 +227,7 @@ fallback array anywhere in `web/app.js`.
 
 Two places still need active guarding:
 
-1. **`prototype/`** — 100% fabricated and completely convincing. Never demo it,
-   never treat it as evidence a feature works. It has its own README saying so.
-2. **The SQL snapshot tables** (`dbo.DirectoryUsers`, `dbo.DirectoryGroups`) —
+1. **The SQL snapshot tables** (`dbo.DirectoryUsers`, `dbo.DirectoryGroups`) —
    written *after* a live AD read, so they go stale the moment the directory
    changes. They exist for reporting and history. **Rendering the console's
    grids from them instead of from a live read would be exactly this bug.** If
@@ -386,9 +381,6 @@ cause. Three shapes:
   sessions: the operator credentials it needs to call AD only ever exist in
   process memory and are never persisted. A browser refresh (F5) does *not*
   sign anyone out — that path is covered by the token in `localStorage`.
-- **[Shape 1] `prototype/` is not the product.** Every action there is `noop`.
-  A report of "it doesn't do anything" that turns out to be about those pages
-  is not a bug in DSMT.
 
 ---
 

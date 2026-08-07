@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.20.0** | 2026-08-07 | The installer starts the service, **waits until the console answers**, and opens the browser itself. `prototype/` and an unused 4.9 MB image removed | Re-run installer |
 | **1.19.1** | 2026-08-07 | The installer now names `Start-Service DSMT` when it registers a service it did not start | Re-run installer |
 | **1.19.0** | 2026-08-07 | **Groups tab fixed for real**; the AD health clock reads again; confirmations name the target; profile actions moved above the fold | Restart + refresh |
 | **1.18.3** | 2026-08-07 | The service now runs as **LocalSystem** by default - it was asking a Domain Admin to store their password | Re-run installer |
@@ -64,7 +65,81 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.19.1**. The last tag is `v1.4.0`.
+`main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.20.0 — 2026-08-07
+
+**The installation now finishes the job.** One command, and the console is
+open in a browser.
+
+    .\server\Install-DSMT.ps1
+
+### Starting is the default, and "started" now means "answering"
+
+- **`-StartWhenDone` is no longer needed** - it is kept so existing command
+  lines keep working, and `-NoStart` is the way to opt out. An installer that
+  registers a service and leaves it stopped has not finished; it has left the
+  operator to work the last step out of a skip message.
+- **The installer waits for the PORT, not for the service status.** "Service
+  Running" is not the same as "DSMT is working": the service host starts,
+  launches PowerShell, loads six libraries, runs three preflight checks and
+  only then opens the listener - several seconds on a cold start, and it can
+  fail anywhere in that sequence while the service still reports Running. It
+  now polls `127.0.0.1:<port>` for up to 45 seconds and only then says the
+  console is up. If nothing answers it says so, names the log, and mentions
+  the other common cause - a port already in use.
+- **Re-running the installer restarts a running service** rather than
+  reporting success against the old files. Copying new files and re-running
+  used to leave the previous build serving.
+
+### The browser opens by itself
+
+No question. 1.15.0 asked, which was the polite default and the wrong one:
+after thirteen green steps the operator wants the console, not one more
+prompt. It opens **only** when the port actually answered and nothing is
+outstanding - a browser pointed at a dead port teaches the operator that the
+install failed when it did not. `-NoBrowser` for unattended runs.
+
+### Automatic start after a reboot
+
+Unchanged, and worth stating plainly since it was asked: the service is
+registered with `StartupType = Automatic` and recovery actions
+(restart after 5s, 10s, then every 30s). It comes back on its own after a
+restart, and after a crash.
+
+### "Why is there both Install-DSMT and Start-DSMT?"
+
+A fair question, and the answer is that **`Start-DSMT.ps1` is not an
+installation step - it is the application.** The service host launches it;
+that is what the service *is*. After a service install nobody should ever run
+it by hand, and as of this version nothing tells them to.
+
+It stays a separate file for one real reason: the service, the scheduled task
+and a debugging session all need to launch the same server, and a server that
+can only be started by its installer cannot be debugged or hosted any other
+way. What was wrong was not the second file - it was that the installer
+stopped short and left the operator to find it.
+
+### Removed: files the running system does not need
+
+- **`prototype/`** - the original mock-up. Fabricated data, inert buttons, and
+  it loaded React from a CDN, contradicting the offline rule. Nothing
+  referenced it at runtime. Its warnings are removed from `README.md`,
+  `CLAUDE.md` and the deployment guide along with it.
+- **`uploads/Gemini_Generated_Image_9wfzor...png`** - 4.9 MB, referenced by
+  nothing. The sign-in image is the other file, which stays.
+
+The download is now **4.7 MB instead of 8.6 MB**.
+
+`_ds/` is kept whole: only `styles.css` is served, but `readme.md` is the
+design system's authoritative usage guide and the three tool files are what
+the design tool syncs against. 56 KB, and removing them would break that.
+
+Files: `server/Install-DSMT.ps1`, `server/lib/DsmtCommon.ps1` (version),
+`README.md`, `CLAUDE.md`, `PROGRESS.md`, `docs/deployment-guide.html`;
+**deleted** `prototype/` and one image.
 
 ---
 

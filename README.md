@@ -201,7 +201,6 @@ just fail later in a way that looks like a code bug.
 | `sql/schema.sql` | The database schema as a standalone script |
 | `config/dsmt.config.json` | Settings the installer saved; read at startup |
 | `docs/deployment-guide.html` | Step-by-step install and first-connection guide |
-| `prototype/` | The original mock-up. **All of its data is fake** - see its README |
 
 ---
 

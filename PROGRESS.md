@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.19.1` — matches the top entry of `CHANGELOG.md` and
+`1.20.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -187,8 +187,9 @@ its data is fabricated and every button is inert.
 7. **Consider Kerberos constrained delegation** so operator passwords need not
    be held in memory — see "Attempted and deliberately NOT pursued" below and
    check in before restarting that investigation.
-8. **Decide the fate of `prototype/`.** It is kept for reference; delete it
-   once nobody needs the original design pass.
+8. ~~Decide the fate of `prototype/`~~ — **removed in 1.20.0.** It was
+   fabricated data, inert buttons, and it loaded React from a CDN, which
+   contradicted the offline rule. Nothing referenced it at runtime.
 9. **Verify the gMSA tool against LAB.LOCAL (1.12.0).** None of it has been
    executed. Specifically:
    - `Get-DsmtKdsStatus` builds the forest DN from `(Get-ADDomain).Forest` and
