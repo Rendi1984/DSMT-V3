@@ -66,6 +66,22 @@
     .\Start-DSMT.ps1 -SqlServer SQL01 -SqlDatabase DSMT
     Creates the DSMT database on SQL01 if it is missing and stores operators,
     sessions, the directory snapshot and the audit log there.
+.PARAMETER NoHttps
+    Start on plain HTTP for this run only, even when HTTPS is configured.
+
+    THE RECOVERY SWITCH. When HTTPS is on and the certificate has expired, been
+    deleted, or lost its port binding, DSMT refuses to start - it will not fall
+    back to plain HTTP silently, because operators type domain passwords into
+    this console and an invisible downgrade is the worst outcome there is.
+
+    That refusal is only defensible if getting back up is one command, and this
+    is it. It does NOT change the saved setting: the next normal start enforces
+    HTTPS again, so it cannot be used to quietly leave the console unencrypted.
+
+    Running as the DSMT Windows service, where there is no command line to add
+    a switch to? Turn HTTPS off in the registry and restart the service:
+      Set-ItemProperty -Path 'HKLM\SOFTWARE\Rendi Group\DSMT\Settings' -Name HttpsEnabled -Value 0
+      Restart-Service DSMT
 .PARAMETER DataRoot
     Where config\, data\ and uploads\ live. Almost never passed by hand: the
     installer records it in HKLM\SOFTWARE\Rendi Group\DSMT\DataPath and this
@@ -89,7 +105,20 @@ param(
     [string] $SqlDatabase = 'DSMT',
     [string] $SqlUsername = '',
     [string] $SqlPassword = '',
-    [string] $DataRoot = ''
+    [string] $DataRoot = '',
+
+    # THE RECOVERY SWITCH. Starts on plain HTTP for this run only, ignoring
+    # the saved HTTPS setting and without changing it.
+    #
+    # It exists because refusing to start on a broken certificate is only a
+    # defensible design if getting back up is ONE command. Without this the
+    # only way out of an expired or deleted certificate is regedit on the
+    # host, which is a poor thing to need at the moment the console is down.
+    #
+    # It does not disable HTTPS permanently - the next normal start goes back
+    # to enforcing it - so it cannot be used to quietly leave the console
+    # unencrypted forever.
+    [switch] $NoHttps
 )
 
 $ErrorActionPreference = 'Stop'
@@ -256,6 +285,15 @@ if ($null -ne $httpsSaved) {
     if ($httpsSaved.PSObject.Properties['HttpsPort'])    { $httpsPort = [int]$httpsSaved.HttpsPort }
 }
 
+if ($httpsOn -and $NoHttps) {
+    Write-Host ''
+    Write-Host '  [warn] -NoHttps: starting on PLAIN HTTP for this run only.' -ForegroundColor Yellow
+    Write-Host '         HTTPS stays switched on in settings and is enforced again on the next' -ForegroundColor Yellow
+    Write-Host '         normal start. Operator passwords are NOT encrypted until then.' -ForegroundColor Yellow
+    Write-DsmtLog -Level 'WARN' -Message ('Started with -NoHttps: serving plain HTTP although HTTPS is configured on port ' + $httpsPort)
+    $httpsOn = $false
+}
+
 if ($httpsOn) {
     if ($httpsPort -lt 1 -or $httpsPort -gt 65535) { $httpsPort = 8443 }
 
@@ -266,18 +304,52 @@ if ($httpsOn) {
         Write-Host '         DSMT will not fall back to plain HTTP: operators type domain passwords' -ForegroundColor Red
         Write-Host '         into this console, and a silent downgrade would put them on the wire.' -ForegroundColor Red
         Write-Host ''
-        Write-Host '         Fix it in one of two ways:' -ForegroundColor Yellow
-        Write-Host '           - Open Settings -> HTTPS in the console and bind a certificate, or' -ForegroundColor Yellow
-        Write-Host '           - run this elevated on this host:' -ForegroundColor Yellow
-        $thumbHint = 'THUMBPRINT'
-        if ($httpsSaved.PSObject.Properties['HttpsThumbprint']) {
-            $t = [string]$httpsSaved.HttpsThumbprint
-            if (-not [string]::IsNullOrWhiteSpace($t)) { $thumbHint = $t }
-        }
-        Write-Host ('             ' + (Get-DsmtSslCommand -Port $httpsPort -Thumbprint $thumbHint)) -ForegroundColor Yellow
+        Write-Host '         GET THE CONSOLE BACK UP NOW - plain HTTP, this run only, settings' -ForegroundColor Cyan
+        Write-Host '         unchanged. HTTPS is enforced again on the next normal start:' -ForegroundColor Cyan
         Write-Host ''
-        Write-Host '         To go back to plain HTTP, set HttpsEnabled to 0 under' -ForegroundColor DarkGray
-        Write-Host ('           ' + (Get-DsmtSettingsKeyPath)) -ForegroundColor DarkGray
+        Write-Host '             .\server\Start-DSMT.ps1 -NoHttps' -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host '         Running as the DSMT service instead? Turn HTTPS off, then restart it:' -ForegroundColor Cyan
+        Write-Host ("             Set-ItemProperty -Path '" + (Get-DsmtSettingsKeyPath) + "' -Name HttpsEnabled -Value 0") -ForegroundColor Cyan
+        Write-Host '             Restart-Service DSMT' -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host '         THEN FIX THE CERTIFICATE, from the console once it is up:' -ForegroundColor Yellow
+        Write-Host '           Settings -> HTTPS, pick a certificate, save, restart.' -ForegroundColor Yellow
+
+        # The certificate the setting names, and whether it is even still in
+        # the store. "Bind THUMBPRINT" with no thumbprint is not help, and the
+        # commonest cause of this banner is a certificate that expired or was
+        # removed - which the operator cannot see from here otherwise.
+        $thumbHint = ''
+        if ($httpsSaved.PSObject.Properties['HttpsThumbprint']) {
+            $thumbHint = [string]$httpsSaved.HttpsThumbprint
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($thumbHint)) {
+            Write-Host ''
+            Write-Host ('         The certificate this setting names is ' + $thumbHint) -ForegroundColor DarkGray
+
+            $known = $null
+            try {
+                foreach ($c in @(Get-DsmtCertificates)) {
+                    if ($c.thumbprint -eq $thumbHint.ToUpper()) { $known = $c }
+                }
+            } catch {
+                $known = $null
+            }
+
+            if ($null -eq $known) {
+                Write-Host '         and it is NOT in Cert:\LocalMachine\My on this host any more.' -ForegroundColor DarkGray
+                Write-Host '         That is almost certainly why this failed.' -ForegroundColor DarkGray
+            } elseif (-not $known.usable) {
+                Write-Host ('         It is still in the store but cannot serve HTTPS: ' + $known.why) -ForegroundColor DarkGray
+            } else {
+                Write-Host '         It is in the store and looks usable, so only the port binding is' -ForegroundColor DarkGray
+                Write-Host '         missing. To rebind it by hand, elevated:' -ForegroundColor DarkGray
+                Write-Host ('             ' + (Get-DsmtSslCommand -Port $httpsPort -Thumbprint $thumbHint)) -ForegroundColor DarkGray
+            }
+        }
+
         Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - HTTPS enabled but no certificate bound to port ' + $httpsPort)
         exit 1
     }

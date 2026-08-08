@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.25.1** | 2026-08-08 | The HTTPS refusal banner told you to open a console that is not running. `-NoHttps` recovery switch, and the banner now names the actual cause | Restart |
 | **1.25.0** | 2026-08-08 | **CSV import previews before it writes**: every row checked against the live directory, nothing written until the preview is seen | Restart + refresh |
 | **1.24.0** | 2026-08-08 | **DSMT administrators**: AD groups decide who may change DSMT's own settings. Built-in group filters are listed instead of described; the profile window gets tabs | Restart + refresh |
 | **1.23.0** | 2026-08-08 | **HTTPS**, configured from Settings after installation: pick a certificate from the machine store and bind it to a port. The console never receives a private key | Restart + refresh |
@@ -72,6 +73,54 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.25.1 — 2026-08-08
+
+### The HTTPS failure banner pointed at a console that was not running
+
+1.23.0 made DSMT refuse to start when HTTPS is on and the certificate is
+missing, expired or unbound, rather than fall back to plain HTTP silently.
+That part is right and stays.
+
+The banner it printed was not. Its first suggested fix read *"Open Settings ->
+HTTPS in the console and bind a certificate"* — advice that is wrong at exactly
+the moment it is read, because the console did not start. What remained was a
+`netsh` line with the literal word `THUMBPRINT` in it when no thumbprint was
+saved, and a sentence about editing the registry by hand. Refusing to start is
+only a defensible design if getting back up is one command, and it was not.
+
+**`-NoHttps`** is that command:
+
+```
+.\server\Start-DSMT.ps1 -NoHttps
+```
+
+Plain HTTP, this run only, saved settings untouched — the next normal start
+enforces HTTPS again, so it cannot be used to quietly leave the console
+unencrypted. Under the Windows service, where there is no command line to add
+a switch to, the banner now gives the two-line equivalent
+(`Set-ItemProperty ... HttpsEnabled 0` then `Restart-Service DSMT`) as a
+copy-pasteable command rather than a description of where to click in regedit.
+
+**The banner also names the actual cause now.** It reads the store and says
+which of the three it is: the certificate is gone, it is present but unusable
+(with the reason — expired, no private key, no Server Authentication), or it is
+fine and only the port binding is missing — in which case it prints the exact
+rebind command with the real thumbprint. The commonest cause of this banner is
+a certificate that expired, which the operator could not see from the old text
+at all.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+
+**To deploy:** copy the two files and restart DSMT. No front-end change, so no
+hard refresh needed.
 
 ---
 

@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.25.0` — matches the top entry of `CHANGELOG.md` and
+`1.25.1` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -1169,6 +1169,16 @@ behave differently than expected.
   your thumbprint and appid `{6d9d1f2b-4a3c-4e7f-9b1a-2c8e5d0f7a41}`.
 - **Restart. The console must come up on `https://`** and the banner must say
   `Transport: HTTPS`.
+- **The recovery path, and test it BEFORE trusting HTTPS in production.**
+  With HTTPS on and the binding deleted, `.\server\Start-DSMT.ps1 -NoHttps`
+  must bring the console straight up on plain HTTP, and the NEXT normal start
+  must go back to refusing. If -NoHttps does not work, do not leave HTTPS
+  enabled on a machine anyone depends on - the refusal to start has no
+  one-command way out and the only remaining route is the registry.
+- **The banner must name the cause**, not just the symptom: certificate gone
+  from the store / present but unusable with the reason / present and usable
+  with only the binding missing, in which case it prints the rebind command
+  with the REAL thumbprint rather than the word THUMBPRINT.
 - **The refusal path.** With HTTPS on, delete the binding by hand
   (`netsh http delete sslcert ipport=0.0.0.0:8443`) and restart. DSMT must
   **refuse to start** and print the banner naming the port, both fixes, and
