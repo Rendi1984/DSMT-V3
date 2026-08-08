@@ -171,6 +171,35 @@ function Get-DsmtOperatorGroupSids {
         directories are arranged - would not be recognised. tokenGroups is
         what the domain controller itself computes, and it includes nested
         groups and the primary group.
+
+        TWO STEPS, AND THE SECOND ONE IS THE WHOLE POINT.
+
+        tokenGroups is CONSTRUCTED: the DC computes it per request, and it can
+        only be retrieved by a BASE-SCOPE search bound to that one object.
+        Asking for it any other way fails with
+
+            The requested search operation is only supported for base searches
+
+        which is exactly what 1.26.1 did in the lab. The first version passed
+        -Identity <samAccountName> to Get-ADUser; a non-DN identity makes the
+        AD module run a SUBTREE search to find the object, and requesting
+        tokenGroups in a subtree search is the unsupported case.
+
+        So: resolve the account to its distinguishedName with an ordinary
+        search first, then read tokenGroups with an explicit
+        -SearchScope Base bound to that DN. -SearchScope Base is stated
+        outright rather than relying on "-Identity with a DN happens to bind
+        directly", because that is an implementation detail and this is the
+        one attribute where getting the scope wrong fails outright.
+
+        HOW BADLY THIS FAILED, so nobody weakens the guard that caught it:
+        with no admin groups configured the role check short-circuits and
+        never calls this, so everything looked fine. The moment a group was
+        configured, EVERY sign-in would have failed this lookup and every
+        operator would have been locked out of Settings - recoverable only
+        with regedit on the host. The "refuse to save a list you are not a
+        member of" check is what caught it, because it runs this lookup
+        BEFORE writing anything. That guard earned its place; do not remove it.
     #>
     param(
         [Parameter(Mandatory = $true)][string] $SamAccountName,
@@ -181,13 +210,34 @@ function Get-DsmtOperatorGroupSids {
 
     try {
         $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
-        $me = Get-ADUser @ad -Identity $SamAccountName -Properties 'tokenGroups' -ErrorAction Stop
+
+        # Step 1 - find the object. An ordinary search, no constructed
+        # attributes, so scope does not matter here.
+        $me = Get-ADUser @ad -Identity $SamAccountName -Properties 'distinguishedName' -ErrorAction Stop
+        $dn = [string]$me.distinguishedName
+        if ([string]::IsNullOrWhiteSpace($dn)) {
+            $out.Error = 'The account ' + $SamAccountName + ' has no readable distinguishedName.'
+            return $out
+        }
+
+        # Step 2 - base-scope read of the constructed attribute.
+        $obj = Get-ADObject @ad -SearchBase $dn -SearchScope Base -LDAPFilter '(objectClass=*)' `
+                           -Properties 'tokenGroups' -ErrorAction Stop
 
         $sids = @()
-        foreach ($t in @($me.tokenGroups)) {
+        foreach ($t in @($obj.tokenGroups)) {
             $v = ''
             try { $v = [string]$t.Value } catch { $v = [string]$t }
             if (-not [string]::IsNullOrWhiteSpace($v)) { $sids += $v }
+        }
+
+        # An empty tokenGroups is not a normal answer - every account is at
+        # least in Domain Users. Treating it as "member of nothing" would
+        # silently deny a real administrator, so it is reported as a failure.
+        if ($sids.Count -eq 0) {
+            $out.Error = 'tokenGroups came back empty for ' + $SamAccountName +
+                         ', which should not happen - every account is at least in Domain Users.'
+            return $out
         }
 
         $out.Ok   = $true

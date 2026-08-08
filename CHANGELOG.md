@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.26.2** | 2026-08-08 | **Fixes the administrator role, which could not have worked at all**: the group-membership read used the wrong LDAP search scope | Restart + refresh |
 | **1.26.1** | 2026-08-08 | Settings -> Administrators searches the directory as you type, instead of asking you to know the group name exactly | Refresh |
 | **1.26.0** | 2026-08-08 | A broken certificate no longer takes the console down: DSMT falls back to plain HTTP and says so in the banner, the log, and a bar on every screen | Restart + refresh |
 | **1.25.1** | 2026-08-08 | The HTTPS refusal banner told you to open a console that is not running. `-NoHttps` recovery switch, and the banner now names the actual cause | Restart |
@@ -75,6 +76,65 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.26.2 — 2026-08-08
+
+### The administrator role could not have worked at all
+
+Found on the lab domain the first time a group was actually added. Saving
+returned:
+
+> Your own group membership could not be read, so DSMT cannot confirm this
+> mapping would not lock you out. Nothing was saved. **The requested search
+> operation is only supported for base searches**
+
+`tokenGroups` is a **constructed** attribute: the domain controller computes it
+per request, and it can only be retrieved by a **base-scope** search bound to
+that one object. 1.24.0 asked for it with
+`Get-ADUser -Identity <samAccountName> -Properties tokenGroups`, and a non-DN
+identity makes the AD module run a **subtree** search to locate the object —
+which is precisely the unsupported case.
+
+It now resolves the account to its `distinguishedName` with an ordinary search
+first, then reads `tokenGroups` with an explicit
+`-SearchScope Base -LDAPFilter '(objectClass=*)'` bound to that DN. The scope
+is stated outright rather than relying on "-Identity with a DN happens to bind
+directly" — that is an implementation detail, and this is the one attribute
+where getting the scope wrong fails outright instead of degrading.
+
+An empty `tokenGroups` is now also treated as a failure rather than as
+"member of nothing". Every account is at least in Domain Users, so an empty
+result means the read did not work, and silently denying a real administrator
+is the wrong way to be wrong.
+
+**How badly this hid, and why the guard that caught it must stay.** With no
+administrator groups configured the role check short-circuits and never calls
+this, so 1.24.0 through 1.26.1 all looked healthy. The moment a group was
+configured, **every sign-in would have failed the lookup and every operator
+would have been locked out of Settings** — recoverable only with regedit on the
+host. What caught it was the "refuse to save a list you are not a member of"
+check, which runs the lookup *before* writing anything. It turned a
+lock-everyone-out into an error message and an unchanged configuration. That
+guard earned its place; it is now commented as such so it does not get
+simplified away.
+
+### Also
+
+The group picker showed `Domain Admins (Domain Admins)`. The samAccountName is
+now shown only when it differs from the name, which for most built-in groups it
+does not.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the three files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 

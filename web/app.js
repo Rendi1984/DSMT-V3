@@ -4237,7 +4237,12 @@ function wirePicker(searchId, selectId, path) {
           return;
         }
         select.innerHTML = items.map(function (i) {
-          return '<option value="' + esc(i.sam || i.dn) + '">' + esc(i.name) + ' (' + esc(i.sam) + ')</option>';
+          // "Domain Admins (Domain Admins)" - the sam is worth showing only
+          // when it differs from the name, which for most built-in groups it
+          // does not.
+          var label = i.name;
+          if (i.sam && i.sam !== i.name) { label += ' (' + i.sam + ')'; }
+          return '<option value="' + esc(i.sam || i.dn) + '">' + esc(label) + '</option>';
         }).join('');
       }).catch(function (err) {
         select.innerHTML = '<option value="">' + esc(err.message) + '</option>';

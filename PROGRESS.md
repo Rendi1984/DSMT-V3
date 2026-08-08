@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.26.1` — matches the top entry of `CHANGELOG.md` and
+`1.26.2` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -616,6 +616,10 @@ retrofit:**
     `tokenGroups`, resolved at sign-in, fails open when unconfigured and
     closed when a configured mapping cannot be evaluated.
 
+    **See item 32 for RBAC proper** - roles that govern what an operator may
+    DO in the directory. 24 is not that, and reading 24 as if it were is the
+    likeliest way to build the wrong thing.
+
     **The read-only-role half was deliberately NOT built**, and a future
     session must not add it without checking in: for directory operations a
     role can only subtract, and a read-only flag would constrain this console
@@ -892,6 +896,60 @@ gives 28 the home it was always meant to have.
 - Watch the 640px breakpoint: a tab strip inside a slide-over is the layout
   most likely to overflow, and the rule in `CLAUDE.md` stands — never solve a
   narrow viewport by hiding directory data.
+
+### Full RBAC (32) — raised 2026-08-08, NOT to be built yet
+
+Asked for directly: "what about implementing RBAC". Recorded as its own item
+because **item 24 is not it**, and a future session that reads 24 and thinks
+the subject is closed will build the wrong thing.
+
+- **24 (built in 1.24.0) governs DSMT'S OWN SETTINGS only** - who may repoint
+  the database, change the identity mode, create the KDS root key. Real teeth,
+  because nothing in AD governs those.
+- **32 is what people normally mean by RBAC**: roles that decide what an
+  operator may DO in the directory - who may reset passwords, who may only
+  read, who may act on which OUs.
+
+**Settle this one question before designing anything, because everything else
+follows from it.** Today every directory write runs as the signed-in operator
+(`Get-DsmtAdParams`, intent 'write'), which is why the domain controller's own
+security log names the human who made each change and why DSMT deliberately
+has no permission model. That gives RBAC only two possible shapes:
+
+1. **RBAC as UI scoping, not as security.** Roles hide verbs and narrow what
+   the console offers, while AD stays the only real enforcement. Cheap, honest,
+   and genuinely useful for reducing mistakes - but it must be LABELLED as
+   what it is. Someone not granted "reset password" here can still open ADUC
+   and reset it. This is the same reasoning already written down for why the
+   read-only half of 24 was not built: presenting it as a control it is not
+   would be worse than not having it.
+2. **RBAC as real enforcement**, which requires DSMT to become the thing that
+   performs the write - i.e. writes running as a service account with broad
+   rights, and DSMT deciding who may use them. **That destroys per-operator
+   attribution at the domain controller**, which is a property this project
+   has protected in every design decision so far (see `hybrid` mode: even
+   there, writes deliberately stay on the operator). It also makes DSMT a
+   privilege-escalation target: a bug in the role check becomes a bug that
+   grants Domain Admin.
+
+**Shape 1 is almost certainly the right answer, and shape 2 must not be
+started without an explicit conversation** - it reverses a decision recorded
+in `CLAUDE.md` and in README's security model.
+
+If shape 1 is picked, the pieces already exist and it is mostly assembly:
+`Resolve-DsmtOperatorRole` and the central `$script:DsmtAdminOnlyRoutes` list
+in `DsmtRoles.ps1` are the mechanism, SID matching and `tokenGroups` nested
+membership already work (see 1.26.2 for the base-scope trap), and every route
+already has one choke point to check at. What is missing is a role definition
+richer than one boolean, per-OU scoping, and the UI to manage it.
+
+Two things to design in from the start, not retrofit:
+- **The audit log must record the role that permitted an action**, or the log
+  cannot answer "how was this allowed" after a role changes.
+- **Roles are resolved at sign-in today.** With real permissions attached,
+  decide deliberately whether that is still acceptable or whether they must be
+  re-evaluated per request - a revoked role that lingers for a whole session
+  is a different risk once it gates directory writes.
 
 ### Where all of this goes — the tab count is the real constraint
 

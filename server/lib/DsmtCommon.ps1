@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.26.1'
+$script:DsmtVersion = '1.26.2'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
