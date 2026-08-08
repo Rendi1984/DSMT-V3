@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.26.4` — matches the top entry of `CHANGELOG.md` and
+`1.27.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -285,7 +285,12 @@ Ordered by value for the effort, highest first.
    duplicate-within-the-file check exists only in the dry-run because AD
    itself catches it on the write, with an error that names the account but
    not the file.
-4. **Password expiry and stale-account report.** "Expires in N days",
+4. ~~Password expiry and stale-account report~~ - **built in 1.27.0** as eight
+    filter chips on the Users tab. Note for item 19 (reports): the numbers it
+    needs (`pwdDays`, `logonDays`, `pwdNever`, `pwdExpired`, `neverLogon`) are
+    already computed in `ConvertTo-DsmtUser` and the selector is
+    `Select-DsmtUsersByFilter` - a report is a saved filter plus a column set,
+    not new plumbing. Original note: "Expires in N days",
    "no logon in 90 days", "password never expires" — read straight from
    attributes DSMT already fetches. Mostly a query and a view.
 5. **Scheduled directory snapshot.** `dbo.DirectoryUsers` / `DirectoryGroups`
@@ -300,8 +305,10 @@ Ordered by value for the effort, highest first.
 9. **Live session list with the ability to sign someone out.** DSMT already
    tracks sessions in `dbo.Sessions`. Useful with several operators, and
    necessary the day someone leaves mid-shift.
-10. **Column chooser on the Audit table**, matching the one the Users grid
-    already has. Small, consistent, cheap.
+10. ~~Column chooser on the Audit table~~ - **built in 1.27.0.** `colDefs()`
+    knows about `'audit'` and the existing picker does the rest. The audit
+    view needed its OWN Columns button - the directory toolbar's lives inside
+    `#directoryView`, which is hidden on that tab.
 11. **Keyboard shortcuts** — `/` to search, `Esc` to close the detail pane,
     `r` to refresh. Cheap, and the kind of thing a daily operator notices.
 12. **A dark/light theme switch.** Nocturne is a dark system; a light variant

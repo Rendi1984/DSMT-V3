@@ -42,6 +42,11 @@ var state = {
   auditTotal: 0,
   auditFilter: 'All',
   auditQuery: '',
+  // Active filter chip per tab. Kept separate so switching tabs does not
+  // carry a users filter into groups, where the key means nothing.
+  userFilter: 'all',
+  userFilters: [],
+  userTotal: 0,
   auditRange: 'all',
   auditFrom: null,
   auditTo: null,
@@ -93,6 +98,24 @@ var GROUP_COLS = [
    which is an AD permissions problem, not a DSMT one. Both are answered
    identically by the SQL and the file-log readers. */
 var AUDIT_FILTERS = ['All', 'System', 'Failed', 'Users', 'Groups', 'Passwords', 'Deletions'];
+
+// Columns on the Audit table. Same shape as USER_COLS/GROUP_COLS so the
+// existing column picker drives all three - the picker keys off state.tab and
+// needed no change beyond colDefs() knowing about 'audit'.
+//
+// Every one defaults ON. This is an audit log: a column hidden by default is
+// a fact an auditor does not know to go looking for. The picker exists to
+// narrow a wide table on a small screen, not to curate what is on the record.
+var AUDIT_COLS = [
+  { key: 'time',     label: 'Time',       on: true },
+  { key: 'action',   label: 'Action',     on: true },
+  { key: 'target',   label: 'Target',     on: true },
+  { key: 'operator', label: 'Operator',   on: true },
+  { key: 'dc',       label: 'Controller', on: true },
+  { key: 'reason',   label: 'Reason',     on: true },
+  { key: 'result',   label: 'Result',     on: true },
+  { key: 'undo',     label: 'Undo',       on: true }
+];
 
 /* Audit time windows. `hours` is how far back to look; null means no bound.
    'custom' is driven by the two datetime inputs instead. */
@@ -649,7 +672,11 @@ function closeBell() {
 // Columns
 // ---------------------------------------------------------------------------
 
-function colDefs() { return state.tab === 'groups' ? GROUP_COLS : USER_COLS; }
+function colDefs() {
+  if (state.tab === 'audit')  { return AUDIT_COLS; }
+  if (state.tab === 'groups') { return GROUP_COLS; }
+  return USER_COLS;
+}
 
 function visibleCols() {
   var defs = colDefs();
@@ -674,12 +701,16 @@ function toggleCol(key) {
   try { window.localStorage.setItem(COLS_KEY, JSON.stringify(saved)); } catch (e) { /* ignore */ }
 
   renderColPicker();
-  renderTable();
+  if (state.tab === 'audit') { renderAudit(); } else { renderTable(); }
+}
+
+function colPickerId() {
+  return (state.tab === 'audit') ? 'auditColPicker' : 'colPicker';
 }
 
 function renderColPicker() {
-  var box = $('colPicker');
-  if (box.hidden) { return; }
+  var box = $(colPickerId());
+  if (!box || box.hidden) { return; }
   var active = visibleCols().map(function (c) { return c.key; });
   box.innerHTML = colDefs().map(function (c) {
     var on = active.indexOf(c.key) !== -1;
@@ -739,7 +770,8 @@ function setTab(tab, force) {
   $('createBtn').textContent = tab === 'groups' ? 'New group' : 'New user';
   $('importBtn').hidden = (tab === 'groups');
   $('colsBtn').hidden = false;
-  $('groupFilters').hidden = (tab !== 'groups');
+  // Chips exist on both tabs now; renderRowFilters decides whether there is
+  // anything to show.
 
   renderColPicker();
   loadRows();
@@ -754,9 +786,13 @@ function loadRows() {
   var path = (tab === 'groups' ? '/api/groups' : '/api/users');
   var query = [];
   if (state.query) { query.push('q=' + encodeURIComponent(state.query)); }
-  if (tab === 'groups' && state.groupFilter && state.groupFilter !== 'all') {
-    query.push('filter=' + encodeURIComponent(state.groupFilter));
-  }
+
+  // One filter mechanism for both tabs. Users got chips in 1.27.0 and the
+  // groups implementation was generalised rather than copied - two chip
+  // renderers drifting apart is how one tab quietly stops honouring a rule
+  // the other still does.
+  var active = activeFilter();
+  if (active && active !== 'all') { query.push('filter=' + encodeURIComponent(active)); }
   if (query.length) { path += '?' + query.join('&'); }
 
   state.loadError = '';
@@ -768,8 +804,11 @@ function loadRows() {
     if (tab === 'groups') {
       state.groupFilters = asArray(data.filters);
       state.groupTotal = data.total || 0;
-      renderGroupFilters();
+    } else {
+      state.userFilters = asArray(data.filters);
+      state.userTotal = data.total || 0;
     }
+    renderRowFilters();
 
     renderTable();
     if (state.rows.length && !state.selectedId) {
@@ -792,22 +831,36 @@ function loadRows() {
    Test-DsmtPrivilegedGroup - because group names are renameable and localised.
    --------------------------------------------------------------------------- */
 
-function renderGroupFilters() {
+function activeFilter() {
+  return (state.tab === 'groups') ? state.groupFilter : state.userFilter;
+}
+
+function setActiveFilter(key) {
+  if (state.tab === 'groups') { state.groupFilter = key; } else { state.userFilter = key; }
+}
+
+function renderRowFilters() {
   var box = $('groupFilters');
-  var list = asArray(state.groupFilters);
+  var list = asArray(state.tab === 'groups' ? state.groupFilters : state.userFilters);
   if (!list.length) { box.hidden = true; return; }
+
+  var current = activeFilter();
 
   box.hidden = false;
   box.innerHTML = list.map(function (f) {
-    var on = (f.key === state.groupFilter) || (!state.groupFilter && f.key === 'all');
+    var on = (f.key === current) || (!current && f.key === 'all');
+    // The server's own explanation becomes the tooltip, so there is no second
+    // copy of "what does this chip match" in this file to go stale.
     return '<button class="chip" type="button" data-gfilter="' + esc(f.key) + '" aria-pressed="' +
-           (on ? 'true' : 'false') + '">' + esc(f.label) + '</button>';
+           (on ? 'true' : 'false') + '"' +
+           (f.how ? ' title="' + esc(f.how) + '"' : '') +
+           '>' + esc(f.label) + '</button>';
   }).join('');
 
   var chips = box.querySelectorAll('[data-gfilter]');
   for (var i = 0; i < chips.length; i++) {
     chips[i].onclick = function () {
-      state.groupFilter = this.getAttribute('data-gfilter');
+      setActiveFilter(this.getAttribute('data-gfilter'));
       state.selectedId = null;
       closeDetail();
       loadRows();
@@ -899,10 +952,13 @@ function renderTable() {
 
   // Say so when a filter is hiding rows. A filtered count that looks like a
   // total is how someone concludes the directory has three groups.
-  if (state.tab === 'groups' && state.groupFilter && state.groupFilter !== 'all') {
-    var chip = asArray(state.groupFilters).filter(function (f) { return f.key === state.groupFilter; })[0];
-    line += ' - filtered to "' + (chip ? chip.label : state.groupFilter) + '"';
-    if (state.groupTotal) { line += ' out of ' + state.groupTotal + ' read'; }
+  var activeKey = activeFilter();
+  if (activeKey && activeKey !== 'all') {
+    var defs = asArray(state.tab === 'groups' ? state.groupFilters : state.userFilters);
+    var chip = defs.filter(function (f) { return f.key === activeKey; })[0];
+    var readTotal = (state.tab === 'groups') ? state.groupTotal : state.userTotal;
+    line += ' - filtered to "' + (chip ? chip.label : activeKey) + '"';
+    if (readTotal) { line += ' out of ' + readTotal + ' read'; }
   }
 
   state.pageLimitHit = !!(state.limit && state.rows.length >= state.limit);
@@ -1173,30 +1229,40 @@ function renderAudit() {
     if (state.auditFilter !== 'All') { scope += ' for the ' + state.auditFilter + ' filter'; }
     if (state.auditQuery) { scope += ' matching "' + state.auditQuery + '"'; }
 
-    $('auditBody').innerHTML = '<tr><td colspan="8" data-label="">' +
+    $('auditBody').innerHTML = '<tr><td colspan="' + visibleCols().length + '" data-label="">' +
       '<span class="muted-sm">' + esc(scope) + '. Entries are written here as changes are made.</span>' +
       '</td></tr>';
     $('auditLine').textContent = '';
     return;
   }
 
+  var cols = visibleCols();
+
+  // Header and body are built from the same list, in the same order. Two
+  // hardcoded column orders drifting apart puts values under the wrong
+  // headings - which on an audit log is not a cosmetic bug.
+  $('auditHead').innerHTML = '<tr>' + cols.map(function (c) {
+    return '<th>' + esc(c.label) + '</th>';
+  }).join('') + '</tr>';
+
   $('auditBody').innerHTML = state.auditRows.map(function (r, i) {
     var cls = (r.result === 'Success') ? 'res-success' : 'res-other';
     var plan = undoPlan(r);
-    var undoCell = plan.ok
-      ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
-      : '<span class="cell-disabled undo-no" title="' + esc(plan.reason) + '">-</span>';
 
-    return '<tr>' +
-      '<td data-label="Time" class="cell-muted">' + esc(formatStamp(r.time)) + '</td>' +
-      '<td data-label="Action" class="cell-name">' + esc(r.action) + '</td>' +
-      '<td data-label="Target">' + esc(r.target) + '</td>' +
-      '<td data-label="Operator" class="cell-muted">' + esc(r.operator) + '</td>' +
-      '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>' +
-      '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>' +
-      '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>' +
-      '<td data-label="Undo">' + undoCell + '</td>' +
-      '</tr>';
+    var cells = {
+      time:     '<td data-label="Time" class="cell-muted">' + esc(formatStamp(r.time)) + '</td>',
+      action:   '<td data-label="Action" class="cell-name">' + esc(r.action) + '</td>',
+      target:   '<td data-label="Target">' + esc(r.target) + '</td>',
+      operator: '<td data-label="Operator" class="cell-muted">' + esc(r.operator) + '</td>',
+      dc:       '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>',
+      reason:   '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>',
+      result:   '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>',
+      undo:     '<td data-label="Undo">' + (plan.ok
+                  ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
+                  : '<span class="cell-disabled undo-no" title="' + esc(plan.reason) + '">-</span>') + '</td>'
+    };
+
+    return '<tr>' + cols.map(function (c) { return cells[c.key] || ''; }).join('') + '</tr>';
   }).join('');
 
   var undoButtons = $('auditBody').querySelectorAll('[data-undo]');
@@ -4428,15 +4494,58 @@ function wireEvents() {
   $('auditRefresh').addEventListener('click', function () { loadAudit(); });
   $('auditExport').addEventListener('click', exportAudit);
 
+  // ---- keyboard shortcuts ----
+  // Two: "/" focuses the search box on the current tab, "r" reloads it. A
+  // console people type domain passwords and OU names into must never swallow
+  // a keystroke meant for a field, so anything typed into an input, textarea,
+  // select or contenteditable is left completely alone, and so is any
+  // combination with Ctrl/Alt/Meta, which belongs to the browser.
+  document.addEventListener('keydown', function (e) {
+    if (e.ctrlKey || e.altKey || e.metaKey) { return; }
+
+    // Escape is NOT handled here. It already has a complete handler further
+    // down that closes the dialog, the bell, the menu and the slide-over in
+    // the right order. A second one would race it - the proposal asked for
+    // Escape and it turned out to be the one part already built.
+    var t = e.target || {};
+    var tag = (t.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable) { return; }
+
+    if (e.key === '/') {
+      var box = (state.tab === 'audit') ? $('auditSearch') : $('search');
+      // offsetParent is null for an element inside a hidden pane - no point
+      // focusing a search box on a tab that is not on screen.
+      if (box && box.offsetParent) {
+        e.preventDefault();   // or the "/" lands in the box it just focused
+        box.focus();
+        box.select();
+      }
+      return;
+    }
+
+    if (e.key === 'r' || e.key === 'R') {
+      if (state.tab === 'audit') { loadAudit(); }
+      else if (state.tab === 'users' || state.tab === 'groups') { loadRows(); }
+      return;
+    }
+  });
+
   // ---- toolbar ----
-  $('colsBtn').addEventListener('click', function () {
-    $('colPicker').hidden = !$('colPicker').hidden;
-    renderColPicker();
-  });
-  $('colPicker').addEventListener('click', function (e) {
-    var chip = e.target.closest('[data-col]');
-    if (chip) { toggleCol(chip.getAttribute('data-col')); }
-  });
+  // Two buttons, two pickers, one behaviour - the audit view is a separate
+  // pane, so it cannot share the directory toolbar's control.
+  function wireColumns(buttonId, pickerId) {
+    $(buttonId).addEventListener('click', function () {
+      var box = $(pickerId);
+      box.hidden = !box.hidden;
+      renderColPicker();
+    });
+    $(pickerId).addEventListener('click', function (e) {
+      var chip = e.target.closest('[data-col]');
+      if (chip) { toggleCol(chip.getAttribute('data-col')); }
+    });
+  }
+  wireColumns('colsBtn', 'colPicker');
+  wireColumns('auditColsBtn', 'auditColPicker');
   $('exportBtn').addEventListener('click', exportCurrent);
   $('importBtn').addEventListener('click', actionImportCsv);
   $('createBtn').addEventListener('click', function () {

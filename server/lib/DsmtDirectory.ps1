@@ -219,6 +219,41 @@ function ConvertTo-DsmtUser {
         try { $expiry = [datetime]::FromFileTime([Int64]$expiryRaw) } catch { $expiry = $null }
     }
 
+    # Numbers the UI can filter and sort on, computed HERE because this is the
+    # one attribute mapping site. Every one is worked out into its own
+    # variable before the [ordered]@{} literal below: a cast that throws
+    # inside a hashtable literal loses the WHOLE object, not one field, and
+    # dates from AD are exactly the kind of value that is absent rather than
+    # empty. That failure cost this project a release - see CLAUDE.md.
+    #
+    # -1 is the sentinel for "does not apply", never 0: a password expiring in
+    # 0 days and a password that never expires are opposite facts, and any
+    # comparison that treats them alike is wrong in the direction that hides
+    # a problem.
+    $pwdNever = $false
+    try { $pwdNever = [bool]$AdUser.PasswordNeverExpires } catch { $pwdNever = $false }
+
+    $pwdExpired = $false
+    try { $pwdExpired = [bool]$AdUser.PasswordExpired } catch { $pwdExpired = $false }
+
+    $pwdDays = -1
+    if (-not $pwdNever -and $null -ne $expiry) {
+        try { $pwdDays = [int][math]::Floor(($expiry - (Get-Date)).TotalDays) } catch { $pwdDays = -1 }
+    }
+
+    # Days since the last logon. LastLogonDate comes from lastLogonTimestamp,
+    # which the DC only replicates every 9-14 days by default - so this is
+    # accurate to roughly a fortnight and must never be presented as "last
+    # seen". It is good enough for "has not been used in months", which is
+    # what a stale-account report actually asks.
+    $logonDays  = -1
+    $neverLogon = $true
+    if ($AdUser.LastLogonDate) {
+        $neverLogon = $false
+        try { $logonDays = [int][math]::Floor(((Get-Date) - [datetime]$AdUser.LastLogonDate).TotalDays) }
+        catch { $logonDays = -1 }
+    }
+
     $managerName = ''
     if ($AdUser.manager) { $managerName = Get-DsmtNameFromDn -DistinguishedName ([string]$AdUser.manager) }
 
@@ -241,6 +276,11 @@ function ConvertTo-DsmtUser {
         logon    = ConvertTo-DsmtDisplayTime -Value $AdUser.LastLogonDate
         logonRaw = ''
         pwd      = ConvertTo-DsmtRelativeExpiry -Value $expiry -NeverExpires ([bool]$AdUser.PasswordNeverExpires)
+        pwdDays    = $pwdDays
+        pwdNever   = $pwdNever
+        pwdExpired = $pwdExpired
+        logonDays  = $logonDays
+        neverLogon = $neverLogon
         groups   = $groupCount
         manager  = $managerName
         mail     = [string]$AdUser.mail
@@ -566,6 +606,108 @@ function Get-DsmtGroupFilters {
     # element that is itself an array. That is what made the Groups tab render
     # a single blank row: items serialised as [[ ...20 groups... ]].
     return @($filters)
+}
+
+# Thresholds for the user filters, defined ONCE. They appear in the filter
+# label, in the "how" text and in the test itself, so a literal typed into any
+# of the three would eventually disagree with the other two.
+$script:DsmtPwdExpiringDays = 14
+$script:DsmtStaleLogonDays  = 90
+
+function Get-DsmtUserFilters {
+    <#
+    .SYNOPSIS
+        The filter chips the Users screen offers.
+    .DESCRIPTION
+        All built-in: these are facts about account state, not configuration,
+        and each states what it matches on so the Settings screen and the
+        chip tooltip do not need a second copy of the explanation.
+
+        NOT ",@($filters)" - the call site wraps in @( ), and the comma
+        operator would leave the outer array in place so the whole list
+        arrives as one element that is itself an array. That is what rendered
+        the Groups tab as a single blank row, twice.
+    #>
+    $expiring = [string]$script:DsmtPwdExpiringDays
+    $stale    = [string]$script:DsmtStaleLogonDays
+
+    $filters = @(
+        @{ key = 'all'; label = 'All'; how = 'Every account returned by the search.' }
+
+        @{ key = 'pwdexpiring'; label = ('Password expiring (' + $expiring + 'd)')
+           how = ('Password expires within ' + $expiring + ' days. Excludes accounts whose password ' +
+                  'has already expired and those set never to expire - those are separate answers.') }
+
+        @{ key = 'pwdexpired'; label = 'Password expired'
+           how = 'The password has already expired. The account cannot sign in until it is reset.' }
+
+        @{ key = 'pwdnever'; label = 'Password never expires'
+           how = 'PasswordNeverExpires is set. Worth reviewing periodically; common and legitimate on ' +
+                 'service accounts, rarely right on a person.' }
+
+        @{ key = 'stale'; label = ('Stale (' + $stale + 'd)')
+           how = ('No logon recorded in ' + $stale + ' days. Read from lastLogonTimestamp, which a DC ' +
+                  'replicates only every 9-14 days by default - so this is accurate to about a ' +
+                  'fortnight and is NOT a "last seen" timestamp.') }
+
+        @{ key = 'neverlogon'; label = 'Never logged on'
+           how = 'No logon has ever been recorded. Often a newly created account, sometimes one that ' +
+                 'was created and forgotten.' }
+
+        @{ key = 'disabled'; label = 'Disabled'; how = 'The account is disabled.' }
+
+        @{ key = 'lockedout'; label = 'Locked out'
+           how = 'The account is currently locked out by the password policy.' }
+    )
+
+    return @($filters)
+}
+
+function Select-DsmtUsersByFilter {
+    <#
+    .SYNOPSIS
+        Applies one filter key to a list of mapped user rows.
+    .DESCRIPTION
+        Applied AFTER the directory search, not folded into the LDAP filter.
+        Password expiry comes from msDS-UserPasswordExpiryTimeComputed, which
+        is CONSTRUCTED - LDAP cannot filter on it - and the day counts are
+        derived in ConvertTo-DsmtUser rather than stored anywhere.
+
+        An unknown key returns everything rather than nothing, for the same
+        reason as the group filters: an empty screen reads as "there are
+        none", which is a different and much worse answer than "that filter
+        no longer exists".
+    #>
+    param([array] $Rows, [string] $Filter = 'all')
+
+    if ([string]::IsNullOrWhiteSpace($Filter) -or $Filter -eq 'all') { return @($Rows) }
+
+    $expiring = $script:DsmtPwdExpiringDays
+    $stale    = $script:DsmtStaleLogonDays
+
+    switch ($Filter) {
+        'pwdexpiring' {
+            # Already expired and never-expires are both excluded: they are
+            # their own answers, and lumping them in here would make this
+            # chip mean "something about passwords" rather than one thing.
+            return @(@($Rows) | Where-Object {
+                -not $_.pwdNever -and -not $_.pwdExpired -and $_.pwdDays -ge 0 -and $_.pwdDays -le $expiring
+            })
+        }
+        'pwdexpired' { return @(@($Rows) | Where-Object { $_.pwdExpired }) }
+        'pwdnever'   { return @(@($Rows) | Where-Object { $_.pwdNever }) }
+        'stale' {
+            # Never-logged-on is deliberately NOT stale. An account created
+            # yesterday would otherwise appear in a "no logon in 90 days"
+            # report, which is true and useless.
+            return @(@($Rows) | Where-Object { -not $_.neverLogon -and $_.logonDays -ge $stale })
+        }
+        'neverlogon' { return @(@($Rows) | Where-Object { $_.neverLogon }) }
+        'disabled'   { return @(@($Rows) | Where-Object { -not $_.enabled }) }
+        'lockedout'  { return @(@($Rows) | Where-Object { $_.locked }) }
+    }
+
+    return @($Rows)
 }
 
 function Select-DsmtGroupsByFilter {

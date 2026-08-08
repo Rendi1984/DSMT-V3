@@ -140,9 +140,9 @@
 
       <div class="col-picker" id="colPicker" hidden></div>
 
-      <!-- Group filters. Hidden on the Users tab; the chips themselves come
-           from the server, so a custom filter added in Settings appears here
-           without a code change. -->
+      <!-- Filter chips for BOTH directory tabs - account state on Users,
+           group kind on Groups. They come from the server, so a custom filter
+           added in Settings appears here without a code change. -->
       <div class="chips" id="groupFilters" hidden></div>
 
       <div class="bulk-bar" id="bulkBar" hidden>
@@ -223,9 +223,13 @@
         <span class="audit-stamp" id="auditStamp"></span>
         <button class="btn btn-secondary" id="auditRefresh" type="button" title="Reload the audit log">Refresh</button>
         <input class="input" id="auditSearch" type="search" placeholder="Search target, operator or reason" autocomplete="off">
+        <!-- Its own button: the directory toolbar's Columns control lives
+             inside #directoryView, which is hidden on this tab. -->
+        <button class="btn btn-ghost" id="auditColsBtn" type="button">Columns</button>
         <button class="btn btn-secondary" id="auditExport" type="button">Export</button>
       </div>
     </div>
+    <div class="col-picker" id="auditColPicker" hidden></div>
     <div class="chips" id="auditRanges"></div>
 
     <div class="range-custom" id="auditCustom" hidden>
@@ -244,12 +248,9 @@
     <div class="chips" id="auditFilters"></div>
     <div class="table-wrap">
       <table class="table dsmt-table" id="auditTable">
-        <thead>
-          <tr>
-            <th>Time</th><th>Action</th><th>Target</th><th>Operator</th>
-            <th>Controller</th><th>Reason</th><th>Result</th><th>Undo</th>
-          </tr>
-        </thead>
+        <!-- Built by renderAudit() from the same column list as the body,
+             so a hidden column cannot leave values under the wrong heading. -->
+        <thead id="auditHead"></thead>
         <tbody id="auditBody"></tbody>
       </table>
       <p class="result-line" id="auditLine"></p>

@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.27.0** | 2026-08-08 | Account-state filters on Users (expiring, expired, stale, never logged on...), a column chooser on the Audit table, and two keyboard shortcuts | Restart + refresh |
 | **1.26.4** | 2026-08-08 | **Create user said Failed while leaving the account in the directory** - and the audit log said Failed too. Creation is now atomic | Restart |
 | **1.26.3** | 2026-08-08 | The Administrators card contradicted itself - "no groups configured" printed above a configured group. Says which DC membership is read from | Restart + refresh |
 | **1.26.2** | 2026-08-08 | **Fixes the administrator role, which could not have worked at all**: the group-membership read used the wrong LDAP search scope | Restart + refresh |
@@ -78,6 +79,87 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.27.0 — 2026-08-08
+
+### Account-state filters on the Users tab (proposal 4)
+
+Eight chips, matching the ones Groups already had: **All**, Password expiring
+(14d), Password expired, Password never expires, Stale (90d), Never logged on,
+Disabled, Locked out.
+
+No new directory reads — `msDS-UserPasswordExpiryTimeComputed`,
+`PasswordNeverExpires`, `PasswordExpired` and `LastLogonDate` were already
+being fetched. What was missing was turning them into numbers something can
+filter on, which now happens in `ConvertTo-DsmtUser`, the one attribute
+mapping site.
+
+Four decisions inside it:
+
+- **`-1` is the sentinel for "does not apply", never `0`.** A password
+  expiring in 0 days and a password that never expires are opposite facts, and
+  any comparison treating them alike is wrong in the direction that hides a
+  problem.
+- **"Password expiring" excludes already-expired and never-expires.** Both are
+  their own chips. Lumping them in would make one chip mean "something about
+  passwords" rather than one thing.
+- **"Never logged on" is deliberately not "stale".** An account created
+  yesterday would otherwise appear in a 90-day report — true, and useless.
+- **Stale is honest about its own accuracy.** `LastLogonDate` comes from
+  `lastLogonTimestamp`, which a DC replicates only every 9–14 days by default.
+  The chip tooltip says so. It is good enough for "not used in months", which
+  is what the question actually is, and it is **not** a "last seen" timestamp.
+
+The two thresholds (14 and 90 days) are defined once and reach the label, the
+explanation and the test from there.
+
+**The chip mechanism was generalised, not copied.** Groups had one renderer;
+Users would have made two, and two chip renderers drift until one tab quietly
+stops honouring a rule the other still does. There is now one, keyed off the
+tab, and the tooltip text comes from the server's own description of each
+filter so this file holds no second copy of what a chip matches.
+
+### A column chooser on the Audit table (proposal 10)
+
+The same picker the Users grid has. `colDefs()` learned about `'audit'` and
+almost everything else fell out for free.
+
+Two things that did not: the audit view is a separate pane, so the directory
+toolbar's Columns button is hidden there and it needed its own; and the table's
+`<thead>` was hardcoded, so header and body are now built from the same list in
+the same order. Two hardcoded column orders drifting apart puts values under
+the wrong headings — on an audit log that is not a cosmetic bug.
+
+**Every audit column defaults to on.** A column hidden by default is a fact an
+auditor does not know to look for. The picker is for narrowing a wide table on
+a small screen, not for curating what is on the record.
+
+### Two keyboard shortcuts (proposal 11)
+
+`/` focuses the search box on the current tab, `r` reloads it.
+
+The proposal asked for three, including `Esc` to close the detail pane — which
+turned out to **already be built**, with a handler that closes the dialog, the
+bell, the menu and the slide-over in the right order. A second handler would
+have raced it, so `Esc` was left alone and a comment now says why.
+
+Anything typed into an input, textarea, select or contenteditable is left
+completely alone, as is any Ctrl/Alt/Meta combination. A console people type
+domain passwords and OU names into must never swallow a keystroke meant for a
+field.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 

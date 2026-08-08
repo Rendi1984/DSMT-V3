@@ -1274,14 +1274,30 @@ function Invoke-DsmtApi {
 
             '^/api/users$' {
                 if ($method -eq 'GET') {
-                    $q     = Get-DsmtQueryValue -Request $Request -Name 'q'
+                    $q          = Get-DsmtQueryValue -Request $Request -Name 'q'
+                    $userFilter = [string](Get-DsmtQueryValue -Request $Request -Name 'filter' -Default 'all')
                     $limit = 0
                     [int]::TryParse((Get-DsmtQueryValue -Request $Request -Name 'limit' -Default '0'), [ref] $limit) | Out-Null
-                    $rows  = Get-DsmtUsers -Credential $session.Credential -Query $q -Limit $limit
-                    # The grid is served from the live read above; the SQL
-                    # snapshot is written afterwards and never read back into it.
+
+                    $rows = @(Get-DsmtUsers -Credential $session.Credential -Query $q -Limit $limit)
+
+                    # The snapshot is written from the UNFILTERED read, so a
+                    # filtered view never truncates what SQL believes the
+                    # directory contains. Same rule as the Groups tab.
                     Sync-DsmtUsersToSql -Users $rows | Out-Null
-                    Send-DsmtJson -Response $Response -Data @{ ok = $true; items = @($rows); count = @($rows).Count; limit = $cfg.PageSize }
+
+                    $total = @($rows).Count
+                    $rows  = @(Select-DsmtUsersByFilter -Rows $rows -Filter $userFilter)
+
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok      = $true
+                        items   = @($rows)
+                        count   = @($rows).Count
+                        total   = $total
+                        filter  = $userFilter
+                        filters = @(Get-DsmtUserFilters)
+                        limit   = $cfg.PageSize
+                    }
                     return
                 }
 
