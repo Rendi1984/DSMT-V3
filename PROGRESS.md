@@ -1131,6 +1131,117 @@ and the IIS question. Both are in the sections below.
 
 ---
 
+## Lab acceptance checklist for 1.23.0 - 1.25.0
+
+Written 2026-08-08. **None of this code has ever been executed** - the dev
+container is Linux with no PowerShell, no Windows and no domain. Treat the
+first run as a test, not a deployment. Work top to bottom; a failure early
+makes the later results meaningless.
+
+Deploy: copy `server\` and `web\` over the install, restart DSMT, then
+**hard refresh (Ctrl+F5)**. Restarting ends all sessions by design.
+
+### 0. It still starts at all
+- Startup banner reads `DSMT 1.25.0`, and so does the sign-in footer and
+  About. If any of the three disagrees, the single-source-of-truth rule has
+  been broken somewhere and that is the first thing to fix.
+- Banner shows `Transport: PLAIN HTTP` with the warning, since HTTPS is off
+  until you configure it.
+- Sign in. Everything that worked before still works: Users grid, Groups tab,
+  detail pane, Audit log.
+
+### 1. HTTPS (1.23.0) - the riskiest of the three
+`netsh` and the certificate-store read are the two calls most likely to
+behave differently than expected.
+
+- Settings -> HTTPS lists the certificates in `Cert:\LocalMachine\My`.
+  **If the list is empty on a machine that has certificates, stop** - that is
+  `Get-DsmtCertificates` failing, and nothing below it can be trusted.
+- A certificate with **no EKU at all** must appear as usable. It is valid for
+  every purpose including server auth; if it shows as unusable the EKU read is
+  inverted.
+- A certificate with no private key, and an expired one, appear in the list
+  **disabled, with the reason**. They must not be hidden and must not be
+  selectable.
+- Bind one, save. Expect: success message, the URL, and (if listening on all
+  interfaces) the `netsh http add urlacl` and firewall commands.
+- Confirm out of band: `netsh http show sslcert ipport=0.0.0.0:8443` names
+  your thumbprint and appid `{6d9d1f2b-4a3c-4e7f-9b1a-2c8e5d0f7a41}`.
+- **Restart. The console must come up on `https://`** and the banner must say
+  `Transport: HTTPS`.
+- **The refusal path.** With HTTPS on, delete the binding by hand
+  (`netsh http delete sslcert ipport=0.0.0.0:8443`) and restart. DSMT must
+  **refuse to start** and print the banner naming the port, both fixes, and
+  how to switch HTTPS off. It must NOT come up on plain HTTP. This is the
+  single most important check in this section - a silent downgrade is the
+  failure the design exists to prevent.
+- **The foreign-binding guard.** Bind something else to a port (or point DSMT
+  at 443 if IIS owns it) and try to save. DSMT must refuse and name the other
+  application ID rather than taking the port.
+- Non-elevated: hand-start `Start-DSMT.ps1` unelevated and try to bind. It
+  must return the sentence naming the fix, not a raw access-denied.
+
+### 2. DSMT administrators (1.24.0)
+- Before configuring anything: Settings -> Administrators says every operator
+  can change settings, and every settings screen still works. **This is the
+  fail-open path and an upgrade must not have changed it.**
+- Add a group you are NOT in and save. It must **refuse**, and nothing may be
+  written - re-open Settings and confirm the list is still empty.
+- Add a group you ARE in, save, **sign out and back in** (the role is resolved
+  at sign-in, not per request). Settings -> Administrators now says you
+  administer through that group.
+- Sign in as an operator who is NOT in that group. Confirm:
+  - the Administrators card says they cannot change DSMT settings;
+  - a settings write returns **403** with the reason;
+  - **the API is refused directly too**, not just the button - this is the
+    check that proves enforcement is server-side. Post to
+    `/api/settings/pagesize` with their token and expect 403;
+  - **every directory operation still works normally for them** - users,
+    groups, password reset, subject only to what AD allows. If a directory
+    action is blocked, the gate has been applied too widely and that is a bug.
+- Nested membership: put the operator in a group that is a MEMBER of the admin
+  group, not in it directly. They must be recognised. If not, `tokenGroups` is
+  not being read and the check has fallen back to direct membership.
+- Delete a configured group from AD. Settings -> Administrators must show it
+  as **not found in the directory**, not as healthy.
+- Audit log: a refused write appears with result `Denied`.
+
+### 3. Group filters and profile tabs (1.24.0)
+- Settings -> Group filters lists **Privileged** and **AdminSDHolder** as
+  read-only rows, each stating what it matches on. They must have no Remove
+  button.
+- Custom filters still add, edit inline, and save.
+- Open a user profile: **Overview / Memberships** tabs, action buttons
+  **above** the strip and visible on both tabs.
+- **Check 360px, 640px, 820px and 1180px.** The tab strip is the element most
+  likely to overflow inside a slide-over; it must scroll sideways, never wrap
+  into a second row and never hide a tab.
+
+### 4. CSV import preview (1.25.0)
+- Import CSV: the confirm button says **Preview**, not Import.
+- Preview a file mixing: a good row, a row with an empty SamAccountName, a row
+  whose account already exists, a row with a bad OU, and **the same
+  samAccountName twice**. All five verdicts must be correct, and the duplicate
+  must be caught on the SECOND occurrence.
+- Nothing is created by the preview. Confirm in AD and in the audit log.
+- Button becomes `Create N user(s)` with N matching the preview.
+- **Edit the CSV after previewing.** The button must revert to Preview and the
+  preview must clear.
+- A file where nothing would be created: the write button is hidden.
+- Run the real import. The rows the preview called `create` are created; the
+  audit log has one record per row.
+- **The lying-preview check:** sign in as an operator with no read rights on
+  an OU and preview a row targeting it. It must NOT say "would create" - a
+  lookup that could not run must never be reported as "does not exist".
+
+### 5. Still outstanding from the earlier report
+Re-run these; they predate this work and are unaffected by it.
+- With SQL configured, confirm `dbo.Operators`, `dbo.Sessions`,
+  `dbo.DirectoryUsers` and `dbo.AuditLog` actually receive rows.
+- Confirm the 1.7.5 overlay fix on the lab machine (open task 1).
+
+---
+
 ## Notes for next session
 - **`CLAUDE.md` was trimmed on 2026-08-08 and the build-handover rules moved
   to a skill.** The `server/lib/` file list and the SQL table list were
