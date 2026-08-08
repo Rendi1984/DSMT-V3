@@ -21,6 +21,18 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.29.0** | 2026-08-08 | **Overview** is the new landing screen - live tiles that link to the rows behind them; **live sessions** with sign-out; a required-permissions document | Restart + refresh |
+| **1.28.0** | 2026-08-08 | **Reports** under Tools - eight named queries, read live and stamped with the time they were taken, on screen and in the export. Saved searches on the directory tabs | Restart + refresh |
+| **1.27.0** | 2026-08-08 | Account-state filters on Users (expiring, expired, stale, never logged on...), a column chooser on the Audit table, and two keyboard shortcuts | Restart + refresh |
+| **1.26.4** | 2026-08-08 | **Create user said Failed while leaving the account in the directory** - and the audit log said Failed too. Creation is now atomic | Restart |
+| **1.26.3** | 2026-08-08 | The Administrators card contradicted itself - "no groups configured" printed above a configured group. Says which DC membership is read from | Restart + refresh |
+| **1.26.2** | 2026-08-08 | **Fixes the administrator role, which could not have worked at all**: the group-membership read used the wrong LDAP search scope | Restart + refresh |
+| **1.26.1** | 2026-08-08 | Settings -> Administrators searches the directory as you type, instead of asking you to know the group name exactly | Refresh |
+| **1.26.0** | 2026-08-08 | A broken certificate no longer takes the console down: DSMT falls back to plain HTTP and says so in the banner, the log, and a bar on every screen | Restart + refresh |
+| **1.25.1** | 2026-08-08 | The HTTPS refusal banner told you to open a console that is not running. `-NoHttps` recovery switch, and the banner now names the actual cause | Restart |
+| **1.25.0** | 2026-08-08 | **CSV import previews before it writes**: every row checked against the live directory, nothing written until the preview is seen | Restart + refresh |
+| **1.24.0** | 2026-08-08 | **DSMT administrators**: AD groups decide who may change DSMT's own settings. Built-in group filters are listed instead of described; the profile window gets tabs | Restart + refresh |
+| **1.23.0** | 2026-08-08 | **HTTPS**, configured from Settings after installation: pick a certificate from the machine store and bind it to a port. The console never receives a private key | Restart + refresh |
 | **1.22.0** | 2026-08-08 | Every setting moves into the registry, one central place; a JSON view for reading and diffing | Reinstall |
 | **1.21.0** | 2026-08-08 | Settings no longer live inside the program folder, so an upgrade cannot lose them; registry pointers; AD health runs on a schedule and raises the bell; the search result cap is editable | Reinstall |
 | **1.20.1** | 2026-08-08 | Every audit-log time range (Last 24 hours through Last 30 days) failed with a `DateTimeStyles` error; only **All time** worked | Restart |
@@ -69,6 +81,756 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.29.0 — 2026-08-08
+
+### Overview — the landing screen (proposal 25)
+
+The console opened straight into the Users grid, which answers no question: it
+is a list of everything, which is where you go when you already know what you
+are looking for. **Overview** is now the first tab and the landing screen.
+
+Tiles for user and group counts, disabled, locked out, passwords due, passwords
+expired, stale accounts, privileged groups and operators signed in. Each one
+**links to the rows behind it** — a number you cannot open is trivia.
+
+The proposal's three rules, which are all about the same failure (a number on a
+dashboard is read as "now" and as "true", and both can be wrong with nothing
+looking wrong):
+
+- **Every tile is live**, read at the moment you open the screen, never from
+  the SQL snapshot — and the screen states the time it was taken anyway,
+  absolutely, not as "Today 14:32".
+- **A tile that cannot be computed says so.** It shows the error, not a zero
+  and not a dash. "0 locked-out accounts" and "the query failed" look identical
+  and mean opposite things, so every tile carries its own ok/error from the
+  server rather than a bare number.
+- **Cost is the design constraint.** One users read and one groups read for the
+  entire screen; every count is derived from those in memory. Nothing fires a
+  call per tile, nothing auto-refreshes on a timer, and AD health — which is
+  genuinely slow — is linked to rather than computed.
+
+It inherits the 20,000-row cap and its INCOMPLETE banner, so a truncated read
+says every number below it is a floor rather than a total.
+
+### Live sessions, and signing someone out (proposal 9)
+
+Who is signed in right now, how long they have been idle, and a **Sign out**
+button — useful with several operators, and necessary the day someone leaves
+mid-shift.
+
+**Sessions are addressed by an opaque per-session id, never by the token.** The
+token is a bearer credential: anything holding it can act as that operator, so
+sending tokens to the browser in order to end a session would have turned this
+feature into an impersonation tool. Signing out drops the `PSCredential` held
+for that session.
+
+Ending someone else's session is gated on the **DSMT administrator role** — a
+console-level act with no AD equivalent, which is exactly what that role
+governs. Ending your own session from here is refused with a pointer to Log
+off, rather than throwing you to the login screen and looking like a bug. And
+it routes through `Remove-DsmtSession` rather than dropping the key directly,
+so the SQL session row is closed too — otherwise `dbo.Sessions` would still
+show the operator as signed in, the audit trail disagreeing with reality.
+
+### `docs/required-permissions.md` (open task 3)
+
+Every right DSMT needs, in one place: what each console action requires in AD
+with the exact `dsacls` commands, what the host needs, what SQL needs, and how
+to read a failure. Three things it calls out because they are easy to miss —
+**Delete is needed to create a user** (the rollback added in 1.26.4 uses it),
+**Move needs rights on both OUs**, and **delegate to a group, never a person**.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtSession.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+| `docs/required-permissions.md` *(new)* | documentation only |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
+
+---
+
+## 1.28.0 — 2026-08-08
+
+### Reports (proposal 19)
+
+Eight named queries under **Tools → Reports**: stale accounts, passwords
+expiring, passwords expired, password never expires, never logged on, disabled
+accounts, created in the last 30 days, and privileged group membership.
+
+A report here is **a saved filter plus a column set**, running the same
+`Get-DsmtUsers` / `Select-DsmtUsersByFilter` path the Users grid uses — not a
+second query engine. The definitions live on the server so the list, the labels
+and the column sets have one source.
+
+**The date is the feature.** Every report is stamped with the moment it was
+taken, the domain and the controller that answered — above the table *and* in
+the exported CSV. The server returns the stamp *with* the rows precisely so
+there is no shape of the response that carries data without its date. A
+directory report with no "as at" gets forwarded for months as if it were still
+true, which is the fake-data failure in a form that survives being emailed.
+
+Reports read **live**, never from the SQL snapshot, and say so on the page.
+
+Nothing auto-runs. Each report reads the directory, and a screen that fires
+several of those on open is how a diagnostic tool becomes the thing people
+blame.
+
+**Three defects caught by review before this shipped**, all of the same family
+— something that looks right and is quietly wrong:
+
+- **Reports would have silently truncated at 500 rows.** `Get-DsmtUsers` treats
+  `-Limit 0` as "use PageSize", so a report on a larger domain would have
+  returned the first 500 accounts, dated, formatted and authoritative. Reports
+  now pass an explicit 20,000-row cap, and **when the cap is actually reached
+  the report says it is incomplete** — on screen in the error style, and as a
+  row inside the exported file, because once a CSV is in someone's inbox
+  nothing on the screen it came from can qualify it. The check runs on the
+  *unfiltered* read, where the cap actually bites; checking after filtering
+  would miss it entirely.
+- **The stamp used the relative formatter.** `formatStamp()` renders
+  "Today 17:48", which is correct on a live audit screen and meaningless in an
+  exported file — and its fallback branch omitted the year, so "12 Aug 14:30"
+  is ambiguous a year later. Reports use a new absolute formatter with the
+  full date and the UTC offset.
+- **Double-escaping** in the report header, from passing `esc()` output to
+  `settingsRow()`, which escapes its own values.
+
+### Saved searches (proposal 1)
+
+**Save search** on the directory toolbar stores the tab, the search text and
+the filter chip; the saved bar puts that view back in one click, and each entry
+has its own delete control.
+
+Stored **per browser** in `localStorage`, which is the proposal's own first
+step rather than an oversight — no server change and no shared state to get
+wrong. If these ever move to SQL so a team shares them they become
+configuration, and need the same treatment as the group filters.
+
+Two things review caught here too: applying a preset that changed tab fired
+**two** overlapping loads — `setTab()` loading with the old query, then the new
+one — a race that occasionally shows the wrong rows and is near-impossible to
+reproduce deliberately. And the saved bar was rendered inside the filter-chip
+function *after* its early return, so it never appeared on a tab that reported
+no chips.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
+
+---
+
+## 1.27.0 — 2026-08-08
+
+### Account-state filters on the Users tab (proposal 4)
+
+Eight chips, matching the ones Groups already had: **All**, Password expiring
+(14d), Password expired, Password never expires, Stale (90d), Never logged on,
+Disabled, Locked out.
+
+No new directory reads — `msDS-UserPasswordExpiryTimeComputed`,
+`PasswordNeverExpires`, `PasswordExpired` and `LastLogonDate` were already
+being fetched. What was missing was turning them into numbers something can
+filter on, which now happens in `ConvertTo-DsmtUser`, the one attribute
+mapping site.
+
+Four decisions inside it:
+
+- **`-1` is the sentinel for "does not apply", never `0`.** A password
+  expiring in 0 days and a password that never expires are opposite facts, and
+  any comparison treating them alike is wrong in the direction that hides a
+  problem.
+- **"Password expiring" excludes already-expired and never-expires.** Both are
+  their own chips. Lumping them in would make one chip mean "something about
+  passwords" rather than one thing.
+- **"Never logged on" is deliberately not "stale".** An account created
+  yesterday would otherwise appear in a 90-day report — true, and useless.
+- **Stale is honest about its own accuracy.** `LastLogonDate` comes from
+  `lastLogonTimestamp`, which a DC replicates only every 9–14 days by default.
+  The chip tooltip says so. It is good enough for "not used in months", which
+  is what the question actually is, and it is **not** a "last seen" timestamp.
+
+The two thresholds (14 and 90 days) are defined once and reach the label, the
+explanation and the test from there.
+
+**The chip mechanism was generalised, not copied.** Groups had one renderer;
+Users would have made two, and two chip renderers drift until one tab quietly
+stops honouring a rule the other still does. There is now one, keyed off the
+tab, and the tooltip text comes from the server's own description of each
+filter so this file holds no second copy of what a chip matches.
+
+### A column chooser on the Audit table (proposal 10)
+
+The same picker the Users grid has. `colDefs()` learned about `'audit'` and
+almost everything else fell out for free.
+
+Two things that did not: the audit view is a separate pane, so the directory
+toolbar's Columns button is hidden there and it needed its own; and the table's
+`<thead>` was hardcoded, so header and body are now built from the same list in
+the same order. Two hardcoded column orders drifting apart puts values under
+the wrong headings — on an audit log that is not a cosmetic bug.
+
+**Every audit column defaults to on.** A column hidden by default is a fact an
+auditor does not know to look for. The picker is for narrowing a wide table on
+a small screen, not for curating what is on the record.
+
+### Two keyboard shortcuts (proposal 11)
+
+`/` focuses the search box on the current tab, `r` reloads it.
+
+The proposal asked for three, including `Esc` to close the detail pane — which
+turned out to **already be built**, with a handler that closes the dialog, the
+bell, the menu and the slide-over in the right order. A second handler would
+have raced it, so `Esc` was left alone and a comment now says why.
+
+Anything typed into an input, textarea, select or contenteditable is left
+completely alone, as is any Ctrl/Alt/Meta combination. A console people type
+domain passwords and OU names into must never swallow a keystroke meant for a
+field.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
+
+---
+
+## 1.26.4 — 2026-08-08
+
+### Create user reported Failed while leaving the account in the directory
+
+Found on the lab domain: an operator without Reset Password rights created a
+user, the console said **Failed** — and the account existed in AD anyway.
+Trying again then behaved differently, because the second attempt was no longer
+creating a fresh object.
+
+Creating a usable account is **four** directory operations, not one: create
+(disabled), set the password, set "must change at next logon", enable. AD
+refuses to enable an account with no compliant password, which is why the
+create is disabled first and the enable comes last.
+
+Step 1 succeeded. Step 2 threw. Nothing undid step 1, so the account sat there
+disabled and unusable while the console reported total failure.
+
+**The worst part was the audit record.** It said `Failed` too — so the log
+claimed nothing happened at the exact moment an object was created in the
+directory. An audit log that misses a creation is worse than no audit log,
+because it is trusted.
+
+**Creation is now atomic.** Every step after the create is wrapped, and on any
+failure the half-made account is removed. Either it happened or it did not;
+no third state is left behind.
+
+If the rollback *itself* fails — the likeliest reason being an operator who can
+create but not delete — the account is left in place and **the error says so**,
+naming the account, the OU, and the state it is in. That is the one case where
+something remains, and it is reported rather than hidden. The message also
+names which of the four steps failed, so "Failed" is never the whole story
+again.
+
+### Confirmed working in the same round
+
+The administrator role gate was verified on the lab domain: `LAB\HD`, removed
+from the configured group, signed in normally, browsed the directory normally,
+and got **Denied** on `POST /api/settings/session` with the audit record to
+match. That is exactly the intended behaviour — the role governs DSMT's own
+settings, never console access or directory work.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+
+**To deploy:** copy the two files and restart DSMT. No front-end change.
+
+---
+
+## 1.26.3 — 2026-08-08
+
+### The Administrators card contradicted itself
+
+Reported from the lab with a screenshot: the state box read *"No administrator
+groups are configured, so every operator can change DSMT settings"* directly
+above a row showing **Domain Admins** with its resolved SID.
+
+Both statements were true, about different moments. The box describes **your
+session**, whose role was decided at sign-in; the list is read **live**. Save a
+group and they disagree until you sign in again — and the card printed both as
+if they described the same thing, which reads as a bug rather than as the
+sign-in caching it actually is.
+
+The card now detects the disagreement and says it plainly: your session
+predates the change, sign out and back in to pick it up.
+
+### It also now names the domain controller it reads membership from
+
+Removing someone from a group on one DC and asking DSMT on another produces
+exactly the symptom *"I took them out of the group and DSMT still says they are
+in it"* — which looks identical to a bug in the role check. The card names the
+controller it read from, so that is a ten-second check rather than a
+code-reading exercise.
+
+### Not a bug, and now said on screen
+
+**Signing in is never blocked by this list.** The administrator role governs
+who may change DSMT's own settings, not who may use the console. An operator
+removed from every administrator group still signs in, still browses the
+directory, and still performs every directory action Active Directory permits
+them — they just get 403 on a settings write. The card said this in prose about
+directory *operations*; it now says it about *signing in* too, because that is
+the thing people check first.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the four files, restart DSMT, hard refresh (Ctrl+F5).
+
+---
+
+## 1.26.2 — 2026-08-08
+
+### The administrator role could not have worked at all
+
+Found on the lab domain the first time a group was actually added. Saving
+returned:
+
+> Your own group membership could not be read, so DSMT cannot confirm this
+> mapping would not lock you out. Nothing was saved. **The requested search
+> operation is only supported for base searches**
+
+`tokenGroups` is a **constructed** attribute: the domain controller computes it
+per request, and it can only be retrieved by a **base-scope** search bound to
+that one object. 1.24.0 asked for it with
+`Get-ADUser -Identity <samAccountName> -Properties tokenGroups`, and a non-DN
+identity makes the AD module run a **subtree** search to locate the object —
+which is precisely the unsupported case.
+
+It now resolves the account to its `distinguishedName` with an ordinary search
+first, then reads `tokenGroups` with an explicit
+`-SearchScope Base -LDAPFilter '(objectClass=*)'` bound to that DN. The scope
+is stated outright rather than relying on "-Identity with a DN happens to bind
+directly" — that is an implementation detail, and this is the one attribute
+where getting the scope wrong fails outright instead of degrading.
+
+An empty `tokenGroups` is now also treated as a failure rather than as
+"member of nothing". Every account is at least in Domain Users, so an empty
+result means the read did not work, and silently denying a real administrator
+is the wrong way to be wrong.
+
+**How badly this hid, and why the guard that caught it must stay.** With no
+administrator groups configured the role check short-circuits and never calls
+this, so 1.24.0 through 1.26.1 all looked healthy. The moment a group was
+configured, **every sign-in would have failed the lookup and every operator
+would have been locked out of Settings** — recoverable only with regedit on the
+host. What caught it was the "refuse to save a list you are not a member of"
+check, which runs the lookup *before* writing anything. It turned a
+lock-everyone-out into an error message and an unchanged configuration. That
+guard earned its place; it is now commented as such so it does not get
+simplified away.
+
+### Also
+
+The group picker showed `Domain Admins (Domain Admins)`. The samAccountName is
+now shown only when it differs from the name, which for most built-in groups it
+does not.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the three files, restart DSMT, hard refresh (Ctrl+F5).
+
+---
+
+## 1.26.1 — 2026-08-08
+
+### Settings -> Administrators searches the directory as you type
+
+The group box was free text: you had to already know the name exactly, and a
+typo only surfaced on save. It now searches Active Directory as you type,
+using **the same picker the "Add to group" dialog already uses** - the same
+helper, the same 250ms debounce, the same two-character floor. Deliberately
+not a second kind of directory picker; there is one way to find an object in
+this console.
+
+Three small things that came with it:
+
+- The typed box still works on its own. A group the search does not surface
+  can be entered by hand, and the server resolves either form to a SID before
+  anything is stored - so nothing that worked before stopped working.
+- The pending row shows the **friendly name** while sending the
+  samAccountName, so what you read and what gets resolved are both right.
+- Adding the same group twice is refused with a message. It previously saved a
+  duplicate mapping and drew two identical rows, with nothing on screen
+  explaining why.
+
+**Files changed:** `web/app.js`, `server/lib/DsmtCommon.ps1` (version only).
+
+**To deploy:** copy `web\app.js`, hard refresh (Ctrl+F5). No restart needed -
+nothing on the server changed.
+
+---
+
+## 1.26.0 — 2026-08-08
+
+### A broken certificate no longer takes the console down
+
+1.23.0 made DSMT **refuse to start** when HTTPS was configured and the
+certificate was missing, expired or unbound. 1.25.1 papered over the worst of
+that with a `-NoHttps` recovery switch. Both were treating a symptom: the
+refusal itself was the wrong call, and it is reversed here.
+
+The reasoning behind it was wrong twice over.
+
+**It was not actually silent.** A browser opening `https://` against a plain
+HTTP listener fails the TLS handshake and shows an error — it does not quietly
+send the password in clear text. The real risk is a human retyping `http://`
+to make it work and then forgetting, which is a reason to warn loudly, not a
+reason to take the console down.
+
+**And it weighed one failure against nothing.** The other failure is that the
+domain administration console is dead because a certificate expired — far
+likelier, immediate, and it disables the very screen where the fix lives.
+Refusing to start meant the recovery path for "Settings → HTTPS" was "you
+cannot open Settings".
+
+So DSMT now starts, works, and makes the degraded state impossible to miss:
+
+- **The startup banner names the cause**, not just the symptom: the
+  certificate was never chosen, it is gone from the store, it is present but
+  unusable (with the reason), or it is fine and only the binding is missing —
+  in which case it prints the rebind command with the real thumbprint.
+- **The log records it at ERROR** on every start, so it shows up in a service
+  install where nobody sees a console.
+- **A bar across the top of every screen, including sign-in**, states that the
+  connection is not encrypted, with the cause and the fix. It has no dismiss
+  control: this is a fact about the connection, not a notice to acknowledge,
+  and it clears itself when HTTPS works.
+- **Settings → HTTPS distinguishes "never set up" from "set up and broken."**
+  Conflating those would be the fake-data failure again — they call for
+  different actions from whoever is reading.
+
+The warning bar is the most conservative rule in `app.css` on purpose: a plain
+block in normal document flow, no `position`, no `inset`, no `fixed`, no grid,
+no transform. Every one of those is a way for an element to end up invisible on
+a browser that drops the property — which is exactly what 1.7.5 was — and a
+security warning that silently renders nowhere is worse than none, because it
+makes the console look safe.
+
+**`-NoHttps` is removed.** It existed only to escape the refusal, and there is
+nothing left to escape.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
+
+---
+
+## 1.25.1 — 2026-08-08
+
+### The HTTPS failure banner pointed at a console that was not running
+
+1.23.0 made DSMT refuse to start when HTTPS is on and the certificate is
+missing, expired or unbound, rather than fall back to plain HTTP silently.
+That part is right and stays.
+
+The banner it printed was not. Its first suggested fix read *"Open Settings ->
+HTTPS in the console and bind a certificate"* — advice that is wrong at exactly
+the moment it is read, because the console did not start. What remained was a
+`netsh` line with the literal word `THUMBPRINT` in it when no thumbprint was
+saved, and a sentence about editing the registry by hand. Refusing to start is
+only a defensible design if getting back up is one command, and it was not.
+
+**`-NoHttps`** is that command:
+
+```
+.\server\Start-DSMT.ps1 -NoHttps
+```
+
+Plain HTTP, this run only, saved settings untouched — the next normal start
+enforces HTTPS again, so it cannot be used to quietly leave the console
+unencrypted. Under the Windows service, where there is no command line to add
+a switch to, the banner now gives the two-line equivalent
+(`Set-ItemProperty ... HttpsEnabled 0` then `Restart-Service DSMT`) as a
+copy-pasteable command rather than a description of where to click in regedit.
+
+**The banner also names the actual cause now.** It reads the store and says
+which of the three it is: the certificate is gone, it is present but unusable
+(with the reason — expired, no private key, no Server Authentication), or it is
+fine and only the port binding is missing — in which case it prints the exact
+rebind command with the real thumbprint. The commonest cause of this banner is
+a certificate that expired, which the operator could not see from the old text
+at all.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+
+**To deploy:** copy the two files and restart DSMT. No front-end change, so no
+hard refresh needed.
+
+---
+
+## 1.25.0 — 2026-08-08
+
+### The CSV import shows what it would do, before it does it
+
+Bulk CSV import has existed since early on and it worked: it created the
+accounts and wrote an audit record per row. What it did not have is the thing
+`PROGRESS.md` named as mandatory when the feature was proposed - *"requires a
+dry-run pass that reports what would happen before anything is written; an
+import that half-succeeds with no preview is the worst possible shape for this
+feature."* It shipped without one, so the operator found out what the import
+was going to do by reading what it had already done.
+
+The dialog is now two steps. The confirm button says **Preview** until a
+preview has been seen; only then does it become **Create N user(s)**.
+
+Each row is checked against the live directory and comes back as *create* or
+*skip* with the reason:
+
+- the `SamAccountName` column is empty;
+- **the same samAccountName appears earlier in the same file** - caught here
+  and nowhere else, because AD would create the first and reject the second
+  with a duplicate error that names the account but not the file;
+- an account with that samAccountName already exists;
+- the target OU does not resolve, on the row or as the fallback.
+
+Two things it deliberately does not claim:
+
+- **It is a preview, not a guarantee**, and says so on screen. The directory
+  can change between the check and the write, and AD still has the last word
+  on the password policy and on whether this operator may create anything in
+  that OU.
+- **Any edit invalidates it.** Changing the CSV, the file or the OU resets the
+  button to Preview. Otherwise editing after previewing would arm the write
+  button for a file nobody has seen checked - the same failure one step later.
+
+`Test-DsmtUserExists` re-throws anything that is not "not found" rather than
+answering `$false`: reporting "does not exist" when the truth is "could not
+check" would make the preview lie, and the import would then fail on a row the
+preview called safe.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the three files, restart DSMT, hard refresh (Ctrl+F5).
+
+---
+
+## 1.24.0 — 2026-08-08
+
+### DSMT administrators — who may change the console's own settings
+
+Until now, any operator who could sign in could repoint the console at a
+different database, change the identity mode or the idle timeout, move the
+listening port, or create the forest KDS root key. Nothing in Active Directory
+governs those, so nothing stopped them.
+
+Settings -> Administrators now maps AD groups to that right.
+
+**Read this before extending it, because it touches a decision recorded in
+`CLAUDE.md`.** DSMT deliberately has no permission model of its own: every
+directory read and write runs as the signed-in operator, so AD is the
+authority. That decision is *not* overturned, and the distinction is the whole
+design:
+
+- **Directory operations are untouched.** A role there could only ever
+  *subtract* — putting someone in "DSMT Admins" cannot grant a right AD
+  withheld, because the write still runs as them and still fails. And a
+  read-only role would constrain *this console*, not the person: the same
+  operator can open ADUC and do whatever AD permits. Presenting that as a
+  security control would be presenting a lie, so it was not built. The UI says
+  so in as many words.
+- **DSMT's own settings are where a role has real teeth**, because nothing in
+  AD governs them. That is the gap this closes, and it is the entire feature.
+
+Five things that shape it:
+
+- **Matched on SID, never on name.** A group called Domain Admins can be
+  renamed and is localised on a non-English install. The name is stored beside
+  the SID for display and is re-read rather than trusted.
+- **Nested membership counts.** The check reads the constructed `tokenGroups`
+  attribute, which is what the domain controller itself computes, rather than
+  `memberOf` — which lists direct membership only and would miss an
+  administrator who is one through a nested group, i.e. most real directories.
+- **Enforced at one choke point on the server**, against a central route list,
+  not sprinkled through the handlers. A role enforced route by route is a role
+  that is missing from the route somebody adds next week. Hiding a button in
+  `app.js` is a convenience; the API is reachable directly.
+- **Fails open when nothing is configured**, so an upgrade cannot lock a team
+  out of their own console. It fails *closed* in one case: a mapping that is
+  configured while the operator's group membership cannot be read. Being
+  locked out is obvious and recoverable at the registry key named in the
+  error; being wrongly granted admin is neither.
+- **DSMT refuses to save a list you are not a member of.** Every other guard
+  here is recoverable from the console; that one would need regedit on the
+  DSMT host.
+
+The role is resolved once at sign-in and cached on the session, so a change
+takes effect at each operator's next sign-in. Stated plainly rather than left
+to be discovered: re-reading `tokenGroups` per request would put a directory
+round-trip in front of every settings write.
+
+### Group filters: the built-in ones are now listed, not described
+
+Settings -> Group filters described `Privileged` and `AdminSDHolder` in prose
+and then said "No custom filters yet" — so the two filters that actually exist
+were invisible on the screen meant to list them. Both are now rows in the same
+list, marked **read-only**, each stating what it matches on (`Privileged` on
+well-known RIDs and `S-1-5-32-*` aliases; `AdminSDHolder` on `adminCount`).
+They stay uneditable on purpose: exposing a SID match as an editable term list
+would invite someone to break it exactly where it matters most.
+
+### The profile window has tabs
+
+It had become one long scroll — identity, organisation, account, then group
+memberships below the fold. Overview and Memberships are now tabs.
+
+The strip is built from a list rather than hardcoded, so the Attributes
+section proposed in `PROGRESS.md` item 28 slots in as another entry instead of
+arriving as a second navigation pattern beside this one. **The action buttons
+stay outside the strip** — they apply to the user, not to a tab, and moving
+them inside one would hide half of them depending on which tab is open. The
+strip scrolls sideways rather than wrapping, because at 640px inside a
+slide-over it is the element most likely to overflow and hiding a tab would
+hide directory data.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` *(new)* | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtSession.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
+
+**New registry value** under `HKLM\SOFTWARE\Rendi Group\DSMT\Settings`:
+`RoleAdminGroups` (string, JSON). It is registered in
+`$script:DsmtJsonSettings` — a structured setting that is not would round-trip
+as the literal `@{...}`.
+
+---
+
+## 1.23.0 — 2026-08-08
+
+### HTTPS, configured after installation
+
+The console asks operators for their **domain password** and then holds their
+credential in memory for the session. Until now it served that over plain
+HTTP, so the password and every directory record crossed the network in clear
+text. `README.md` has carried a `netsh http add sslcert` recipe since the
+first release and nothing in the product used it.
+
+HTTPS is now a **Settings -> HTTPS** screen: pick a certificate from the
+machine's store, choose a port, save. It is deliberately *not* part of the
+installer — at install time the certificate usually does not exist yet.
+
+**The console never receives a private key.** It reads
+`Cert:\LocalMachine\My` and binds a certificate already there; where one has
+to be put in the store first, it shows the `Import-PfxCertificate` command to
+run on the server. Accepting a `.pfx` upload would have sent the key's
+password over the very plain-HTTP connection this feature exists to replace —
+the chicken-and-egg is not solvable by being careful. This also keeps the rule
+already recorded for the certificate-services proposal: DSMT must never hold a
+private key.
+
+Four decisions worth knowing before deploying it:
+
+- **A missing or broken certificate stops the server; it does not fall back to
+  HTTP.** A silent downgrade would leave operators typing domain passwords
+  into a console that looks configured and is not encrypted. The startup
+  banner names the port, the fix, and how to switch HTTPS back off.
+- **The saved setting and the live transport are shown as two separate
+  facts**, never merged into one "enabled" flag. Between saving a certificate
+  and restarting they legitimately disagree, and a screen that showed only the
+  setting would report HTTPS as on while the console still answered HTTP.
+- **DSMT will not replace an SSL binding it did not create.** Bindings carry
+  an application ID; another product on the same host can legitimately own
+  one, and silently taking its port is how an unrelated service goes down with
+  no trace of the cause.
+- **Certificates that cannot serve HTTPS are listed anyway**, disabled, each
+  with the reason (no private key, expired, no Server Authentication usage).
+  Hiding them turns "my certificate is not in the list" into a support
+  question with no answer on screen.
+
+`netsh` output is parsed in exactly one function (`Get-DsmtSslBinding`) and
+matched on hex and GUID shapes rather than English labels, so a non-English
+server still parses. There is no object API for `http.sys` bindings on
+PowerShell 5.1, which is why the rule against parsing console text is bent
+here and nowhere else.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtHttps.ps1` *(new)* | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the five files, restart DSMT, hard refresh (Ctrl+F5).
+Restarting ends all sessions by design. The installer needs no change — it
+copies `server\lib\` recursively.
+
+**New registry values** under
+`HKLM\SOFTWARE\Rendi Group\DSMT\Settings`: `HttpsEnabled` (DWORD 0/1),
+`HttpsPort` (DWORD), `HttpsThumbprint` (string).
 
 ---
 

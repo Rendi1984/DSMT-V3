@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.22.0` — matches the top entry of `CHANGELOG.md` and
+`1.29.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -46,8 +46,25 @@ own credentials. Optional SQL Server database `DSMT` stores operators,
 sessions, a directory snapshot and the audit log. No build step, no external
 requests, responsive from 360px up.
 
-The original mock-up now lives in `prototype/` and is reference only — all of
-its data is fabricated and every button is inert.
+**Transport (1.23.0, reworked in 1.26.0):** HTTPS is configured from
+Settings -> HTTPS after installation — a certificate from
+`Cert:\LocalMachine\My` bound to a port via `http.sys`. The console never
+receives a private key.
+
+**A broken certificate does NOT stop the server.** 1.23.0 made it refuse to
+start; that was reversed in 1.26.0 and a future session must not reinstate it
+without checking in. Two reasons it was wrong: a browser opening `https://`
+against a plain HTTP listener fails the TLS handshake rather than silently
+sending anything, so the downgrade was never as silent as claimed; and
+refusing weighed plaintext against nothing, when the other failure is that the
+domain administration console is dead because a certificate expired — likelier,
+immediate, and it disables the very screen where the fix lives. DSMT now falls
+back to plain HTTP and makes it impossible to miss: the banner names the
+cause, the log records it at ERROR, and an undismissable bar sits on every
+screen including sign-in.
+
+The original mock-up in `prototype/` was **removed in 1.20.0** — fabricated
+data, inert buttons, and it loaded React from a CDN. Nothing referenced it.
 
 ---
 
@@ -162,7 +179,12 @@ its data is fabricated and every button is inert.
      (no LDAPS). If it fails with a constraint error, the usual causes are
      password policy or the operator lacking Reset Password delegation.
    - Whether `-ResultSetSize` 500 is the right page size for the lab.
-3. **Write a consolidated "required permissions" document.** *(Requested
+3. ~~Write a consolidated "required permissions" document~~ - **written in
+   1.29.0** as `docs/required-permissions.md`: every console action mapped to
+   the AD right it needs with exact `dsacls` commands, the host requirements,
+   SQL, and how to read a failure. Keep it in step when a new directory write
+   is added - a console action with no row in that table is a support call
+   waiting to happen. Original note: *(Requested
    2026-07-31; deliberately not started yet — do this when asked.)*
 
    Today every permission is documented, but scattered across the deployment
@@ -194,9 +216,16 @@ its data is fabricated and every button is inert.
    table in `README.md`. Cross-reference rather than restate, so there is one
    source per fact — the same rule the version number follows.
 
-4. **Serve it over HTTPS before anyone uses it over the network.** The
-   `netsh http add sslcert` recipe is in `README.md`; the prefix in
-   `Start-DSMT.ps1` also has to change from `http://` to `https://`.
+4. ~~Serve it over HTTPS before anyone uses it over the network.~~ —
+   **built in 1.23.0** as Settings -> HTTPS. Pick a certificate from
+   `Cert:\LocalMachine\My`, bind it to a port, restart. Configured after
+   installation, never during it, because the certificate usually does not
+   exist at install time. **Still needs confirming on the lab machine** (see
+   task 1): none of it has been executed, and `netsh http add sslcert` and the
+   certificate-store read are the two calls most likely to behave differently
+   than expected. Watch specifically that a certificate with no EKU at all is
+   accepted (it is valid for every purpose, including server auth) and that
+   the refusal-to-start path prints its banner rather than throwing.
 5. **Decide the SQL retention story.** `dbo.AuditLog` grows forever and
    nothing prunes `dbo.Sessions` or the snapshot tables. Pick a retention
    window and add a job.
@@ -248,16 +277,29 @@ is picked, move it into "Open tasks" first.
 
 Ordered by value for the effort, highest first.
 
-1. **Saved searches / filter presets.** The Users grid already filters by OU,
+1. ~~Saved searches / filter presets~~ - **built in 1.28.0.** Per-browser
+   (`localStorage`, key `dsmt.searches`), storing tab + query + filter. If
+   these ever move to SQL to be shared they become configuration and need the
+   group-filter treatment: defined once on the server, not mirrored in
+   `app.js`. Original note: The Users grid already filters by OU,
    department and text. Saving a combination under a name ("Disabled in Sales",
    "No logon in 90 days") turns a repeated five-click task into one. Local to
    the browser is enough to start; SQL later would share them across operators.
 2. ~~Undo the last action~~ — **built in 1.11.0.**
-3. **Bulk import from CSV.** Named in the project description and still not
-   built. Requires a dry-run pass that reports what *would* happen before
-   anything is written; an import that half-succeeds with no preview is the
-   worst possible shape for this feature.
-4. **Password expiry and stale-account report.** "Expires in N days",
+3. ~~Bulk import from CSV~~ — **the import itself shipped early; the dry-run
+   it always required was added in 1.25.0.** Note for a future session: the
+   import route serves BOTH passes, so a new validation rule must be added to
+   the dry-run branch AND remain true of the write branch, or the preview and
+   the import will disagree - which is worse than having no preview. The
+   duplicate-within-the-file check exists only in the dry-run because AD
+   itself catches it on the write, with an error that names the account but
+   not the file.
+4. ~~Password expiry and stale-account report~~ - **built in 1.27.0** as eight
+    filter chips on the Users tab. Note for item 19 (reports): the numbers it
+    needs (`pwdDays`, `logonDays`, `pwdNever`, `pwdExpired`, `neverLogon`) are
+    already computed in `ConvertTo-DsmtUser` and the selector is
+    `Select-DsmtUsersByFilter` - a report is a saved filter plus a column set,
+    not new plumbing. Original note: "Expires in N days",
    "no logon in 90 days", "password never expires" — read straight from
    attributes DSMT already fetches. Mostly a query and a view.
 5. **Scheduled directory snapshot.** `dbo.DirectoryUsers` / `DirectoryGroups`
@@ -269,11 +311,18 @@ Ordered by value for the effort, highest first.
    an audit log that any operator can delete is not an audit log.
 7. ~~A read-only role~~ — **superseded by 24**, which covers it properly.
 8. ~~Health check page~~ — **built in 1.11.0** as Settings -> Health.
-9. **Live session list with the ability to sign someone out.** DSMT already
+9. ~~Live session list with the ability to sign someone out~~ - **built in
+   1.29.0** on the Overview screen. Sessions are addressed by an opaque
+   per-session `Id`, NEVER by the token: the token is a bearer credential and
+   sending it to the browser would make this an impersonation tool. Sign-out
+   is gated on the DSMT administrator role and routes through
+   `Remove-DsmtSession` so the SQL session row closes too. Original note: DSMT already
    tracks sessions in `dbo.Sessions`. Useful with several operators, and
    necessary the day someone leaves mid-shift.
-10. **Column chooser on the Audit table**, matching the one the Users grid
-    already has. Small, consistent, cheap.
+10. ~~Column chooser on the Audit table~~ - **built in 1.27.0.** `colDefs()`
+    knows about `'audit'` and the existing picker does the rest. The audit
+    view needed its OWN Columns button - the directory toolbar's lives inside
+    `#directoryView`, which is hidden on that tab.
 11. **Keyboard shortcuts** — `/` to search, `Esc` to close the detail pane,
     `r` to refresh. Cheap, and the kind of thing a daily operator notices.
 12. **A dark/light theme switch.** Nocturne is a dark system; a light variant
@@ -421,7 +470,12 @@ plumbing before the unbounded one is exposed.
 
 ### Reports, DNS/DHCP, and sensitive-group filters (19-22) — raised 2026-07-31, NOT to be built yet
 
-19. **Reports out of Active Directory.** Named queries with an export, run
+19. ~~Reports out of Active Directory~~ - **built in 1.28.0** as Tools ->
+    Reports, eight named queries. Placed under Tools rather than as a new
+    top-level tab, because the tab count is the real constraint (see below).
+    Decided and now fixed: reports read LIVE, never the SQL snapshot, and say
+    so on the page. **Do not add a report that reads the snapshot without
+    labelling it one with its LastSyncUtc.** Original note: Named queries with an export, run
     against the live directory. The four that earn their place immediately:
     stale accounts (no logon in N days), password state (expiring, expired,
     never expires), privileged group membership (see 22 — the same SID list
@@ -581,8 +635,23 @@ retrofit:**
 
 ### Roles from AD groups, and a dashboard (24-25) — raised 2026-07-31, NOT to be built yet
 
-24. **Application roles driven by AD group membership.** Members of one group
-    are administrators of DSMT; members of another get read-only.
+24. **[BUILT IN 1.24.0 - settings half only]** Application roles driven by AD
+    group membership. Settings -> Administrators maps AD groups to the right
+    to change DSMT's OWN settings, enforced at one choke point on the server
+    against a central route list. Matched on SID, nested membership via
+    `tokenGroups`, resolved at sign-in, fails open when unconfigured and
+    closed when a configured mapping cannot be evaluated.
+
+    **See item 32 for RBAC proper** - roles that govern what an operator may
+    DO in the directory. 24 is not that, and reading 24 as if it were is the
+    likeliest way to build the wrong thing.
+
+    **The read-only-role half was deliberately NOT built**, and a future
+    session must not add it without checking in: for directory operations a
+    role can only subtract, and a read-only flag would constrain this console
+    rather than the person - the same operator can open ADUC. Shipping it
+    would have been shipping a control that looks like a permission and is
+    not. Original reasoning kept below.
 
     **Read this before designing it, because it touches a decision recorded in
     `CLAUDE.md`:** DSMT deliberately has no permission model of its own - every
@@ -623,7 +692,14 @@ retrofit:**
     - Decide explicitly what happens when the mapping names a group that no
       longer exists, and when an operator matches both roles. Say it in the UI.
 
-25. **A dashboard summarising the current state**, per area.
+25. ~~A dashboard summarising the current state~~ - **built in 1.29.0** as the
+    Overview tab, and it is now the landing screen. All three rules were
+    honoured and are worth keeping: tiles are live and the screen is stamped
+    absolutely; a tile that cannot be computed shows its error and NEVER a
+    zero or a dash; and the whole screen costs ONE users read plus ONE groups
+    read, with AD health linked to rather than computed. **Do not add a tile
+    that fires its own directory call** - that is how this screen becomes the
+    slowest thing in the console. Original note:
     Candidate tiles, all from data DSMT already reads: user and group counts,
     accounts disabled or locked out, passwords expiring in the next N days,
     stale accounts, recent audit activity, and the Health verdict that already
@@ -809,8 +885,13 @@ concern already flagged for attribute writes in 28c.
 
 ### Small UI items (30-31) — raised 2026-08-08, NOT to be built yet
 
-**30. Group filters: show the built-in ones, and make the list editable in
-place.** Settings -> Group filters currently *describes* `Privileged` and
+**30. [BUILT IN 1.24.0] Group filters: show the built-in ones, and make the
+list editable in place.** Built-ins are now rows in the same list, read-only,
+each stating what it matches on. Custom filters already had inline edit. Note
+for a future session: the `how` text for each built-in lives beside the filter
+definition in `Get-DsmtGroupFilters` (`DsmtDirectory.ps1`), not in `app.js` -
+keep it there so there is one place that knows what a filter matches.
+Original note: Settings -> Group filters currently *describes* `Privileged` and
 `AdminSDHolder` in prose and then says "No custom filters yet." Two problems
 with that: the two filters that actually exist are invisible on the screen
 that is supposed to list them, and a custom filter can only be created, not
@@ -827,8 +908,11 @@ edited, without deleting and retyping it.
 - Small, self-contained, and entirely in `renderSettings()` plus the existing
   `/api/settings/groupfilters` route — no new backend capability needed.
 
-**31. Tabs inside the profile window, with group memberships on their own
-tab.** Raised with a screenshot: the profile window is now a single long
+**31. [BUILT IN 1.24.0] Tabs inside the profile window, with group
+memberships on their own tab.** Overview / Memberships. The strip is built
+from a list in `profileHtml()`, so item 28's Attributes section is added as
+another entry in that list - do NOT introduce a second navigation pattern.
+Actions stay outside the strip. Original note: Raised with a screenshot: the profile window is now a single long
 scroll — identity, organisation, account, distinguished name, and then group
 memberships below the fold. Splitting it into tabs (Overview / Memberships,
 and later Attributes from item 28) would show more with less crowding, and
@@ -845,6 +929,60 @@ gives 28 the home it was always meant to have.
 - Watch the 640px breakpoint: a tab strip inside a slide-over is the layout
   most likely to overflow, and the rule in `CLAUDE.md` stands — never solve a
   narrow viewport by hiding directory data.
+
+### Full RBAC (32) — raised 2026-08-08, NOT to be built yet
+
+Asked for directly: "what about implementing RBAC". Recorded as its own item
+because **item 24 is not it**, and a future session that reads 24 and thinks
+the subject is closed will build the wrong thing.
+
+- **24 (built in 1.24.0) governs DSMT'S OWN SETTINGS only** - who may repoint
+  the database, change the identity mode, create the KDS root key. Real teeth,
+  because nothing in AD governs those.
+- **32 is what people normally mean by RBAC**: roles that decide what an
+  operator may DO in the directory - who may reset passwords, who may only
+  read, who may act on which OUs.
+
+**Settle this one question before designing anything, because everything else
+follows from it.** Today every directory write runs as the signed-in operator
+(`Get-DsmtAdParams`, intent 'write'), which is why the domain controller's own
+security log names the human who made each change and why DSMT deliberately
+has no permission model. That gives RBAC only two possible shapes:
+
+1. **RBAC as UI scoping, not as security.** Roles hide verbs and narrow what
+   the console offers, while AD stays the only real enforcement. Cheap, honest,
+   and genuinely useful for reducing mistakes - but it must be LABELLED as
+   what it is. Someone not granted "reset password" here can still open ADUC
+   and reset it. This is the same reasoning already written down for why the
+   read-only half of 24 was not built: presenting it as a control it is not
+   would be worse than not having it.
+2. **RBAC as real enforcement**, which requires DSMT to become the thing that
+   performs the write - i.e. writes running as a service account with broad
+   rights, and DSMT deciding who may use them. **That destroys per-operator
+   attribution at the domain controller**, which is a property this project
+   has protected in every design decision so far (see `hybrid` mode: even
+   there, writes deliberately stay on the operator). It also makes DSMT a
+   privilege-escalation target: a bug in the role check becomes a bug that
+   grants Domain Admin.
+
+**Shape 1 is almost certainly the right answer, and shape 2 must not be
+started without an explicit conversation** - it reverses a decision recorded
+in `CLAUDE.md` and in README's security model.
+
+If shape 1 is picked, the pieces already exist and it is mostly assembly:
+`Resolve-DsmtOperatorRole` and the central `$script:DsmtAdminOnlyRoutes` list
+in `DsmtRoles.ps1` are the mechanism, SID matching and `tokenGroups` nested
+membership already work (see 1.26.2 for the base-scope trap), and every route
+already has one choke point to check at. What is missing is a role definition
+richer than one boolean, per-OU scoping, and the UI to manage it.
+
+Two things to design in from the start, not retrofit:
+- **The audit log must record the role that permitted an action**, or the log
+  cannot answer "how was this allowed" after a role changes.
+- **Roles are resolved at sign-in today.** With real permissions attached,
+  decide deliberately whether that is still acceptable or whether they must be
+  re-evaluated per request - a revoked role that lingers for a whole session
+  is a different risk once it gates directory writes.
 
 ### Where all of this goes — the tab count is the real constraint
 
@@ -901,6 +1039,41 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 3] A read cap inherited from a screen that wanted one.** Found by
+  review before 1.28.0 shipped. `Get-DsmtUsers -Limit 0` means "use PageSize"
+  (500), which is right for a grid and catastrophic for a report: the report
+  would have returned the first 500 accounts of a larger domain, dated,
+  formatted and looking authoritative. Fixed with an explicit 20,000 cap plus
+  an INCOMPLETE banner on screen AND a row inside the exported CSV.
+  **The pattern: a default that is a sensible UI limit becomes silent data
+  loss the moment a non-UI caller inherits it.** Any new caller of
+  `Get-DsmtUsers` / `Get-DsmtGroups` must state its own limit deliberately and
+  decide what it does when the limit is hit. Note the check must run on the
+  UNFILTERED read - a filter keeping 12 rows out of a truncated 20,000 looks
+  entirely normal.
+- **[Shape 3] A relative timestamp that escapes the screen.** `formatStamp()`
+  renders "Today 17:48" and, on its fallback branch, omits the year. Correct
+  on a live audit table; meaningless in an exported file that gets forwarded.
+  1.28.0 added `formatAbsoluteStamp()` for anything that leaves the browser.
+  **The pattern: a display format chosen for a live screen is the wrong format
+  for anything exported, and the failure is invisible until someone reads the
+  file weeks later.**
+- **[Shape 3] A multi-step directory write reported as a single outcome.**
+  Found 2026-08-08 on the lab domain. "Create user" is FOUR AD operations
+  (create disabled, set password, set must-change, enable). An operator
+  without Reset Password rights got past step 1 and failed step 2; the console
+  said `Failed`, the **audit record said `Failed`** - and the account existed
+  in the directory, disabled and unusable. Fixed in 1.26.4 by rolling the
+  creation back, and by reporting explicitly when the rollback itself cannot
+  run.
+  **The pattern, not the instance: any console action that is more than one
+  directory operation has a partial-failure state, and reporting only
+  success/failure makes that state invisible - including in the audit log,
+  which is the one record that must not be wrong.** Before adding a new
+  multi-step write, decide what happens when step N fails: roll back, or
+  report precisely what remains. "Throw and let the caller say Failed" is
+  neither. Existing and proposed candidates to check against this: the gMSA
+  tool, bulk actions, CSV import, and anything in proposals 15-18 and 23.
 - **[Shape 2] "The parameters do not work."** 2026-08-06. Not a code fault:
   the identical files ran correctly in a VMware Workstation VM and were
   blocked on the physical endpoint. Ask which machine, and whether
@@ -1095,7 +1268,143 @@ and the IIS question. Both are in the sections below.
 
 ---
 
+## Lab acceptance checklist for 1.23.0 - 1.25.0
+
+Written 2026-08-08. **None of this code has ever been executed** - the dev
+container is Linux with no PowerShell, no Windows and no domain. Treat the
+first run as a test, not a deployment. Work top to bottom; a failure early
+makes the later results meaningless.
+
+Deploy: copy `server\` and `web\` over the install, restart DSMT, then
+**hard refresh (Ctrl+F5)**. Restarting ends all sessions by design.
+
+### 0. It still starts at all
+- Startup banner reads `DSMT 1.25.0`, and so does the sign-in footer and
+  About. If any of the three disagrees, the single-source-of-truth rule has
+  been broken somewhere and that is the first thing to fix.
+- Banner shows `Transport: PLAIN HTTP` with the warning, since HTTPS is off
+  until you configure it.
+- Sign in. Everything that worked before still works: Users grid, Groups tab,
+  detail pane, Audit log.
+
+### 1. HTTPS (1.23.0) - the riskiest of the three
+`netsh` and the certificate-store read are the two calls most likely to
+behave differently than expected.
+
+- Settings -> HTTPS lists the certificates in `Cert:\LocalMachine\My`.
+  **If the list is empty on a machine that has certificates, stop** - that is
+  `Get-DsmtCertificates` failing, and nothing below it can be trusted.
+- A certificate with **no EKU at all** must appear as usable. It is valid for
+  every purpose including server auth; if it shows as unusable the EKU read is
+  inverted.
+- A certificate with no private key, and an expired one, appear in the list
+  **disabled, with the reason**. They must not be hidden and must not be
+  selectable.
+- Bind one, save. Expect: success message, the URL, and (if listening on all
+  interfaces) the `netsh http add urlacl` and firewall commands.
+- Confirm out of band: `netsh http show sslcert ipport=0.0.0.0:8443` names
+  your thumbprint and appid `{6d9d1f2b-4a3c-4e7f-9b1a-2c8e5d0f7a41}`.
+- **Restart. The console must come up on `https://`** and the banner must say
+  `Transport: HTTPS`.
+- **The fallback path - the most important check in this section.** With
+  HTTPS working, delete the binding by hand
+  (`netsh http delete sslcert ipport=0.0.0.0:8443`) and restart. DSMT must
+  **come up on plain HTTP on the normal port** with the red banner, NOT refuse
+  to start and NOT come up quietly. Then confirm the warning bar is on screen
+  **before** sign-in as well as after, and that it has no dismiss button.
+- **The banner must name the cause**, not just the symptom: never chosen /
+  gone from the store / present but unusable with the reason / present and
+  usable with only the binding missing, in which case it prints the rebind
+  command with the REAL thumbprint rather than the word THUMBPRINT. Test the
+  expired case specifically - it is the commonest one in real life.
+- **Settings -> HTTPS must distinguish "never set up" from "set up and
+  broken."** Those need different actions from the reader and must not read
+  the same.
+- **The foreign-binding guard.** Bind something else to a port (or point DSMT
+  at 443 if IIS owns it) and try to save. DSMT must refuse and name the other
+  application ID rather than taking the port.
+- Non-elevated: hand-start `Start-DSMT.ps1` unelevated and try to bind. It
+  must return the sentence naming the fix, not a raw access-denied.
+
+### 2. DSMT administrators (1.24.0)
+- Before configuring anything: Settings -> Administrators says every operator
+  can change settings, and every settings screen still works. **This is the
+  fail-open path and an upgrade must not have changed it.**
+- Add a group you are NOT in and save. It must **refuse**, and nothing may be
+  written - re-open Settings and confirm the list is still empty.
+- Add a group you ARE in, save, **sign out and back in** (the role is resolved
+  at sign-in, not per request). Settings -> Administrators now says you
+  administer through that group.
+- Sign in as an operator who is NOT in that group. Confirm:
+  - the Administrators card says they cannot change DSMT settings;
+  - a settings write returns **403** with the reason;
+  - **the API is refused directly too**, not just the button - this is the
+    check that proves enforcement is server-side. Post to
+    `/api/settings/pagesize` with their token and expect 403;
+  - **every directory operation still works normally for them** - users,
+    groups, password reset, subject only to what AD allows. If a directory
+    action is blocked, the gate has been applied too widely and that is a bug.
+- Nested membership: put the operator in a group that is a MEMBER of the admin
+  group, not in it directly. They must be recognised. If not, `tokenGroups` is
+  not being read and the check has fallen back to direct membership.
+- Delete a configured group from AD. Settings -> Administrators must show it
+  as **not found in the directory**, not as healthy.
+- Audit log: a refused write appears with result `Denied`.
+
+### 3. Group filters and profile tabs (1.24.0)
+- Settings -> Group filters lists **Privileged** and **AdminSDHolder** as
+  read-only rows, each stating what it matches on. They must have no Remove
+  button.
+- Custom filters still add, edit inline, and save.
+- Open a user profile: **Overview / Memberships** tabs, action buttons
+  **above** the strip and visible on both tabs.
+- **Check 360px, 640px, 820px and 1180px.** The tab strip is the element most
+  likely to overflow inside a slide-over; it must scroll sideways, never wrap
+  into a second row and never hide a tab.
+
+### 4. CSV import preview (1.25.0)
+- Import CSV: the confirm button says **Preview**, not Import.
+- Preview a file mixing: a good row, a row with an empty SamAccountName, a row
+  whose account already exists, a row with a bad OU, and **the same
+  samAccountName twice**. All five verdicts must be correct, and the duplicate
+  must be caught on the SECOND occurrence.
+- Nothing is created by the preview. Confirm in AD and in the audit log.
+- Button becomes `Create N user(s)` with N matching the preview.
+- **Edit the CSV after previewing.** The button must revert to Preview and the
+  preview must clear.
+- A file where nothing would be created: the write button is hidden.
+- Run the real import. The rows the preview called `create` are created; the
+  audit log has one record per row.
+- **The lying-preview check:** sign in as an operator with no read rights on
+  an OU and preview a row targeting it. It must NOT say "would create" - a
+  lookup that could not run must never be reported as "does not exist".
+
+### 5. Still outstanding from the earlier report
+Re-run these; they predate this work and are unaffected by it.
+- With SQL configured, confirm `dbo.Operators`, `dbo.Sessions`,
+  `dbo.DirectoryUsers` and `dbo.AuditLog` actually receive rows.
+- Confirm the 1.7.5 overlay fix on the lab machine (open task 1).
+
+---
+
 ## Notes for next session
+- **The brace/paren balance check reports `server/Install-DSMT.ps1` as -2
+  parens. That is a FALSE POSITIVE and the file is fine.** Lines 836 and 1866
+  each contain `') '` - a closing parenthesis inside a string literal, which
+  the naive counter cannot see is quoted. Verified 2026-08-08; do not "fix"
+  it, and do not start ignoring the check because of it. The check is one of
+  only two verification tools this repo has (the other is `node --check` on
+  `app.js`), so a known false positive is worth remembering rather than
+  rediscovering.
+- **`CLAUDE.md` was trimmed on 2026-08-08 and the build-handover rules moved
+  to a skill.** The `server/lib/` file list and the SQL table list were
+  removed — they are reconstructible with `ls server/lib/` and
+  `grep "CREATE TABLE" sql/schema.sql`, and the file list had already gone
+  stale (`DsmtAdHealth.ps1`, shipped in 1.17.0, was never added to it). Do not
+  re-add either list: a hand-maintained copy of something the filesystem
+  already answers is what went wrong the first time. The full "Handing over a
+  build" rules now live in `.claude/skills/handing-over-a-build/SKILL.md` —
+  read that skill before giving anyone a download link.
 - **The version lives in exactly one place**: `$script:DsmtVersion` in
   `server/lib/DsmtCommon.ps1`. It reaches the sign-in footer and the About
   dialog through `GET /api/meta`. Never type a version literal anywhere else.
@@ -1126,7 +1435,21 @@ and the IIS question. Both are in the sections below.
   pull request; documentation-only fixes may go straight to `main`. The
   original `claude/new-session-6q2ky9` branch was merged into `main` and
   deleted — do not go looking for history there.
-- **Nothing has been verified at runtime yet.** Open task 1 is still open and
-  is the single most important thing outstanding: neither the installer nor
-  the server has ever been executed. Do not treat "it is on `main`" as "it
-  works".
+- **FIRST CONFIRMED RUN: 2026-08-08.** The console was deployed and reached on
+the lab domain at 1.26.0 - signed in, Settings rendered, SQL connected
+(`app.lab.local / DSMT`). So the "it has never been executed" caveat that ran
+through this file no longer holds in general.
+
+**But treat that as "it starts and serves", not as "the checklist passed."**
+What was confirmed by observation is the shell: startup, sign-in, the Settings
+screen and the SQL connection. The individual behaviours in the acceptance
+checklist above - the HTTPS fallback banner, the role gate returning 403 to a
+non-admin API call, nested group membership, the CSV dry-run verdicts - have
+NOT been reported as tested and must not be recorded as passing until they
+are. Marking something verified that was not is exactly the drift this file
+exists to prevent.
+
+**Do not treat "it is on `main`" as "it works".** The console is confirmed to
+  start and serve (see above), but each individual behaviour still needs its
+  own check against the acceptance checklist. Open task 1 remains the single
+  most important thing outstanding.

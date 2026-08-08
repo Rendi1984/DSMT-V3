@@ -17,21 +17,15 @@ operator, the controller and a mandatory reason string.
   **not** touch AD delegation — see `README.md` for why.
 - **Server**: `server/Start-DSMT.ps1` — Windows PowerShell 5.1 running a
   `System.Net.HttpListener`. Serves the front end and a JSON API. Split into
-  `server/lib/`:
-  - `DsmtCommon.ps1` — **the version constant**, paths, logging, formatting
-  - `DsmtDirectory.ps1` — every AD read/write; the one attribute mapping
-  - `DsmtSession.ps1` — sign-in, tokens, idle expiry
-  - `DsmtAudit.ps1` — audit records (SQL primary, JSONL always)
-  - `DsmtSql.ps1` — SQL Server connection, schema creation, snapshots
-  - `DsmtGmsa.ps1` — the gMSA tool: KDS root key, group, account
-  - `DsmtHttp.ps1` — static files, API routing, bulk-action semantics
+  one file per concern under `server/lib/` (`ls` it — the version constant
+  lives in `DsmtCommon.ps1` and the one AD attribute mapping in
+  `DsmtDirectory.ps1`).
 - **Front end**: `web/index.html`, `web/app.css`, `web/app.js` — vanilla
   ES5-compatible JS, no framework, no build step, no external requests.
 - **Design system**: `_ds/nocturne-45d14eff-42dd-42cd-8b9f-15e70f1604a8/` —
   **Nocturne**. `styles.css` is the single stylesheet and token sheet;
   `readme.md` is its authoritative usage guide.
-- **Data store**: SQL Server, database `DSMT` — `dbo.Operators`,
-  `dbo.Sessions`, `dbo.DirectoryUsers`, `dbo.DirectoryGroups`, `dbo.AuditLog`.
+- **Data store**: SQL Server, database `DSMT` (tables: see `sql/schema.sql`).
   Created automatically on first start; `sql/schema.sql` is the same schema
   standalone. Optional: without `-SqlServer` the audit log falls back to JSONL
   under `data/`, and that fallback is announced at startup and in **About**.
@@ -75,51 +69,9 @@ operator, the controller and a mandatory reason string.
 ---
 
 ## Handing over a build
-Whenever a download link is given for this project, **name it `DSMT <version>`
-first** — "DSMT 1.13.0", then the link. A bare GitHub URL does not say which
-version is behind it, and branch zips move: the same URL served 1.8.1 and
-1.12.0 a day apart. State the version, then the link, then which files go
-where.
-
-**The downloaded file must carry the version too.** GitHub names an archive
-after the ref, so `refs/heads/main.zip` always arrives as `DSMT-V3-main.zip` —
-three of those in a downloads folder are indistinguishable. So every release
-gets a **branch named exactly the version number** (`1.13.0`, no `v`, no
-prefix), cut from `main` at the release commit, and that is the link handed
-over:
-
-    https://github.com/Rendi1984/DSMT-V3/archive/refs/heads/1.13.0.zip
-    -> DSMT-V3-1.13.0.zip
-
-Do not name the branch `DSMT-1.13.0` — the repo name is already in the
-filename and it comes out as `DSMT-V3-DSMT-1.13.0.zip`. A `v` prefix is also
-pointless: **GitHub strips a leading `v` from the ref when naming an archive**,
-so branch `v1.13.1` still downloads as `DSMT-V3-1.13.1.zip`.
-
-**The archive name cannot be controlled beyond that.** GitHub always builds it
-as `<repo>-<ref>.zip`, and this repo is `DSMT-V3`, so the `-V3` is unavoidable.
-Two consequences worth knowing before promising a filename:
-
-- Some browsers ignore `Content-Disposition` and save the URL's last segment
-  instead, which is why `.../1.13.1.zip` can land on disk as `1.13.1.zip`.
-- The only way to a freely chosen name is a **release asset**
-  (`/releases/download/v1.13.1/DSMT-v1.13.1.zip`), which needs a tag and an
-  upload — neither possible from the dev container.
-
-When an exact filename is asked for, **build it locally and send the file**:
-
-    git archive --format=zip -o DSMT-v1.13.1.zip HEAD
-
-That is the only method here that produces the requested name. **Do not pass
-`--prefix`** — the files go at the root of the archive, so extracting it gives
-`server\`, `web\`, `docs\` directly rather than a wrapper folder to dig
-through. (GitHub's own archives always add that wrapper; ours should not.)
-
-A git **tag** would be the proper mechanism and produces the same filename,
-but **tags cannot be pushed from the dev container** — the git proxy answers
-403 (`send-pack: unexpected disconnect`). Same for deleting a remote branch.
-Both have to be done by hand in the GitHub UI, so tag and release creation is
-a request to the operator, never a step to attempt silently.
+Download links, release branch naming and the zip filename GitHub produces
+follow strict rules — see the `handing-over-a-build` skill before handing over
+a build. Always state `DSMT <version>` before the link.
 
 ---
 

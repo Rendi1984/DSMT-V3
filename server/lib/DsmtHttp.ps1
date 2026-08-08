@@ -610,6 +610,11 @@ function Invoke-DsmtApi {
             publisher = $cfg.Publisher
             domain    = $cfg.Domain
             product   = 'DSMT - Directory Service Management Tool'
+            # On the sign-in screen too, not only after signing in: the
+            # password typed there is the one this warning is about.
+            httpsDegraded      = $cfg.HttpsDegraded
+            httpsDegradedCause = $cfg.HttpsDegradedCause
+            httpsDegradedFix   = $cfg.HttpsDegradedFix
             identity  = @{
                 mode        = $cfg.IdentityMode
                 serviceUser = ($env:USERDOMAIN + '\' + $env:USERNAME)
@@ -671,6 +676,26 @@ function Invoke-DsmtApi {
         return
     }
 
+    # ---- DSMT's own settings need the administrator role ------------------
+    # Checked HERE, once, against a central list - not sprinkled through the
+    # handlers. A role enforced route by route is a role that is missing from
+    # the route somebody adds next week. Hiding a button in app.js is a
+    # convenience, never the enforcement: the API is reachable directly.
+    #
+    # This gates DSMT's OWN configuration only. Directory routes are
+    # deliberately untouched: there, AD is the authority and a DSMT role could
+    # only ever subtract. See DsmtRoles.ps1.
+    if (Test-DsmtRouteNeedsAdmin -Path $Path -Method $method) {
+        if (-not $session.IsAdmin) {
+            Write-DsmtAudit -Action 'Denied - not a DSMT administrator' -Target ($method + ' ' + $Path) `
+                            -Operator $session.Account -Reason 'Role check' `
+                            -Result 'Denied' -Category 'session'
+            Send-DsmtError -Response $Response -StatusCode 403 -Message (
+                'Changing DSMT settings needs the DSMT administrator role. ' + $session.RoleReason)
+            return
+        }
+    }
+
     if ($Path -eq '/api/session' -and $method -eq 'DELETE') {
         Write-DsmtAudit -Action 'Sign out' -Target $session.Account -Operator $session.Account `
                         -Reason 'Console sign-out' -Result 'Success' -Category 'session'
@@ -686,6 +711,12 @@ function Invoke-DsmtApi {
             publisher      = $cfg.Publisher
             sessionMinutes = $cfg.SessionMinutes
             user           = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
+            isAdmin        = $session.IsAdmin
+            roleReason     = $session.RoleReason
+            roleConfigured = $session.RoleConfigured
+            httpsDegraded      = $cfg.HttpsDegraded
+            httpsDegradedCause = $cfg.HttpsDegradedCause
+            httpsDegradedFix   = $cfg.HttpsDegradedFix
         }
         return
     }
@@ -710,6 +741,17 @@ function Invoke-DsmtApi {
                         server        = $cfg.Server
                         port          = $cfg.Port
                         listenAddress = $cfg.ListenAddress
+                        scheme        = $cfg.Scheme
+                        https         = Get-DsmtHttpsState
+                        # isAdmin/roleReason/roleConfigured are what THIS
+                        # SESSION was told at sign-in. roles is read live. They
+                        # disagree between saving a mapping and signing in
+                        # again, and the UI has to say which is which rather
+                        # than print both as if they described the same moment.
+                        isAdmin        = $session.IsAdmin
+                        roleReason     = $session.RoleReason
+                        roleConfigured = $session.RoleConfigured
+                        roles          = Get-DsmtRoleState -Credential $session.Credential
                         sessionMinutes = $cfg.SessionMinutes
                         sessionBounds  = Get-DsmtSessionBounds
                         pageSize      = $cfg.PageSize
@@ -867,6 +909,224 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/settings/roles$' {
+                if ($method -eq 'GET') {
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok    = $true
+                        roles = (Get-DsmtRoleState -Credential $session.Credential)
+                    }
+                    return
+                }
+                if ($method -ne 'POST') { break }
+
+                $body  = Read-DsmtBody -Request $Request
+                $names = @(Get-DsmtBodyValue -Body $body -Name 'groups' -Default @())
+
+                # Every name is resolved to a SID BEFORE anything is saved, so
+                # a typo in the third group cannot leave the first two written
+                # and the mapping half-applied.
+                $resolved = @()
+                foreach ($n in $names) {
+                    $text = ([string]$n).Trim()
+                    if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+                    $r = Resolve-DsmtGroupSid -Identity $text -Credential $session.Credential
+                    if (-not $r.Ok) {
+                        Send-DsmtError -Response $Response -Message $r.Error -StatusCode 400
+                        return
+                    }
+                    $resolved += @{ Sid = $r.Sid; Name = $r.Name }
+                }
+
+                # Refusing to save a mapping that locks the author out. Every
+                # other guard here is recoverable from the console; this one
+                # would not be - it would need regedit on the DSMT host.
+                if ($resolved.Count -gt 0) {
+                    $check = Get-DsmtOperatorGroupSids -SamAccountName $session.Sam -Credential $session.Credential
+                    if (-not $check.Ok) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'Your own group membership could not be read, so DSMT cannot confirm this ' +
+                            'mapping would not lock you out. Nothing was saved. ' + $check.Error)
+                        return
+                    }
+
+                    $selfIn = $false
+                    foreach ($g in $resolved) {
+                        foreach ($s in @($check.Sids)) {
+                            if ($s -eq $g.Sid) { $selfIn = $true }
+                        }
+                    }
+                    if (-not $selfIn) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'You are not a member of any of those groups, so saving this would lock you ' +
+                            'out of DSMT settings immediately and the only way back would be regedit on ' +
+                            'the DSMT host. Add a group you belong to. Nothing was saved.')
+                        return
+                    }
+                }
+
+                $saved = Save-DsmtSavedSettings -Values @{ RoleAdminGroups = $resolved }
+
+                $summary = 'none (every operator administers)'
+                if ($resolved.Count -gt 0) {
+                    $summary = (@($resolved | ForEach-Object { $_.Name }) -join ', ')
+                }
+
+                Write-DsmtAudit -Action 'Change DSMT administrator groups' -Target $summary `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session'
+                Write-DsmtLog -Message ($session.Account + ' set the DSMT administrator groups to: ' + $summary)
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    count        = $resolved.Count
+                    groups       = @($resolved)
+                    persisted    = $saved.Ok
+                    persistError = $saved.Error
+                    needsSignIn  = $true
+                }
+                return
+            }
+
+            '^/api/settings/https/certificates$' {
+                if ($method -ne 'GET') { break }
+
+                # Wrapped at the call site as well as in the callee - a
+                # one-certificate store must not serialise as a bare object.
+                $certs = @(Get-DsmtCertificates)
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    certificates = $certs
+                    store        = 'Cert:\LocalMachine\My'
+                    importCommand = (Get-DsmtPfxImportCommand)
+                }
+                return
+            }
+
+            '^/api/settings/https$' {
+                if ($method -eq 'GET') {
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok    = $true
+                        https = (Get-DsmtHttpsState)
+                    }
+                    return
+                }
+                if ($method -ne 'POST') { break }
+
+                $body    = Read-DsmtBody -Request $Request
+                $enabled = [bool](Get-DsmtBodyValue -Body $body -Name 'enabled' -Default $false)
+
+                # ---- switching HTTPS off ----
+                if (-not $enabled) {
+                    $state   = Get-DsmtHttpsState
+                    $removed = Remove-DsmtSslBinding -Port $state.port
+                    $saved   = Save-DsmtSavedSettings -Values @{ HttpsEnabled = $false }
+
+                    Write-DsmtAudit -Action 'Disable HTTPS' -Target ('port ' + $state.port) `
+                                    -Operator $session.Account -Reason 'Console configuration change' `
+                                    -Result 'Success' -Category 'session'
+                    Write-DsmtLog -Message ($session.Account + ' switched HTTPS off (takes effect on restart)')
+
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok           = $true
+                        enabled      = $false
+                        needsRestart = $true
+                        persisted    = $saved.Ok
+                        persistError = $saved.Error
+                        bindingRemoved = $removed.Ok
+                        bindingError = $removed.Error
+                        message      = 'HTTPS is switched off. DSMT goes back to plain HTTP on port ' +
+                                       [string]$cfg.Port + ' the next time it starts.'
+                    }
+                    return
+                }
+
+                # ---- switching HTTPS on ----
+                $rawPort = Get-DsmtBodyValue -Body $body -Name 'port' -Default 8443
+                $port    = 0
+                if (-not [int]::TryParse([string]$rawPort, [ref] $port)) {
+                    Send-DsmtError -Response $Response -Message 'The HTTPS port must be a whole number.' -StatusCode 400
+                    return
+                }
+                if ($port -lt 1 -or $port -gt 65535) {
+                    Send-DsmtError -Response $Response -Message 'The HTTPS port must be between 1 and 65535.' -StatusCode 400
+                    return
+                }
+
+                $thumb = ([string](Get-DsmtBodyValue -Body $body -Name 'thumbprint' -Default '')).Trim()
+                $thumb = ($thumb -replace '[^0-9a-fA-F]', '').ToUpper()
+                if ($thumb.Length -ne 40) {
+                    Send-DsmtError -Response $Response -Message 'Choose a certificate. A thumbprint is 40 hexadecimal characters.' -StatusCode 400
+                    return
+                }
+
+                # The certificate must be in the store, and usable, BEFORE
+                # anything is written. Binding an expired certificate or one
+                # with no private key succeeds in netsh and then fails in
+                # every browser, with nothing on this screen to explain it.
+                $match = $null
+                foreach ($c in @(Get-DsmtCertificates)) {
+                    if ($c.thumbprint -eq $thumb) { $match = $c }
+                }
+                if ($null -eq $match) {
+                    Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                        'No certificate with that thumbprint is in Cert:\LocalMachine\My on this host. ' +
+                        'Import it there first - the console never receives a private key.')
+                    return
+                }
+                if (-not $match.usable) {
+                    Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                        'That certificate cannot serve HTTPS. ' + $match.why)
+                    return
+                }
+
+                $bind = Set-DsmtSslBinding -Port $port -Thumbprint $thumb
+                if (-not $bind.Ok) {
+                    Write-DsmtAudit -Action 'Enable HTTPS' -Target ('port ' + [string]$port + ', ' + $thumb) `
+                                    -Operator $session.Account -Reason 'Console configuration change' `
+                                    -Result 'Failed' -Category 'session'
+                    Send-DsmtError -Response $Response -Message $bind.Error -StatusCode 400
+                    return
+                }
+
+                $saved = Save-DsmtSavedSettings -Values @{
+                    HttpsEnabled    = $true
+                    HttpsPort       = $port
+                    HttpsThumbprint = $thumb
+                }
+
+                Write-DsmtAudit -Action 'Enable HTTPS' -Target ('port ' + [string]$port + ', ' + $thumb) `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session'
+                Write-DsmtLog -Message ($session.Account + ' bound certificate ' + $thumb + ' to port ' +
+                                        $port + ' and switched HTTPS on (takes effect on restart)')
+
+                $reservation = ''
+                if ($cfg.ListenAddress -eq 'any') {
+                    $reservation = 'netsh http add urlacl url=https://+:' + $port + '/ user="' +
+                                   $env:USERDOMAIN + '\' + $env:USERNAME + '"'
+                }
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    enabled      = $true
+                    port         = $port
+                    thumbprint   = $thumb
+                    subject      = $match.subject
+                    replaced     = $bind.Replaced
+                    needsRestart = $true
+                    persisted    = $saved.Ok
+                    persistError = $saved.Error
+                    url          = ('https://' + $env:COMPUTERNAME + ':' + [string]$port + '/')
+                    reservation  = $reservation
+                    firewall     = ('New-NetFirewallRule -DisplayName "DSMT console (TCP ' + $port +
+                                    ')" -Direction Inbound -Protocol TCP -LocalPort ' + $port +
+                                    ' -Action Allow -Profile Domain')
+                }
+                return
+            }
+
             '^/api/settings/identity$' {
                 if ($method -ne 'POST') { break }
 
@@ -1014,14 +1274,30 @@ function Invoke-DsmtApi {
 
             '^/api/users$' {
                 if ($method -eq 'GET') {
-                    $q     = Get-DsmtQueryValue -Request $Request -Name 'q'
+                    $q          = Get-DsmtQueryValue -Request $Request -Name 'q'
+                    $userFilter = [string](Get-DsmtQueryValue -Request $Request -Name 'filter' -Default 'all')
                     $limit = 0
                     [int]::TryParse((Get-DsmtQueryValue -Request $Request -Name 'limit' -Default '0'), [ref] $limit) | Out-Null
-                    $rows  = Get-DsmtUsers -Credential $session.Credential -Query $q -Limit $limit
-                    # The grid is served from the live read above; the SQL
-                    # snapshot is written afterwards and never read back into it.
+
+                    $rows = @(Get-DsmtUsers -Credential $session.Credential -Query $q -Limit $limit)
+
+                    # The snapshot is written from the UNFILTERED read, so a
+                    # filtered view never truncates what SQL believes the
+                    # directory contains. Same rule as the Groups tab.
                     Sync-DsmtUsersToSql -Users $rows | Out-Null
-                    Send-DsmtJson -Response $Response -Data @{ ok = $true; items = @($rows); count = @($rows).Count; limit = $cfg.PageSize }
+
+                    $total = @($rows).Count
+                    $rows  = @(Select-DsmtUsersByFilter -Rows $rows -Filter $userFilter)
+
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok      = $true
+                        items   = @($rows)
+                        count   = @($rows).Count
+                        total   = $total
+                        filter  = $userFilter
+                        filters = @(Get-DsmtUserFilters)
+                        limit   = $cfg.PageSize
+                    }
                     return
                 }
 
@@ -1096,6 +1372,98 @@ function Invoke-DsmtApi {
                 }
                 if ($rows.Count -eq 0) {
                     Send-DsmtError -Response $Response -Message 'The CSV has a header but no rows.' -StatusCode 400
+                    return
+                }
+
+                # ---- DRY RUN --------------------------------------------
+                # An import that half-succeeds with no preview is the worst
+                # possible shape for this feature: the operator finds out what
+                # it was going to do by reading what it already did. So every
+                # row is checked against the live directory FIRST, nothing is
+                # written, and the verdict comes back per row.
+                #
+                # This is a preview, not a guarantee. It says so on the screen:
+                # the directory can change between the check and the write, and
+                # AD still has the last word on the password policy and on
+                # whether this operator may create anything in that OU.
+                $dryRun = [bool](Get-DsmtBodyValue -Body $body -Name 'dryRun' -Default $false)
+
+                if ($dryRun) {
+                    $preview = @()
+                    $wouldCreate = 0
+                    $seen = @{}
+
+                    foreach ($row in $rows) {
+                        $rowSam     = ([string]$row.SamAccountName).Trim()
+                        $rowDisplay = ([string]$row.DisplayName).Trim()
+                        $rowOu      = ([string]$row.OU).Trim()
+                        if ([string]::IsNullOrWhiteSpace($rowOu)) { $rowOu = $ou }
+                        if ([string]::IsNullOrWhiteSpace($rowDisplay)) { $rowDisplay = $rowSam }
+
+                        $verdict = 'create'
+                        $why     = ''
+
+                        if ([string]::IsNullOrWhiteSpace($rowSam)) {
+                            $verdict = 'skip'
+                            $why     = 'SamAccountName column is empty.'
+                        } elseif ($seen.ContainsKey($rowSam.ToLower())) {
+                            # Caught here and nowhere else: AD would create the
+                            # first and reject the second with a duplicate
+                            # error that names the account but not the file.
+                            $verdict = 'skip'
+                            $why     = 'This samAccountName appears earlier in the same file.'
+                        } elseif ([string]::IsNullOrWhiteSpace($rowOu)) {
+                            $verdict = 'skip'
+                            $why     = 'No OU on the row and no target OU selected.'
+                        } else {
+                            $seen[$rowSam.ToLower()] = $true
+
+                            $exists = $false
+                            try {
+                                $exists = Test-DsmtUserExists -SamAccountName $rowSam -Credential $session.Credential
+                            } catch {
+                                $exists = $false
+                            }
+                            if ($exists) {
+                                $verdict = 'skip'
+                                $why     = 'An account with this samAccountName already exists.'
+                            } else {
+                                $ouOk = $false
+                                try {
+                                    $ouOk = Test-DsmtOuExists -DistinguishedName $rowOu -Credential $session.Credential
+                                } catch {
+                                    $ouOk = $false
+                                }
+                                if (-not $ouOk) {
+                                    $verdict = 'skip'
+                                    $why     = 'The target OU could not be found: ' + $rowOu
+                                }
+                            }
+                        }
+
+                        if ($verdict -eq 'create') { $wouldCreate++ }
+
+                        $preview += [ordered]@{
+                            sam       = $rowSam
+                            display   = $rowDisplay
+                            ou        = $rowOu
+                            generated = [string]::IsNullOrWhiteSpace([string]$row.Password)
+                            verdict   = $verdict
+                            why       = $why
+                        }
+                    }
+
+                    Write-DsmtLog -Message ($session.Account + ' previewed a CSV import of ' +
+                                            [string]$rows.Count + ' row(s): ' + [string]$wouldCreate + ' would be created')
+
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok          = $true
+                        dryRun      = $true
+                        rows        = @($preview)
+                        total       = $rows.Count
+                        wouldCreate = $wouldCreate
+                        wouldSkip   = ($rows.Count - $wouldCreate)
+                    }
                     return
                 }
 
@@ -1578,6 +1946,104 @@ function Invoke-DsmtApi {
                     }
 
                 Send-DsmtJson -Response $Response -Data $outcome
+                return
+            }
+
+            '^/api/dashboard$' {
+                if ($method -ne 'GET') { break }
+
+                # One directory read for every tile - see Get-DsmtDashboard
+                # for why per-tile reads were not an option.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok        = $true
+                    dashboard = (Get-DsmtDashboard -Credential $session.Credential)
+                }
+                return
+            }
+
+            '^/api/sessions$' {
+                if ($method -ne 'GET') { break }
+
+                $summary = Get-DsmtSessionSummary
+                Send-DsmtJson -Response $Response -Data @{
+                    ok       = $true
+                    count    = $summary.Count
+                    sessions = @($summary.Sessions)
+                    me       = $session.Id
+                }
+                return
+            }
+
+            '^/api/sessions/(?<id>[a-f0-9]+)$' {
+                if ($method -ne 'DELETE') { break }
+
+                $target = $Matches['id']
+
+                # Ending your OWN session from this screen is a sign-out with
+                # extra steps, and it looks like a bug when the console then
+                # throws you to the login page. Say so instead.
+                if ($target -eq $session.Id) {
+                    Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                        'That is your own session. Use Log off in the menu.')
+                    return
+                }
+
+                $result = Remove-DsmtSessionById -Id $target
+                if (-not $result.Ok) {
+                    Send-DsmtError -Response $Response -Message $result.Error -StatusCode 404
+                    return
+                }
+
+                Write-DsmtAudit -Action 'Sign out another operator' -Target $result.Account `
+                                -Operator $session.Account -Reason 'Console session ended by an administrator' `
+                                -Result 'Success' -Category 'session'
+                Write-DsmtLog -Message ($session.Account + ' signed out ' + $result.Account)
+
+                Send-DsmtJson -Response $Response -Data @{ ok = $true; account = $result.Account }
+                return
+            }
+
+            '^/api/reports$' {
+                if ($method -ne 'GET') { break }
+
+                # Definitions only. Running one is a separate, slower call, so
+                # opening the screen does not read the whole directory.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok      = $true
+                    reports = @(Get-DsmtReports)
+                }
+                return
+            }
+
+            '^/api/reports/(?<key>[a-z]+)$' {
+                if ($method -ne 'GET') { break }
+
+                $result = Invoke-DsmtReport -Key $Matches['key'] -Credential $session.Credential
+                if (-not $result.Ok) {
+                    Send-DsmtError -Response $Response -Message $result.Error -StatusCode 400
+                    return
+                }
+
+                Write-DsmtLog -Message ($session.Account + ' ran the "' + $result.Label + '" report (' +
+                                        [string]@($result.Rows).Count + ' rows)')
+
+                # asAt and controller ship WITH the rows. A response shape that
+                # can carry data without its date is the one thing this feature
+                # exists to prevent.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok         = $true
+                    key        = $result.Key
+                    label      = $result.Label
+                    caveat     = $result.Caveat
+                    columns    = @($result.Columns)
+                    rows       = @($result.Rows)
+                    count      = @($result.Rows).Count
+                    truncated  = $result.Truncated
+                    maxRows    = $result.MaxRows
+                    asAt       = $result.AsAtUtc
+                    controller = $result.Controller
+                    domain     = $result.Domain
+                }
                 return
             }
 

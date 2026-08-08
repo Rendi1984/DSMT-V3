@@ -26,7 +26,10 @@ var state = {
   version: '',
   domain: '',
   domainInfo: null,
-  tab: 'users',
+  // Overview is the landing screen. The Users grid answered no question on
+  // arrival - it is a list of everything, which is where you go when you
+  // already know what you are looking for.
+  tab: 'overview',
   query: '',
   rows: [],
   loadError: '',
@@ -34,11 +37,22 @@ var state = {
   detail: null,
   checked: {},
   visibleCols: null,
+  // True once the CSV import dialog has shown a dry-run result for exactly
+  // the CSV and OU currently in the form. Reset on open and on any edit.
+  csvPreviewed: false,
   ous: null,
   auditRows: [],
   auditTotal: 0,
   auditFilter: 'All',
   auditQuery: '',
+  // Active filter chip per tab. Kept separate so switching tabs does not
+  // carry a users filter into groups, where the key means nothing.
+  userFilter: 'all',
+  userFilters: [],
+  userTotal: 0,
+  reports: [],
+  report: null,
+  dashboard: null,
   auditRange: 'all',
   auditFrom: null,
   auditTo: null,
@@ -90,6 +104,24 @@ var GROUP_COLS = [
    which is an AD permissions problem, not a DSMT one. Both are answered
    identically by the SQL and the file-log readers. */
 var AUDIT_FILTERS = ['All', 'System', 'Failed', 'Users', 'Groups', 'Passwords', 'Deletions'];
+
+// Columns on the Audit table. Same shape as USER_COLS/GROUP_COLS so the
+// existing column picker drives all three - the picker keys off state.tab and
+// needed no change beyond colDefs() knowing about 'audit'.
+//
+// Every one defaults ON. This is an audit log: a column hidden by default is
+// a fact an auditor does not know to go looking for. The picker exists to
+// narrow a wide table on a small screen, not to curate what is on the record.
+var AUDIT_COLS = [
+  { key: 'time',     label: 'Time',       on: true },
+  { key: 'action',   label: 'Action',     on: true },
+  { key: 'target',   label: 'Target',     on: true },
+  { key: 'operator', label: 'Operator',   on: true },
+  { key: 'dc',       label: 'Controller', on: true },
+  { key: 'reason',   label: 'Reason',     on: true },
+  { key: 'result',   label: 'Result',     on: true },
+  { key: 'undo',     label: 'Undo',       on: true }
+];
 
 /* Audit time windows. `hours` is how far back to look; null means no bound.
    'custom' is driven by the two datetime inputs instead. */
@@ -342,6 +374,28 @@ function showApp() {
 // Version - one value, from the API, painted everywhere it is shown
 // ---------------------------------------------------------------------------
 
+function applyInsecureBar(data) {
+  // Painted from /api/meta and from /api/session, so it is up before anyone
+  // types a password and stays up afterwards. Reading both is deliberate:
+  // the sign-in screen is exactly where the warning matters most.
+  var bar = $('insecureBar');
+  if (!bar || !data) { return; }
+
+  if (!data.httpsDegraded) {
+    bar.hidden = true;
+    bar.innerHTML = '';
+    return;
+  }
+
+  bar.innerHTML =
+    '<strong>This connection is not encrypted.</strong> ' +
+    'HTTPS is configured on this server but is not working, so DSMT fell back to plain HTTP - ' +
+    'domain passwords and directory data cross the network in clear text. ' +
+    '<span class="insecure-cause">' + esc(data.httpsDegradedCause || '') + '</span> ' +
+    '<span class="insecure-fix">' + esc(data.httpsDegradedFix || '') + '</span>';
+  bar.hidden = false;
+}
+
 function applyVersion(version, publisher) {
   if (version) {
     state.version = version;
@@ -365,6 +419,7 @@ function boot() {
   api('/api/meta', { allow401: true }).then(function (meta) {
     if (meta) {
       applyVersion(meta.version, meta.publisher);
+      applyInsecureBar(meta);
       state.storage = meta.storage || null;
       state.identity = meta.identity || null;
       if (meta.sessionMinutes) { state.sessionMinutes = meta.sessionMinutes; }
@@ -382,6 +437,7 @@ function boot() {
   api('/api/session', { allow401: true }).then(function (data) {
     if (!data || !data.ok) { signOutLocal(); return; }
     applyVersion(data.version, data.publisher);
+    applyInsecureBar(data);
     if (data.sessionMinutes) { state.sessionMinutes = data.sessionMinutes; }
     state.user = data.user;
     enterApp();
@@ -622,7 +678,11 @@ function closeBell() {
 // Columns
 // ---------------------------------------------------------------------------
 
-function colDefs() { return state.tab === 'groups' ? GROUP_COLS : USER_COLS; }
+function colDefs() {
+  if (state.tab === 'audit')  { return AUDIT_COLS; }
+  if (state.tab === 'groups') { return GROUP_COLS; }
+  return USER_COLS;
+}
 
 function visibleCols() {
   var defs = colDefs();
@@ -647,12 +707,16 @@ function toggleCol(key) {
   try { window.localStorage.setItem(COLS_KEY, JSON.stringify(saved)); } catch (e) { /* ignore */ }
 
   renderColPicker();
-  renderTable();
+  if (state.tab === 'audit') { renderAudit(); } else { renderTable(); }
+}
+
+function colPickerId() {
+  return (state.tab === 'audit') ? 'auditColPicker' : 'colPicker';
 }
 
 function renderColPicker() {
-  var box = $('colPicker');
-  if (box.hidden) { return; }
+  var box = $(colPickerId());
+  if (!box || box.hidden) { return; }
   var active = visibleCols().map(function (c) { return c.key; });
   box.innerHTML = colDefs().map(function (c) {
     var on = active.indexOf(c.key) !== -1;
@@ -679,16 +743,23 @@ function setTab(tab, force) {
   var isAudit    = (tab === 'audit');
   var isSettings = (tab === 'settings');
   var isTools    = (tab === 'tools');
-  var isFullView = (isAudit || isSettings || isTools);
+  var isOverview = (tab === 'overview');
+  var isFullView = (isAudit || isSettings || isTools || isOverview);
 
   $('directoryView').hidden = isFullView;
   $('auditView').hidden     = !isAudit;
   $('settingsView').hidden  = !isSettings;
   $('toolsView').hidden     = !isTools;
+  $('overviewView').hidden  = !isOverview;
 
   // The detail pane belongs to the directory views only.
   $('detailPane').hidden = isFullView;
   closeDetail();
+
+  if (isOverview) {
+    loadOverview();
+    return;
+  }
 
   if (isSettings) {
     loadSettings();
@@ -712,7 +783,8 @@ function setTab(tab, force) {
   $('createBtn').textContent = tab === 'groups' ? 'New group' : 'New user';
   $('importBtn').hidden = (tab === 'groups');
   $('colsBtn').hidden = false;
-  $('groupFilters').hidden = (tab !== 'groups');
+  // Chips exist on both tabs now; renderRowFilters decides whether there is
+  // anything to show.
 
   renderColPicker();
   loadRows();
@@ -727,9 +799,13 @@ function loadRows() {
   var path = (tab === 'groups' ? '/api/groups' : '/api/users');
   var query = [];
   if (state.query) { query.push('q=' + encodeURIComponent(state.query)); }
-  if (tab === 'groups' && state.groupFilter && state.groupFilter !== 'all') {
-    query.push('filter=' + encodeURIComponent(state.groupFilter));
-  }
+
+  // One filter mechanism for both tabs. When Users gained chips the groups
+  // implementation was generalised rather than copied - two chip renderers
+  // drifting apart is how one tab quietly stops honouring a rule the other
+  // still does.
+  var active = activeFilter();
+  if (active && active !== 'all') { query.push('filter=' + encodeURIComponent(active)); }
   if (query.length) { path += '?' + query.join('&'); }
 
   state.loadError = '';
@@ -741,8 +817,11 @@ function loadRows() {
     if (tab === 'groups') {
       state.groupFilters = asArray(data.filters);
       state.groupTotal = data.total || 0;
-      renderGroupFilters();
+    } else {
+      state.userFilters = asArray(data.filters);
+      state.userTotal = data.total || 0;
     }
+    renderRowFilters();
 
     renderTable();
     if (state.rows.length && !state.selectedId) {
@@ -765,22 +844,192 @@ function loadRows() {
    Test-DsmtPrivilegedGroup - because group names are renameable and localised.
    --------------------------------------------------------------------------- */
 
-function renderGroupFilters() {
+/* ---------------------------------------------------------------------------
+   Saved searches (proposal 1).
+
+   A saved search is the three things that define what is on screen: which
+   tab, the search text, and the filter chip. Restoring it restores exactly
+   that and nothing else - it does not carry a selected row or a scroll
+   position, because a preset that moves your selection is a preset people
+   stop trusting.
+
+   STORED PER BROWSER, in localStorage, and that is a deliberate first step
+   rather than an oversight: the proposal says so, and it means no server
+   change and no shared state to get wrong. If these ever move to SQL so a
+   team shares them, they become configuration and need the same treatment as
+   the group filters - defined once on the server, not mirrored here.
+
+   The tab is part of the record because a users filter key means nothing on
+   the Groups tab; applying one restores its own tab first.
+   --------------------------------------------------------------------------- */
+
+var SEARCH_KEY = 'dsmt.searches';
+
+function savedSearches() {
+  var raw = null;
+  try { raw = JSON.parse(window.localStorage.getItem(SEARCH_KEY) || '[]'); } catch (e) { raw = null; }
+  if (!raw || !raw.length) { return []; }
+
+  // Anything that is not a complete record is dropped rather than half-used.
+  // A preset that restores a tab and silently loses its filter is worse than
+  // one that is not offered.
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var r = raw[i];
+    if (!r || !r.name || !r.tab) { continue; }
+    out.push({ name: String(r.name), tab: String(r.tab), q: String(r.q || ''), filter: String(r.filter || 'all') });
+  }
+  return out;
+}
+
+function writeSavedSearches(list) {
+  try { window.localStorage.setItem(SEARCH_KEY, JSON.stringify(list)); } catch (e) { /* private mode */ }
+}
+
+function renderSavedSearches() {
+  var box = $('savedSearches');
+  if (!box) { return; }
+
+  var list = savedSearches().filter(function (p) { return p.tab === state.tab; });
+  if (!list.length) { box.hidden = true; box.innerHTML = ''; return; }
+
+  box.hidden = false;
+  box.innerHTML = '<span class="saved-label">Saved</span>' + list.map(function (p, i) {
+    var where = p.q ? ('"' + p.q + '"') : 'no text';
+    return '<span class="saved-chip">' +
+             '<button class="chip" type="button" data-saved="' + i + '" title="' +
+             esc(where + ', filter: ' + p.filter) + '">' + esc(p.name) + '</button>' +
+             '<button class="saved-drop" type="button" data-savedrm="' + i + '" ' +
+             'aria-label="Delete the saved search ' + esc(p.name) + '">&times;</button>' +
+           '</span>';
+  }).join('');
+
+  box.onclick = function (e) {
+    var drop = e.target.closest('[data-savedrm]');
+    if (drop) {
+      var victim = list[parseInt(drop.getAttribute('data-savedrm'), 10)];
+      writeSavedSearches(savedSearches().filter(function (p) {
+        return !(p.name === victim.name && p.tab === victim.tab);
+      }));
+      renderSavedSearches();
+      return;
+    }
+
+    var chip = e.target.closest('[data-saved]');
+    if (!chip) { return; }
+    applySavedSearch(list[parseInt(chip.getAttribute('data-saved'), 10)]);
+  };
+}
+
+function applySavedSearch(preset) {
+  if (!preset) { return; }
+
+  // The state is set BEFORE anything loads, and the load happens exactly once.
+  //
+  // The obvious order - setTab() then set the query then loadRows() - fires
+  // two requests: setTab() loads on its own with the OLD query, then this
+  // loads with the new one. Both are for the same tab, so loadRows()'s own
+  // "did the tab change under me" guard does not catch it, and whichever
+  // response arrives last wins. That is a race that shows the wrong rows
+  // occasionally and is close to impossible to reproduce on purpose.
+  //
+  // The filter is written by tab explicitly rather than through
+  // setActiveFilter(), which keys off state.tab and would otherwise write the
+  // preset's filter onto whichever tab happens to be open right now.
+  if (preset.tab === 'groups') { state.groupFilter = preset.filter; }
+  else { state.userFilter = preset.filter; }
+
+  state.query = preset.q;
+  $('search').value = preset.q;
+  state.selectedId = null;
+
+  if (state.tab !== preset.tab) {
+    setTab(preset.tab);   // loads once, with the state above already in place
+    return;
+  }
+
+  closeDetail();
+  loadRows();
+}
+
+function saveCurrentSearch() {
+  var current = activeFilter() || 'all';
+  if (!state.query && current === 'all') {
+    toast('There is nothing to save - type a search or pick a filter first.', 'bad');
+    return;
+  }
+
+  var suggested = state.query || '';
+  var defs = asArray(state.tab === 'groups' ? state.groupFilters : state.userFilters);
+  var chip = defs.filter(function (f) { return f.key === current; })[0];
+  if (chip && current !== 'all') {
+    suggested = suggested ? (chip.label + ' - ' + suggested) : chip.label;
+  }
+
+  openDialog({
+    title: 'Save this search',
+    confirmLabel: 'Save',
+    body: '<p class="dialog-note">Saves the tab, the search text and the filter, so one click puts ' +
+          'this view back. Stored in <strong>this browser</strong> only.</p>' +
+          '<dl class="detail-fields">' +
+            settingsRow('Tab', state.tab) +
+            settingsRow('Search text', state.query || '(none)') +
+            settingsRow('Filter', chip ? chip.label : current) +
+          '</dl>' +
+          '<div class="field"><label for="dlgSearchName">Name</label>' +
+          '<input class="input" id="dlgSearchName" autocomplete="off" value="' + esc(suggested) + '"></div>',
+    onConfirm: function () {
+      var name = $('dlgSearchName').value.trim();
+      if (!name) { dialogError('Give it a name.'); return; }
+
+      var list = savedSearches();
+      // Same name on the same tab replaces rather than duplicating - two
+      // identical chips with different contents is a trap.
+      list = list.filter(function (p) { return !(p.name === name && p.tab === state.tab); });
+      list.push({ name: name, tab: state.tab, q: state.query || '', filter: current });
+
+      writeSavedSearches(list);
+      closeDialog();
+      renderSavedSearches();
+      toast('Saved "' + name + '".');
+    }
+  });
+}
+
+function activeFilter() {
+  return (state.tab === 'groups') ? state.groupFilter : state.userFilter;
+}
+
+function setActiveFilter(key) {
+  if (state.tab === 'groups') { state.groupFilter = key; } else { state.userFilter = key; }
+}
+
+function renderRowFilters() {
+  // Saved searches are their own bar and must appear whether or not this tab
+  // reported any filter chips - an early return here used to skip them.
+  renderSavedSearches();
+
   var box = $('groupFilters');
-  var list = asArray(state.groupFilters);
+  var list = asArray(state.tab === 'groups' ? state.groupFilters : state.userFilters);
   if (!list.length) { box.hidden = true; return; }
+
+  var current = activeFilter();
 
   box.hidden = false;
   box.innerHTML = list.map(function (f) {
-    var on = (f.key === state.groupFilter) || (!state.groupFilter && f.key === 'all');
+    var on = (f.key === current) || (!current && f.key === 'all');
+    // The server's own explanation becomes the tooltip, so there is no second
+    // copy of "what does this chip match" in this file to go stale.
     return '<button class="chip" type="button" data-gfilter="' + esc(f.key) + '" aria-pressed="' +
-           (on ? 'true' : 'false') + '">' + esc(f.label) + '</button>';
+           (on ? 'true' : 'false') + '"' +
+           (f.how ? ' title="' + esc(f.how) + '"' : '') +
+           '>' + esc(f.label) + '</button>';
   }).join('');
 
   var chips = box.querySelectorAll('[data-gfilter]');
   for (var i = 0; i < chips.length; i++) {
     chips[i].onclick = function () {
-      state.groupFilter = this.getAttribute('data-gfilter');
+      setActiveFilter(this.getAttribute('data-gfilter'));
       state.selectedId = null;
       closeDetail();
       loadRows();
@@ -872,10 +1121,13 @@ function renderTable() {
 
   // Say so when a filter is hiding rows. A filtered count that looks like a
   // total is how someone concludes the directory has three groups.
-  if (state.tab === 'groups' && state.groupFilter && state.groupFilter !== 'all') {
-    var chip = asArray(state.groupFilters).filter(function (f) { return f.key === state.groupFilter; })[0];
-    line += ' - filtered to "' + (chip ? chip.label : state.groupFilter) + '"';
-    if (state.groupTotal) { line += ' out of ' + state.groupTotal + ' read'; }
+  var activeKey = activeFilter();
+  if (activeKey && activeKey !== 'all') {
+    var defs = asArray(state.tab === 'groups' ? state.groupFilters : state.userFilters);
+    var chip = defs.filter(function (f) { return f.key === activeKey; })[0];
+    var readTotal = (state.tab === 'groups') ? state.groupTotal : state.userTotal;
+    line += ' - filtered to "' + (chip ? chip.label : activeKey) + '"';
+    if (readTotal) { line += ' out of ' + readTotal + ' read'; }
   }
 
   state.pageLimitHit = !!(state.limit && state.rows.length >= state.limit);
@@ -1146,30 +1398,40 @@ function renderAudit() {
     if (state.auditFilter !== 'All') { scope += ' for the ' + state.auditFilter + ' filter'; }
     if (state.auditQuery) { scope += ' matching "' + state.auditQuery + '"'; }
 
-    $('auditBody').innerHTML = '<tr><td colspan="8" data-label="">' +
+    $('auditBody').innerHTML = '<tr><td colspan="' + visibleCols().length + '" data-label="">' +
       '<span class="muted-sm">' + esc(scope) + '. Entries are written here as changes are made.</span>' +
       '</td></tr>';
     $('auditLine').textContent = '';
     return;
   }
 
+  var cols = visibleCols();
+
+  // Header and body are built from the same list, in the same order. Two
+  // hardcoded column orders drifting apart puts values under the wrong
+  // headings - which on an audit log is not a cosmetic bug.
+  $('auditHead').innerHTML = '<tr>' + cols.map(function (c) {
+    return '<th>' + esc(c.label) + '</th>';
+  }).join('') + '</tr>';
+
   $('auditBody').innerHTML = state.auditRows.map(function (r, i) {
     var cls = (r.result === 'Success') ? 'res-success' : 'res-other';
     var plan = undoPlan(r);
-    var undoCell = plan.ok
-      ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
-      : '<span class="cell-disabled undo-no" title="' + esc(plan.reason) + '">-</span>';
 
-    return '<tr>' +
-      '<td data-label="Time" class="cell-muted">' + esc(formatStamp(r.time)) + '</td>' +
-      '<td data-label="Action" class="cell-name">' + esc(r.action) + '</td>' +
-      '<td data-label="Target">' + esc(r.target) + '</td>' +
-      '<td data-label="Operator" class="cell-muted">' + esc(r.operator) + '</td>' +
-      '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>' +
-      '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>' +
-      '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>' +
-      '<td data-label="Undo">' + undoCell + '</td>' +
-      '</tr>';
+    var cells = {
+      time:     '<td data-label="Time" class="cell-muted">' + esc(formatStamp(r.time)) + '</td>',
+      action:   '<td data-label="Action" class="cell-name">' + esc(r.action) + '</td>',
+      target:   '<td data-label="Target">' + esc(r.target) + '</td>',
+      operator: '<td data-label="Operator" class="cell-muted">' + esc(r.operator) + '</td>',
+      dc:       '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>',
+      reason:   '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>',
+      result:   '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>',
+      undo:     '<td data-label="Undo">' + (plan.ok
+                  ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
+                  : '<span class="cell-disabled undo-no" title="' + esc(plan.reason) + '">-</span>') + '</td>'
+    };
+
+    return '<tr>' + cols.map(function (c) { return cells[c.key] || ''; }).join('') + '</tr>';
   }).join('');
 
   var undoButtons = $('auditBody').querySelectorAll('[data-undo]');
@@ -1306,6 +1568,31 @@ function formatStamp(iso) {
   if (day.getTime() === today.getTime()) { return 'Today ' + hm; }
   if (day.getTime() === today.getTime() - 86400000) { return 'Yesterday ' + hm; }
   return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }) + ' ' + hm;
+}
+
+function formatAbsoluteStamp(iso) {
+  // formatStamp() is deliberately relative - "Today 17:48" is the friendly
+  // and correct thing on a live audit screen. It is the WRONG thing for a
+  // report stamp: a CSV that says "Today 17:48" is meaningless the moment it
+  // is forwarded, and even its fallback branch omits the year, so
+  // "12 Aug 14:30" is ambiguous a year later.
+  //
+  // A report stamp must survive being emailed, so it is absolute, full,
+  // unambiguous, and carries the offset - the reader may not be in the same
+  // timezone as the server.
+  if (!iso) { return ''; }
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) { return iso; }
+
+  function p2(n) { return ('0' + n).slice(-2); }
+
+  var off = -d.getTimezoneOffset();
+  var sign = (off < 0) ? '-' : '+';
+  var abs = Math.abs(off);
+
+  return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) +
+         ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) +
+         ' (UTC' + sign + p2(Math.floor(abs / 60)) + ':' + p2(abs % 60) + ')';
 }
 
 // ---------------------------------------------------------------------------
@@ -1798,11 +2085,37 @@ function actionCreateGroup() {
   });
 }
 
+function importPreviewHtml(res) {
+  var rows = asArray(res.rows);
+
+  var body = rows.map(function (r) {
+    var ok = (r.verdict === 'create');
+    return '<li>' +
+      '<span class="' + (ok ? 'result-ok' : 'result-bad') + '">' + (ok ? 'create' : 'skip') + '</span>' +
+      '<span><strong>' + esc(r.sam || '(blank)') + '</strong>' +
+      (ok ? ' &rarr; ' + esc(r.ou) + (r.generated ? ' (password generated)' : '') : '') +
+      (r.why ? ' - ' + esc(r.why) : '') +
+      '</span></li>';
+  }).join('');
+
+  return '<div class="set-state' + (res.wouldSkip ? ' set-state-off' : ' set-state-on') + '">' +
+           '<div class="set-state-head"><span class="set-state-dot"></span>' +
+           '<span>' + res.wouldCreate + ' of ' + res.total + ' rows would be created' +
+           (res.wouldSkip ? ', ' + res.wouldSkip + ' skipped' : '') + '</span></div>' +
+         '</div>' +
+         '<ul class="result-list">' + body + '</ul>' +
+         '<p class="dialog-note"><strong>Nothing has been written yet.</strong> This is a preview, not a ' +
+         'guarantee: the directory can change between this check and the import, and Active Directory ' +
+         'still has the last word on the password policy and on whether you may create accounts in ' +
+         'that OU.</p>';
+}
+
 function actionImportCsv() {
+  state.csvPreviewed = false;
   withOus(function () {
     openDialog({
       title: 'Bulk CSV import',
-      confirmLabel: 'Import',
+      confirmLabel: 'Preview',
       body: '<p class="dialog-note">Header row required. Recognised columns: ' +
             '<strong>SamAccountName</strong> (required), DisplayName, GivenName, Surname, ' +
             'Department, Title, Password, OU. A row without a Password gets a generated one; ' +
@@ -1811,21 +2124,64 @@ function actionImportCsv() {
             '<input class="input" id="dlgFile" type="file" accept=".csv,text/csv"></div>' +
             '<div class="field"><label for="dlgCsv">or paste the CSV</label>' +
             '<textarea class="input" id="dlgCsv" placeholder="SamAccountName,DisplayName,Department"></textarea></div>' +
-            ouSelect(null) + reasonField(),
+            ouSelect(null) + reasonField() +
+            '<div id="dlgPreview"></div>',
       onOpen: function () {
+        // Any edit invalidates the preview. Without this, changing the CSV
+        // after previewing would arm the write button for a file nobody has
+        // seen checked - which is the exact failure the preview exists to
+        // prevent, just one step later.
+        var invalidate = function () {
+          if (!state.csvPreviewed) { return; }
+          state.csvPreviewed = false;
+          $('dlgPreview').innerHTML = '';
+          $('dialogConfirm').hidden = false;
+          $('dialogConfirm').textContent = 'Preview';
+        };
+
+        $('dlgCsv').addEventListener('input', invalidate);
+        $('dlgOu').addEventListener('change', invalidate);
+
         $('dlgFile').addEventListener('change', function (e) {
           var file = e.target.files && e.target.files[0];
           if (!file) { return; }
           var reader = new FileReader();
-          reader.onload = function () { $('dlgCsv').value = String(reader.result); };
+          reader.onload = function () {
+            $('dlgCsv').value = String(reader.result);
+            invalidate();
+          };
           reader.readAsText(file);
         });
       },
+      // Two steps, and the first one is not optional. An import that
+      // half-succeeds with no preview means the operator finds out what it
+      // was going to do by reading what it already did. The confirm button
+      // says "Preview" until a preview has been seen; only then does it
+      // become the button that writes.
       onConfirm: function () {
         var reason = readReason();
         var csv = $('dlgCsv').value.trim();
         if (!csv) { dialogError('Choose a file or paste the CSV.'); return; }
         if (!reason) { dialogError('A reason is required.'); return; }
+
+        if (!state.csvPreviewed) {
+          api('/api/users/import', {
+            method: 'POST',
+            body: { csv: csv, ou: $('dlgOu').value, reason: reason, dryRun: true }
+          }).then(function (res) {
+            $('dlgPreview').innerHTML = importPreviewHtml(res);
+            state.csvPreviewed = true;
+
+            if (!res.wouldCreate) {
+              $('dialogConfirm').hidden = true;
+              dialogError('Nothing in this file would be created. Fix the rows above and preview again.');
+            } else {
+              $('dialogConfirm').textContent = 'Create ' + res.wouldCreate + ' user(s)';
+            }
+          }).catch(function (err) { dialogError(err.message); });
+          return;
+        }
+
         runAction('/api/users/import', {
           csv: csv, ou: $('dlgOu').value, reason: reason
         }, 'Bulk CSV import', refreshAfterWrite);
@@ -1861,7 +2217,8 @@ function storageLine() {
 // ---------------------------------------------------------------------------
 
 var TOOLS = [
-  { key: 'gmsa',     label: 'gMSA',      hint: 'Service account for DSMT', render: renderGmsaTool },
+  { key: 'reports',  label: 'Reports',   hint: 'Named queries, dated',      render: renderReportsTool },
+  { key: 'gmsa',     label: 'gMSA',      hint: 'Service account for DSMT',  render: renderGmsaTool },
   { key: 'adhealth', label: 'AD health', hint: 'Replication, FSMO, clocks', render: renderAdHealthTool }
 ];
 
@@ -1902,6 +2259,367 @@ function loadTools() {
   for (i = 0; i < TOOLS.length; i++) {
     if (TOOLS[i].key === current) { TOOLS[i].render(); }
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Overview (proposal 25).
+
+   Three rules, all from the proposal, and all guarding the same failure - a
+   number on a dashboard is read as "now" and as "true", and both can be wrong
+   with nothing looking wrong:
+
+     1  Every tile is live, and the screen states when it was taken anyway.
+     2  A TILE THAT CANNOT BE COMPUTED SAYS SO. It never shows 0. "0 locked-out
+        accounts" and "the query failed" look identical and mean opposite
+        things, so each tile carries its own ok/error from the server.
+     3  Cost is the design constraint. The server does ONE users read and ONE
+        groups read for the whole screen; nothing here fires a call per tile,
+        and AD health - which is genuinely slow - is linked to, not computed.
+
+   Nothing auto-refreshes. A dashboard that re-reads the directory on a timer
+   is a load generator with a nice layout.
+   --------------------------------------------------------------------------- */
+
+function loadOverview() {
+  $('overviewBody').innerHTML = '<p class="muted-sm">Reading the directory...</p>';
+  $('overviewStamp').textContent = '';
+
+  api('/api/dashboard').then(function (data) {
+    state.dashboard = data.dashboard;
+    renderOverview();
+  }).catch(function (err) {
+    $('overviewBody').innerHTML = '<section class="set-card"><div class="error-box">' +
+      esc(explainApiError(err.message)) + '</div></section>';
+  });
+}
+
+function renderOverview() {
+  var d = state.dashboard;
+  if (!d) { return; }
+
+  $('overviewStamp').textContent = 'As at ' + formatAbsoluteStamp(d.asAt);
+
+  var tiles = asArray(d.tiles);
+
+  var warn = '';
+  if (d.truncated) {
+    warn = '<div class="error-box"><strong>These counts are INCOMPLETE.</strong> The directory read hit ' +
+           'the ' + esc(String(d.maxRows)) + '-row cap, so objects beyond it were never counted. Every ' +
+           'number below is a floor, not a total.</div>';
+  }
+
+  var grid = '<div class="tile-grid">' + tiles.map(function (t) {
+    if (!t.ok) {
+      // The error IS the tile. No number, not even a dash that could be read
+      // as zero.
+      return '<div class="tile tile-bad">' +
+               '<div class="tile-label">' + esc(t.label) + '</div>' +
+               '<div class="tile-error">Could not be computed</div>' +
+               '<div class="tile-hint">' + esc(t.error || '') + '</div>' +
+             '</div>';
+    }
+    return '<button class="tile" type="button" data-tile="' + esc(t.key) + '">' +
+             '<div class="tile-label">' + esc(t.label) + '</div>' +
+             '<div class="tile-value">' + esc(String(t.value)) + '</div>' +
+             '<div class="tile-hint">' + esc(t.hint || '') + '</div>' +
+           '</button>';
+  }).join('') + '</div>';
+
+  $('overviewBody').innerHTML =
+    '<section class="set-card">' +
+      warn +
+      '<p class="dialog-note">Read <strong>live from ' + esc(d.domain) + '</strong> via ' +
+      esc(d.controller || 'an unknown controller') + ' at the time above - never from the SQL ' +
+      'snapshot, and never on a timer. Press Refresh to read again.</p>' +
+      grid +
+      '<div class="set-actions">' +
+        '<button class="btn btn-ghost" type="button" id="overviewHealth">Run AD health checks</button>' +
+        '<button class="btn btn-ghost" type="button" id="overviewReports">Open reports</button>' +
+      '</div>' +
+    '</section>' +
+    '<section class="set-card" id="sessionsCard"></section>';
+
+  // Tiles that map onto a filter jump straight to it - the number is only
+  // useful if you can get to the rows behind it.
+  var TILE_TARGET = {
+    users: ['users', 'all'], disabled: ['users', 'disabled'], lockedout: ['users', 'lockedout'],
+    pwdexpiring: ['users', 'pwdexpiring'], pwdexpired: ['users', 'pwdexpired'],
+    stale: ['users', 'stale'], groups: ['groups', 'all'], privileged: ['groups', 'privileged']
+  };
+
+  var buttons = $('overviewBody').querySelectorAll('[data-tile]');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].onclick = function () {
+      var target = TILE_TARGET[this.getAttribute('data-tile')];
+      if (!target) { return; }
+      applySavedSearch({ tab: target[0], q: '', filter: target[1] });
+    };
+  }
+
+  $('overviewHealth').onclick = openAdHealthTool;
+  $('overviewReports').onclick = function () { writeSetting(TOOL_KEY, 'reports'); setTab('tools'); };
+
+  renderSessionsCard();
+}
+
+/* ---------------------------------------------------------------------------
+   Live sessions (proposal 9).
+
+   Addressed by an opaque per-session id, never by the token: the token is a
+   bearer credential, and handing it to the browser so an administrator could
+   end a session would have turned this into an impersonation tool.
+   --------------------------------------------------------------------------- */
+
+function renderSessionsCard() {
+  var card = $('sessionsCard');
+  if (!card) { return; }
+  card.innerHTML = '<h2 class="set-h">Operators signed in</h2><p class="muted-sm">Reading...</p>';
+
+  api('/api/sessions').then(function (data) {
+    var list = asArray(data.sessions);
+    var rows = list.map(function (s) {
+      var me = (s.id === data.me);
+      return '<div class="role-row">' +
+               '<div class="role-main">' +
+                 '<strong>' + esc(s.display || s.account) + '</strong>' +
+                 (me ? ' <span class="tag">you</span>' : '') +
+                 (s.isAdmin ? ' <span class="tag">DSMT admin</span>' : '') +
+                 '<div class="role-note">' + esc(s.account) + ' - signed in ' +
+                 esc(formatAbsoluteStamp(s.since)) + ', idle ' + esc(String(s.idleMins)) + ' min</div>' +
+               '</div>' +
+               (me ? '<span class="cell-disabled">-</span>'
+                   : '<button class="btn btn-ghost" type="button" data-endsession="' + esc(s.id) + '" ' +
+                     'data-endwho="' + esc(s.account) + '">Sign out</button>') +
+             '</div>';
+    }).join('');
+
+    card.innerHTML =
+      '<h2 class="set-h">Operators signed in</h2>' +
+      '<p class="dialog-note">Sessions live in the server process, so this is the whole truth and it ' +
+      'resets when DSMT restarts. Signing someone out drops the credential held for them and they must ' +
+      'sign in again - which is the point the day somebody leaves mid-shift. It needs the DSMT ' +
+      'administrator role.</p>' +
+      (list.length ? rows : '<p class="muted-sm">Nobody is signed in, which cannot be true while you ' +
+                            'are reading this - reload the page.</p>') +
+      '<div class="set-result" id="sessionResult"></div>';
+
+    var ends = card.querySelectorAll('[data-endsession]');
+    for (var i = 0; i < ends.length; i++) {
+      ends[i].onclick = function () {
+        var id = this.getAttribute('data-endsession');
+        var who = this.getAttribute('data-endwho');
+        openDialog({
+          title: 'Sign out ' + who + '?',
+          confirmLabel: 'Sign them out',
+          body: '<p>Their session ends immediately and any work in progress in their browser is lost. ' +
+                'They can sign in again straight away - this does not disable the account.</p>',
+          onConfirm: function () {
+            api('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' })
+              .then(function (res) {
+                closeDialog();
+                toast('Signed out ' + res.account + '.');
+                renderSessionsCard();
+              })
+              .catch(function (err) { dialogError(err.message); });
+          }
+        });
+      };
+    }
+  }).catch(function (err) {
+    card.innerHTML = '<h2 class="set-h">Operators signed in</h2>' +
+      '<div class="error-box">' + esc(err.message) + '</div>';
+  });
+}
+
+/* ---------------------------------------------------------------------------
+   Reports.
+
+   A report is a saved filter plus a column set - the SAME Get-DsmtUsers /
+   Select-DsmtUsersByFilter path the Users grid uses. Definitions live on the
+   server so the list, the labels and the columns have one source.
+
+   THE DATE IS THE FEATURE. A directory report with no "as at" stamp gets
+   circulated for months as if it were current. The stamp is shown above the
+   table AND written into the export, and neither is optional - the server
+   returns it with the rows for exactly that reason.
+
+   Nothing here auto-runs. Each report reads the whole directory, and a screen
+   that fires several of those on open is how a diagnostic tool becomes the
+   thing people blame.
+   --------------------------------------------------------------------------- */
+
+function renderReportsTool() {
+  $('toolsBody').innerHTML = '<p class="muted-sm">Loading the report list...</p>';
+
+  api('/api/reports').then(function (data) {
+    state.reports = asArray(data.reports);
+    paintReportsTool(null);
+  }).catch(function (err) {
+    $('toolsBody').innerHTML = '<section class="set-card"><h2 class="set-h">Reports</h2>' +
+      '<div class="error-box">' + esc(err.message) + '</div></section>';
+  });
+}
+
+function paintReportsTool(result) {
+  var list = asArray(state.reports);
+
+  var picker = list.map(function (r) {
+    var on = (result && result.key === r.key);
+    return '<button class="chip" type="button" data-report="' + esc(r.key) + '" aria-pressed="' +
+           (on ? 'true' : 'false') + '" title="' + esc(r.question || '') + '">' +
+           esc(r.label) + '</button>';
+  }).join('');
+
+  var body = '';
+  if (!result) {
+    body = '<p class="muted-sm">Pick a report. Each one reads the directory live when you run it - ' +
+           'nothing is cached and nothing runs on its own.</p>';
+  } else {
+    body = reportResultHtml(result);
+  }
+
+  $('toolsBody').innerHTML =
+    '<section class="set-card">' +
+      '<h2 class="set-h">Reports</h2>' +
+      '<p class="dialog-note">Every report is read <strong>live from ' +
+      esc(state.domainInfo ? state.domainInfo.domain : 'the directory') + '</strong> at the moment you ' +
+      'run it, never from the SQL snapshot, and every one is stamped with the time it was taken - on ' +
+      'screen and in the export. A directory report with no date gets forwarded for months as if it ' +
+      'were still true.</p>' +
+      '<div class="chips">' + picker + '</div>' +
+      '<div id="reportBody">' + body + '</div>' +
+    '</section>';
+
+  var chips = $('toolsBody').querySelectorAll('[data-report]');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].onclick = function () { runReport(this.getAttribute('data-report')); };
+  }
+
+  if (result) {
+    $('reportExport').onclick = function () { exportReport(result); };
+  }
+}
+
+function runReport(key) {
+  $('reportBody').innerHTML = '<p class="muted-sm">Reading the directory...</p>';
+
+  api('/api/reports/' + encodeURIComponent(key)).then(function (res) {
+    state.report = res;
+    paintReportsTool(res);
+  }).catch(function (err) {
+    $('reportBody').innerHTML = '<div class="error-box">' + esc(err.message) + '</div>';
+  });
+}
+
+function reportResultHtml(res) {
+  var cols = asArray(res.columns);
+  var rows = asArray(res.rows);
+
+  // The stamp, first and unmissable. Local time for the reader, with the DC
+  // named because a report is only as current as the controller that answered.
+  var head =
+    '<div class="set-state set-state-on">' +
+      '<div class="set-state-head"><span class="set-state-dot"></span>' +
+      '<span>' + esc(res.label) + '</span></div>' +
+      '<dl class="detail-fields">' +
+        settingsRow('As at', formatAbsoluteStamp(res.asAt) + ' - live read, not a snapshot') +
+        settingsRow('Domain / controller', res.domain + ' / ' + (res.controller || 'unknown')) +
+        settingsRow('Rows', String(rows.length)) +
+      '</dl>' +
+    '</div>';
+
+  // Truncation first and in the error style, not as a footnote. A report that
+  // is incomplete but dated and formatted reads as authoritative, which is the
+  // worst way for it to be wrong.
+  if (res.truncated) {
+    head += '<div class="error-box"><strong>This report is INCOMPLETE.</strong> The directory read hit ' +
+            'the ' + esc(String(res.maxRows)) + '-row cap, so accounts beyond it were never examined. ' +
+            'Do not circulate this as a full list.</div>';
+  }
+
+  if (res.caveat) {
+    head += '<p class="set-warn">' + esc(res.caveat) + '</p>';
+  }
+
+  if (!rows.length) {
+    return head + '<p class="muted-sm">No accounts match this report right now. That is an answer, ' +
+           'not an error - it was read live at the time above.</p>' +
+           '<div class="set-actions"><button class="btn btn-ghost" type="button" id="reportExport" disabled>' +
+           'Export CSV</button></div>';
+  }
+
+  var labels = cols.map(reportColLabel);
+
+  var table =
+    '<div class="table-wrap"><table class="table dsmt-table">' +
+      '<thead><tr>' + labels.map(function (l) { return '<th>' + esc(l) + '</th>'; }).join('') + '</tr></thead>' +
+      '<tbody>' + rows.map(function (r) {
+        return '<tr>' + cols.map(function (c, i) {
+          return '<td data-label="' + esc(labels[i]) + '">' + esc(reportCell(r, c)) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody>' +
+    '</table></div>';
+
+  return head + table +
+    '<div class="set-actions"><button class="btn btn-secondary" type="button" id="reportExport">' +
+    'Export CSV</button></div>';
+}
+
+// Column labels for report columns. Reuses USER_COLS where the key matches so
+// "Last logon" is called the same thing here as on the grid; the rest are
+// report-only and named here.
+var REPORT_COL_LABELS = {
+  logonDays:   'Days since logon',
+  pwdDays:     'Days to expiry',
+  createdDays: 'Age (days)',
+  created:     'Created',
+  group:       'Group',
+  member:      'Member',
+  meta:        'Detail'
+};
+
+function reportColLabel(key) {
+  if (REPORT_COL_LABELS[key]) { return REPORT_COL_LABELS[key]; }
+  var found = USER_COLS.filter(function (c) { return c.key === key; })[0];
+  return found ? found.label : key;
+}
+
+function reportCell(row, key) {
+  var v = row[key];
+  if (v === undefined || v === null) { return ''; }
+  // -1 is the server's "does not apply" sentinel. Printing it as a number
+  // would read as a real count, and a negative one at that.
+  if ((key === 'logonDays' || key === 'pwdDays' || key === 'createdDays') && v === -1) { return '-'; }
+  return String(v);
+}
+
+function exportReport(res) {
+  var cols = asArray(res.columns);
+  var rows = asArray(res.rows);
+  if (!rows.length) { return; }
+
+  // The stamp goes INTO the file, as its own rows above the header. A CSV
+  // that leaves the building without its date is the exact failure this
+  // report screen was built to avoid - and once it is in someone's inbox,
+  // nothing on the screen it came from can help.
+  var meta = [
+    ['DSMT report', res.label],
+    ['As at', formatAbsoluteStamp(res.asAt)],
+    ['Read live from', res.domain + ' via ' + (res.controller || 'unknown')],
+    ['Rows', String(rows.length)],
+    []
+  ];
+  // The warning has to travel in the file too. Once this is in someone's
+  // inbox, nothing on the screen it came from can qualify it.
+  if (res.truncated) {
+    meta.splice(4, 0, ['INCOMPLETE', 'Hit the ' + res.maxRows + '-row read cap; accounts beyond it were never examined']);
+  }
+
+  var header = cols.map(reportColLabel);
+  var body = rows.map(function (r) { return cols.map(function (c) { return reportCell(r, c); }); });
+
+  downloadCsv('dsmt-report-' + res.key + '-' + stampName() + '.csv', meta[0], meta.slice(1).concat([header]).concat(body));
+  toast('Exported ' + rows.length + ' rows, stamped ' + formatAbsoluteStamp(res.asAt) + '.');
 }
 
 /* ---------------------------------------------------------------------------
@@ -2457,22 +3175,76 @@ function profileHtml(d, isGroup) {
       }).join('') + '</ul>';
   }
 
+  // The window was one long scroll: identity, organisation, account, then
+  // memberships below the fold. Tabs split it so more is visible with less
+  // crowding.
+  //
+  // The tab strip is built ONCE, from a list, so the Attributes section
+  // planned in PROGRESS item 28 slots in as another entry rather than as a
+  // second navigation pattern bolted on beside this one.
+  var panes = [
+    { key: 'overview', label: 'Overview', body:
+        '<div class="profile-grid">' +
+          '<section class="profile-sec"><h4>Identity</h4>' + profileRows(identity) + '</section>' +
+          '<section class="profile-sec"><h4>' + (isGroup ? 'Directory' : 'Organisation') + '</h4>' +
+            profileRows(org) + '</section>' +
+          '<section class="profile-sec profile-wide"><h4>Account</h4>' + profileRows(account) + '</section>' +
+        '</div>' },
+    { key: 'members', label: memberTitle + ' (' + members.length + ')', body:
+        '<div class="profile-grid">' +
+          '<section class="profile-sec profile-wide">' + memberBody + '</section>' +
+        '</div>' }
+  ];
+
+  var strip = '<div class="profile-tabs" role="tablist">' +
+    panes.map(function (p, i) {
+      return '<button class="profile-tab' + (i === 0 ? ' is-on' : '') + '" type="button" ' +
+             'role="tab" aria-selected="' + (i === 0 ? 'true' : 'false') + '" ' +
+             'data-ptab="' + esc(p.key) + '">' + esc(p.label) + '</button>';
+    }).join('') + '</div>';
+
+  var bodies = panes.map(function (p, i) {
+    return '<div class="profile-pane" data-ppane="' + esc(p.key) + '"' +
+           (i === 0 ? '' : ' hidden') + '>' + p.body + '</div>';
+  }).join('');
+
   return tags +
-    // Actions above the content, not below it. With six group memberships the
-    // buttons were past the fold, so the most-used controls moved further
-    // away the more there was to read - exactly backwards.
+    // Actions above the content and OUTSIDE the tab strip. They apply to the
+    // user, not to a tab - moving them inside one would hide half of them
+    // depending on which tab happened to be open. With six group memberships
+    // they were already past the fold, so the most-used controls moved
+    // further away the more there was to read - exactly backwards.
     '<div class="set-actions profile-actions" id="profileActions"></div>' +
-    '<div class="profile-grid">' +
-      '<section class="profile-sec"><h4>Identity</h4>' + profileRows(identity) + '</section>' +
-      '<section class="profile-sec"><h4>' + (isGroup ? 'Directory' : 'Organisation') + '</h4>' +
-        profileRows(org) + '</section>' +
-      '<section class="profile-sec profile-wide"><h4>Account</h4>' + profileRows(account) + '</section>' +
-      '<section class="profile-sec profile-wide">' +
-        '<h4>' + esc(memberTitle) + ' (' + members.length + ')</h4>' + memberBody + '</section>' +
-    '</div>';
+    strip + bodies;
+}
+
+function wireProfileTabs() {
+  var strip = el('.profile-tabs');
+  if (!strip) { return; }
+
+  strip.addEventListener('click', function (e) {
+    var btn = e.target.closest('.profile-tab');
+    if (!btn) { return; }
+
+    var key = btn.getAttribute('data-ptab');
+    var tabs = strip.querySelectorAll('.profile-tab');
+    var i;
+    for (i = 0; i < tabs.length; i++) {
+      var on = (tabs[i] === btn);
+      tabs[i].className = 'profile-tab' + (on ? ' is-on' : '');
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+
+    var panes = document.querySelectorAll('[data-ppane]');
+    for (i = 0; i < panes.length; i++) {
+      panes[i].hidden = (panes[i].getAttribute('data-ppane') !== key);
+    }
+  });
 }
 
 function wireProfile(d, isGroup, rowId) {
+  wireProfileTabs();
+
   // The same actions the detail pane offers, so there is one set of verbs in
   // the console and they behave identically wherever they are pressed.
   var actions = isGroup
@@ -2954,13 +3726,185 @@ function renderSettings() {
       '<div class="set-result" id="portResult"></div>' +
       '<div id="portCommands"></div>' });
 
+  // ---- Roles ----
+  // Scope is DSMT's own settings and nothing else. The copy says so at the
+  // top, because a role that looks like a directory permission and is not
+  // would be relied on as one.
+  var r = s.roles || {};
+  var roleGroups = asArray(r.groups);
+
+  var roleRows = '';
+  for (var ri = 0; ri < roleGroups.length; ri++) {
+    var rg = roleGroups[ri];
+    roleRows +=
+      '<div class="role-row" data-sid="' + esc(rg.sid) + '">' +
+        '<div class="role-main">' +
+          '<strong>' + esc(rg.name || rg.sid) + '</strong>' +
+          (rg.present
+            ? '<div class="role-note">' + esc(rg.ou || '') + '</div>'
+            : '<div class="role-missing">Not found in the directory - this entry grants nobody anything.</div>') +
+          '<div class="role-sid">' + esc(rg.sid) + '</div>' +
+        '</div>' +
+        '<button class="btn btn-ghost role-remove" type="button">Remove</button>' +
+      '</div>';
+  }
+  if (!roleGroups.length) {
+    roleRows = '<p class="role-note">No groups configured - every operator who can sign in can change ' +
+               'every DSMT setting.</p>';
+  }
+
+  sections.push({ key: 'roles', label: 'Administrators',
+    hint: (r.configured ? roleGroups.length + ' group(s)' : 'Everyone'), body:
+      '<h2 class="set-h">DSMT administrators</h2>' +
+      '<div class="set-state' + (s.isAdmin ? ' set-state-on' : ' set-state-off') + '">' +
+        '<div class="set-state-head">' +
+          '<span class="set-state-dot"></span>' +
+          '<span>' + (s.isAdmin ? 'You can change DSMT settings' : 'You cannot change DSMT settings') + '</span>' +
+        '</div>' +
+        '<p class="muted">' + esc(s.roleReason || '') + '</p>' +
+      '</div>' +
+      // The state box describes THIS SESSION, decided at sign-in. The list
+      // below is read live. When they disagree the card was contradicting
+      // itself - "no administrator groups are configured" printed directly
+      // above a configured group - which reads as a bug rather than as the
+      // sign-in caching it actually is.
+      (s.roleConfigured !== r.configured
+        ? '<div class="error-box">The box above describes <strong>your current session</strong>, and it ' +
+          'is out of date: your role was decided when you signed in, before this list was last changed. ' +
+          '<strong>Sign out and back in</strong> to pick up the change. Everyone else picks it up at ' +
+          'their next sign-in.</div>'
+        : '') +
+      '<p class="dialog-note"><strong>This controls DSMT\'s own settings only</strong> - the database it ' +
+      'points at, the identity mode, the idle timeout, the listening port, HTTPS, and this list. ' +
+      'Nothing in Active Directory governs those, which is why a role here has real teeth.</p>' +
+      '<p class="dialog-note"><strong>It does not affect directory operations.</strong> Every user, ' +
+      'group and password change still runs as the signed-in operator, so Active Directory decides what ' +
+      'they may do - a DSMT role cannot grant a right AD withheld, and cannot take one away either. ' +
+      'Someone not listed here can still open ADUC and do whatever AD permits.</p>' +
+      '<p class="dialog-note">Membership is matched on <strong>SID</strong>, never on name: a group can ' +
+      'be renamed and built-in groups are localised. Nested membership counts. The role is resolved at ' +
+      '<strong>sign-in</strong>, so a change takes effect the next time someone signs in - signing in ' +
+      'itself is never blocked by this list, only changing DSMT settings is.</p>' +
+      (r.controller
+        ? '<p class="dialog-note">Membership is read from <strong>' + esc(r.controller) + '</strong>. ' +
+          'If you have just added or removed someone and DSMT still disagrees, check that controller ' +
+          'specifically - a change made on a different DC applies here only once it has replicated.</p>'
+        : '') +
+      '<div id="roleList">' + roleRows + '</div>' +
+      // Search box + results list, the same pair the "Add to group" dialog
+      // already uses (wirePicker). Deliberately not a second kind of
+      // directory picker: one way to find an object in this console.
+      // The free-text box still works on its own, so a group the search does
+      // not surface can still be typed exactly - the server resolves either
+      // to a SID before anything is stored.
+      '<div class="set-form">' +
+        '<div class="field"><label for="roleAdd">Find a group</label>' +
+        '<input class="input" id="roleAdd" placeholder="Type at least two characters" autocomplete="off"></div>' +
+        '<div class="field"><label for="roleMatches">Group</label>' +
+        '<select class="input" id="roleMatches">' +
+        '<option value="">Search for a group first</option></select></div>' +
+      '</div>' +
+      '<p class="dialog-note">DSMT refuses to save a list you are not a member of - that would lock you ' +
+      'out immediately, and the only way back would be regedit on the DSMT host.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="roleAddBtn">Add</button>' +
+        '<button class="btn btn-primary" type="button" id="roleSave">Save administrators</button>' +
+      '</div>' +
+      '<div class="set-result" id="roleResult"></div>' });
+
+  // ---- HTTPS ----
+  // The live transport and the saved intent are shown as two separate facts.
+  // They disagree between saving a certificate and restarting, and a screen
+  // that merged them would say "HTTPS on" while passwords still cross the
+  // network in clear text.
+  var h = s.https || {};
+  var liveHttps = (s.scheme === 'https');
+
+  var httpsState =
+    '<div class="set-state' + (liveHttps ? ' set-state-on' : ' set-state-off') + '">' +
+      '<div class="set-state-head">' +
+        '<span class="set-state-dot"></span>' +
+        '<span>' + (liveHttps ? 'Serving HTTPS' : 'Serving plain HTTP') + '</span>' +
+      '</div>' +
+      '<dl class="detail-fields">' +
+        settingsRow('Right now', (s.scheme || 'http') + ' on port ' + esc(String(h.livePort || s.port))) +
+        settingsRow('Configured', h.enabled ? ('HTTPS on port ' + esc(String(h.port))) : 'HTTPS off') +
+        settingsRow('Certificate bound', h.bound ? esc(String(h.boundTo || '')) : 'None') +
+      '</dl>' +
+    '</div>';
+
+  if (!liveHttps) {
+    // Two different situations, and conflating them would be the fake-data
+    // failure again: "HTTPS was never set up" and "HTTPS is set up and BROKEN"
+    // need different actions from the reader.
+    if (h.enabled) {
+      httpsState += '<div class="error-box"><strong>HTTPS is switched on but is not working, so ' +
+                    'DSMT fell back to plain HTTP.</strong> The console is up so you can fix it here, ' +
+                    'but this connection is not encrypted.</div>';
+    } else {
+      httpsState += '<p class="set-warn">Operators sign in with their <strong>domain password</strong>. ' +
+                    'Until HTTPS is on, that password and every directory record cross the network in ' +
+                    '<strong>clear text</strong>.</p>';
+    }
+  }
+
+  if (h.warning) {
+    httpsState += '<div class="error-box">' + esc(h.warning) + '</div>';
+  }
+
+  var certOptions = '<option value="">Select a certificate...</option>';
+  var certs = asArray(h.certificateList);
+  for (var ci = 0; ci < certs.length; ci++) {
+    var c = certs[ci];
+    var label = (c.subject || c.thumbprint) + ' - expires ' + c.notAfter;
+    if (!c.usable) { label += ' [unusable: ' + c.why + ']'; }
+    certOptions += '<option value="' + esc(c.thumbprint) + '"' +
+                   (c.usable ? '' : ' disabled') +
+                   (c.thumbprint === h.thumbprint ? ' selected' : '') +
+                   '>' + esc(label) + '</option>';
+  }
+
+  sections.push({ key: 'https', label: 'HTTPS',
+    hint: (liveHttps ? 'On, port ' + (h.port || '') : 'Off - passwords in clear text'), body:
+      '<h2 class="set-h">HTTPS</h2>' +
+      httpsState +
+      '<p class="dialog-note">The console reads certificates from <code>' +
+      esc(h.store || 'Cert:\\LocalMachine\\My') + '</code> on this host and binds one to a port. ' +
+      '<strong>It never receives a private key.</strong> Uploading a .pfx and its password through ' +
+      'this page would send that password over the very plain-HTTP connection HTTPS exists to ' +
+      'replace, so the certificate has to be in the store first.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setHttpsCert">Certificate</label>' +
+        '<select class="input" id="setHttpsCert">' + certOptions + '</select></div>' +
+        '<div class="field"><label for="setHttpsPort">HTTPS port (1-65535)</label>' +
+        '<input class="input" id="setHttpsPort" type="number" min="1" max="65535" step="1" value="' +
+        esc(String(h.port || 8443)) + '"></div>' +
+      '</div>' +
+      (certs.length ? '' :
+        '<p class="set-warn">No certificates found in the store. Put one there first, on the DSMT ' +
+        'host, in an elevated prompt:</p><div class="secret">' + esc(h.importCommand || '') + '</div>') +
+      (h.elevated ? '' :
+        '<p class="set-warn">This process is <strong>not elevated</strong>, so it cannot bind a ' +
+        'certificate itself. It will show you the command to run instead. DSMT running as the ' +
+        'installed Windows service does not have this limitation.</p>') +
+      '<p class="dialog-note">A listener cannot change scheme or port while it is running, so this is ' +
+      'saved and applied on the next start. <strong>If the certificate is ever missing, expired or ' +
+      'unbound, DSMT starts on plain HTTP rather than refusing to start</strong> - so a certificate ' +
+      'that expires overnight does not take the console down with it. It is not quiet about it: the ' +
+      'startup banner, the log and a bar across the top of every screen all say the connection is ' +
+      'not encrypted until it is fixed.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-primary" type="button" id="applyHttps">Enable HTTPS</button>' +
+        (h.enabled ? '<button class="btn btn-ghost" type="button" id="disableHttps">Switch HTTPS off</button>' : '') +
+      '</div>' +
+      '<div class="set-result" id="httpsResult"></div>' +
+      '<div id="httpsCommands"></div>' });
+
   sections.push({ key: 'groupfilters', label: 'Group filters', hint: 'Chips on the Groups tab', body:
       '<h2 class="set-h">Group filters</h2>' +
-      '<p class="dialog-note"><strong>Privileged</strong> and <strong>AdminSDHolder</strong> are built in ' +
-      'and cannot be edited - they are facts about Active Directory, not settings. Privileged is matched ' +
-      'on <strong>SID</strong>, never on name: a group called Domain Admins can be renamed, and is ' +
-      'localised on a non-English install, so a name match would find nothing on exactly the domain ' +
-      'where it matters most.</p>' +
+      '<p class="dialog-note">Every filter the Groups tab offers is listed below. The built-in ones are ' +
+      '<strong>read-only</strong> - they are facts about Active Directory, not settings, and each says ' +
+      'what it matches on.</p>' +
       '<p class="dialog-note">Add your own below. A group matches when any term appears in its name, ' +
       'sAMAccountName, description or OU. These are stored on the server, so everyone using this console ' +
       'sees the same filters.</p>' +
@@ -3242,16 +4186,41 @@ function gfFromServer() {
   return out;
 }
 
+function builtinFilterRows() {
+  // The built-ins are listed HERE, on the screen that lists filters, rather
+  // than described in a paragraph above it. They stay read-only and say so:
+  // Privileged is matched on SID precisely because a group called Domain
+  // Admins can be renamed and is localised, so exposing it as an editable
+  // term list would invite someone to break it where it matters most.
+  var rows = asArray(state.groupFilters).filter(function (f) {
+    return f.kind === 'builtin' && f.key !== 'all';
+  });
+  if (!rows.length) { return ''; }
+
+  return rows.map(function (f) {
+    return '<div class="role-row">' +
+             '<div class="role-main">' +
+               '<strong>' + esc(f.label) + '</strong> ' +
+               '<span class="tag">Built in - read only</span>' +
+               '<div class="role-note">' + esc(f.how || '') + '</div>' +
+             '</div>' +
+           '</div>';
+  }).join('');
+}
+
 function renderGroupFilterEditor() {
   var box = $('gfList');
   if (!box) { return; }
 
+  var builtins = builtinFilterRows();
+
   if (!state.gfDraft.length) {
-    box.innerHTML = '<p class="muted-sm">No custom filters yet.</p>';
+    box.innerHTML = builtins +
+      '<p class="muted-sm">No custom filters yet.</p>';
     return;
   }
 
-  box.innerHTML = state.gfDraft.map(function (row, i) {
+  box.innerHTML = builtins + state.gfDraft.map(function (row, i) {
     return '<div class="set-form gf-row">' +
              '<div class="field"><label for="gfName' + i + '">Name</label>' +
              '<input class="input" id="gfName' + i + '" data-gf="' + i + '" data-gffield="label" ' +
@@ -3561,6 +4530,160 @@ function wireSettings(bounds) {
       .catch(function (err) { setResult('portResult', err.message, false); });
   });
 
+  // ---- Roles ----
+  // The pending list lives in the DOM rather than in a variable, so what is
+  // saved is exactly what is on screen.
+  if ($('roleAddBtn')) {
+    // Live search against the directory as they type. Same helper, same
+    // debounce and same two-character floor as every other picker here.
+    wirePicker('roleAdd', 'roleMatches', '/api/groups');
+
+    $('roleAddBtn').addEventListener('click', function () {
+      // A chosen match wins; the typed text is the fallback so a group the
+      // search did not return can still be entered by hand.
+      var sel = $('roleMatches');
+      var picked = sel.value;
+      var name = picked || $('roleAdd').value.trim();
+      if (!name) { return; }
+
+      // Show the friendly name where the picker knows it, but send the
+      // samAccountName - that is what the server resolves to a SID.
+      var label = name;
+      if (picked && sel.selectedIndex >= 0) {
+        label = sel.options[sel.selectedIndex].textContent || name;
+      }
+
+      var list = $('roleList');
+
+      // Adding the same group twice would save a duplicate mapping and show
+      // two identical rows, with nothing on screen explaining why.
+      var already = list.querySelectorAll('.role-row');
+      for (var ai = 0; ai < already.length; ai++) {
+        var have = already[ai].getAttribute('data-pending') || already[ai].getAttribute('data-sid') || '';
+        if (have.toLowerCase() === name.toLowerCase()) {
+          setResult('roleResult', '"' + label + '" is already in the list.', false);
+          return;
+        }
+      }
+
+      if (list.querySelector('p.role-note')) { list.innerHTML = ''; }
+
+      var row = document.createElement('div');
+      row.className = 'role-row';
+      row.setAttribute('data-pending', name);
+      row.innerHTML = '<div class="role-main"><strong>' + esc(label) + '</strong>' +
+                      '<div class="role-note">Not saved yet - the SID is resolved when you save.</div></div>' +
+                      '<button class="btn btn-ghost role-remove" type="button">Remove</button>';
+      list.appendChild(row);
+
+      $('roleAdd').value = '';
+      sel.innerHTML = '<option value="">Search for a group first</option>';
+    });
+  }
+
+  if ($('roleList')) {
+    $('roleList').addEventListener('click', function (e) {
+      var btn = e.target.closest('.role-remove');
+      if (!btn) { return; }
+      var row = btn.closest('.role-row');
+      if (row && row.parentNode) { row.parentNode.removeChild(row); }
+    });
+  }
+
+  if ($('roleSave')) {
+    $('roleSave').addEventListener('click', function () {
+      var rows = $('roleList').querySelectorAll('.role-row');
+      var names = [];
+      for (var i = 0; i < rows.length; i++) {
+        // A saved row is sent back by SID, a pending one by the typed name -
+        // both are re-resolved server-side, so a group renamed since it was
+        // added keeps working and gets its display name refreshed.
+        var sid = rows[i].getAttribute('data-sid');
+        var pending = rows[i].getAttribute('data-pending');
+        names.push(sid || pending);
+      }
+
+      api('/api/settings/roles', { method: 'POST', body: { groups: names } })
+        .then(function (res) {
+          var message;
+          if (!res.count) {
+            message = 'Cleared. Every operator who can sign in can now change every DSMT setting.';
+          } else {
+            message = res.count + ' group(s) saved. This takes effect at each operator\'s next sign-in, ' +
+                      'because the role is resolved once when they sign in.';
+          }
+          if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+          setResult('roleResult', message, res.persisted);
+          loadSettings();
+        })
+        .catch(function (err) { setResult('roleResult', err.message, false); });
+    });
+  }
+
+  // ---- HTTPS ----
+  if ($('applyHttps')) {
+    $('applyHttps').addEventListener('click', function () {
+      var thumb = $('setHttpsCert').value;
+      var hport = parseInt($('setHttpsPort').value, 10);
+
+      if (!thumb) {
+        setResult('httpsResult', 'Choose a certificate first.', false);
+        return;
+      }
+      if (isNaN(hport) || hport < 1 || hport > 65535) {
+        setResult('httpsResult', 'The HTTPS port must be between 1 and 65535.', false);
+        return;
+      }
+
+      api('/api/settings/https', { method: 'POST', body: { enabled: true, port: hport, thumbprint: thumb } })
+        .then(function (res) {
+          var message = 'Certificate bound to port ' + res.port + '.';
+          if (res.replaced) { message += ' It replaced the previous DSMT binding on that port.'; }
+          message += ' HTTPS starts serving the next time DSMT restarts - until then this console is ' +
+                     'still on plain HTTP. After the restart, open ' + res.url;
+          if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+          setResult('httpsResult', message, res.persisted);
+
+          var cmds = '';
+          if (res.reservation) {
+            cmds += '<label class="set-cmd-label">Reserve the HTTPS URL, elevated, on the DSMT host:</label>' +
+                    '<div class="secret">' + esc(res.reservation) + '</div>';
+          }
+          if (res.firewall) {
+            cmds += '<label class="set-cmd-label">Open the HTTPS port in the firewall:</label>' +
+                    '<div class="secret">' + esc(res.firewall) + '</div>';
+          }
+          $('httpsCommands').innerHTML = cmds;
+        })
+        .catch(function (err) { setResult('httpsResult', err.message, false); });
+    });
+  }
+
+  if ($('disableHttps')) {
+    $('disableHttps').addEventListener('click', function () {
+      openDialog({
+        title: 'Switch HTTPS off?',
+        body: '<p>DSMT will go back to serving plain HTTP on the next restart, and operator ' +
+              'domain passwords will cross the network in clear text again.</p>',
+        confirmLabel: 'Switch HTTPS off',
+        onConfirm: function () {
+          api('/api/settings/https', { method: 'POST', body: { enabled: false } })
+            .then(function (res) {
+              closeDialog();
+              var message = res.message;
+              if (!res.bindingRemoved && res.bindingError) {
+                message += ' The certificate binding was left in place: ' + res.bindingError;
+              }
+              if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+              setResult('httpsResult', message, res.persisted);
+              $('httpsCommands').innerHTML = '';
+            })
+            .catch(function (err) { dialogError(err.message); });
+        }
+      });
+    });
+  }
+
   // ---- idle timeout ----
   $('setIdlePreset').addEventListener('change', function (e) {
     if (e.target.value) { $('setIdle').value = e.target.value; }
@@ -3753,7 +4876,12 @@ function wirePicker(searchId, selectId, path) {
           return;
         }
         select.innerHTML = items.map(function (i) {
-          return '<option value="' + esc(i.sam || i.dn) + '">' + esc(i.name) + ' (' + esc(i.sam) + ')</option>';
+          // "Domain Admins (Domain Admins)" - the sam is worth showing only
+          // when it differs from the name, which for most built-in groups it
+          // does not.
+          var label = i.name;
+          if (i.sam && i.sam !== i.name) { label += ' (' + i.sam + ')'; }
+          return '<option value="' + esc(i.sam || i.dn) + '">' + esc(label) + '</option>';
         }).join('');
       }).catch(function (err) {
         select.innerHTML = '<option value="">' + esc(err.message) + '</option>';
@@ -3785,6 +4913,7 @@ function wireEvents() {
       button.disabled = false;
       saveToken(data.token);
       applyVersion(data.version, data.publisher);
+      applyInsecureBar(data);
       state.user = data.user;
       $('loginPass').value = '';
       enterApp();
@@ -3921,15 +5050,59 @@ function wireEvents() {
   $('auditRefresh').addEventListener('click', function () { loadAudit(); });
   $('auditExport').addEventListener('click', exportAudit);
 
+  // ---- keyboard shortcuts ----
+  // Two: "/" focuses the search box on the current tab, "r" reloads it. A
+  // console people type domain passwords and OU names into must never swallow
+  // a keystroke meant for a field, so anything typed into an input, textarea,
+  // select or contenteditable is left completely alone, and so is any
+  // combination with Ctrl/Alt/Meta, which belongs to the browser.
+  document.addEventListener('keydown', function (e) {
+    if (e.ctrlKey || e.altKey || e.metaKey) { return; }
+
+    // Escape is NOT handled here. It already has a complete handler further
+    // down that closes the dialog, the bell, the menu and the slide-over in
+    // the right order. A second one would race it - the proposal asked for
+    // Escape and it turned out to be the one part already built.
+    var t = e.target || {};
+    var tag = (t.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable) { return; }
+
+    if (e.key === '/') {
+      var box = (state.tab === 'audit') ? $('auditSearch') : $('search');
+      // offsetParent is null for an element inside a hidden pane - no point
+      // focusing a search box on a tab that is not on screen.
+      if (box && box.offsetParent) {
+        e.preventDefault();   // or the "/" lands in the box it just focused
+        box.focus();
+        box.select();
+      }
+      return;
+    }
+
+    if (e.key === 'r' || e.key === 'R') {
+      if (state.tab === 'audit') { loadAudit(); }
+      else if (state.tab === 'users' || state.tab === 'groups') { loadRows(); }
+      return;
+    }
+  });
+
   // ---- toolbar ----
-  $('colsBtn').addEventListener('click', function () {
-    $('colPicker').hidden = !$('colPicker').hidden;
-    renderColPicker();
-  });
-  $('colPicker').addEventListener('click', function (e) {
-    var chip = e.target.closest('[data-col]');
-    if (chip) { toggleCol(chip.getAttribute('data-col')); }
-  });
+  // Two buttons, two pickers, one behaviour - the audit view is a separate
+  // pane, so it cannot share the directory toolbar's control.
+  function wireColumns(buttonId, pickerId) {
+    $(buttonId).addEventListener('click', function () {
+      var box = $(pickerId);
+      box.hidden = !box.hidden;
+      renderColPicker();
+    });
+    $(pickerId).addEventListener('click', function (e) {
+      var chip = e.target.closest('[data-col]');
+      if (chip) { toggleCol(chip.getAttribute('data-col')); }
+    });
+  }
+  $('saveSearchBtn').addEventListener('click', saveCurrentSearch);
+  wireColumns('colsBtn', 'colPicker');
+  wireColumns('auditColsBtn', 'auditColPicker');
   $('exportBtn').addEventListener('click', exportCurrent);
   $('importBtn').addEventListener('click', actionImportCsv);
   $('createBtn').addEventListener('click', function () {

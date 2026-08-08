@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.22.0'
+$script:DsmtVersion = '1.29.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -65,6 +65,16 @@ $script:DsmtConfig = @{
     Server        = ''
     Port          = 8080
     ListenAddress = 'localhost'
+    # What this process is ACTUALLY serving, decided once at startup. Kept
+    # separate from the HttpsEnabled setting on purpose: the setting is an
+    # intent that takes effect on the next start, this is the truth right now.
+    Scheme        = 'http'
+    # Set at startup when HTTPS is configured but could not be served, so the
+    # console fell back to plain HTTP. Carried to every screen so the degraded
+    # state cannot be missed - see the HTTPS block in Start-DSMT.ps1.
+    HttpsDegraded      = $false
+    HttpsDegradedCause = ''
+    HttpsDegradedFix   = ''
     SessionMinutes = 15
     PageSize      = 500
     LogFile       = ''
@@ -473,13 +483,13 @@ $script:DsmtSettingsKey = 'HKLM:\SOFTWARE\Rendi Group\DSMT\Settings'
 
 # Names whose value is a structure rather than a scalar. Stored as JSON text.
 # A new nested setting MUST be added here.
-$script:DsmtJsonSettings = @('GroupFilters')
+$script:DsmtJsonSettings = @('GroupFilters', 'RoleAdminGroups')
 
 # Names stored as REG_DWORD. Everything not listed is a string.
-$script:DsmtNumberSettings = @('Port', 'SessionMinutes', 'SessionHours', 'PageSize', 'HealthAlertsInterval')
+$script:DsmtNumberSettings = @('Port', 'SessionMinutes', 'SessionHours', 'PageSize', 'HealthAlertsInterval', 'HttpsPort')
 
 # Names stored as REG_DWORD 0/1 and read back as booleans.
-$script:DsmtBoolSettings = @('HealthAlertsEnabled')
+$script:DsmtBoolSettings = @('HealthAlertsEnabled', 'HttpsEnabled')
 
 function Get-DsmtSettingsKeyPath {
     <#

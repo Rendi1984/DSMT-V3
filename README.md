@@ -272,14 +272,44 @@ Everywhere
 
 ### Serving it over HTTPS
 
-`HttpListener` will serve HTTPS once a certificate is bound to the port:
+**Since 1.23.0 this is a screen, not a recipe: Settings -> HTTPS.** Pick a
+certificate from the machine store, choose a port, save, restart. It is
+deliberately not part of the installer, because at install time the
+certificate usually does not exist yet.
+
+Do this before anyone uses the console over the network. Operators sign in
+with their domain password; on plain HTTP that password and every directory
+record cross the wire in clear text.
+
+**The console never receives a private key.** It reads
+`Cert:\LocalMachine\My` on the DSMT host and binds a certificate that is
+already there. If yours is not in that store yet, put it there first, in an
+elevated prompt on that machine:
 
 ```
-netsh http add sslcert ipport=0.0.0.0:8443 certhash=<thumbprint> appid={00000000-0000-0000-0000-000000000000}
+Import-PfxCertificate -FilePath C:\path\to\certificate.pfx -CertStoreLocation Cert:\LocalMachine\My -Password (Read-Host -AsSecureString)
 ```
 
-Then start with `-Port 8443` and change the prefix in `Start-DSMT.ps1` from
-`http://` to `https://`. Do this before anyone uses it over the network.
+Uploading a `.pfx` and its password through the console would send that
+password over the very plain-HTTP connection HTTPS exists to replace, so that
+path does not exist.
+
+Two behaviours worth knowing before you switch it on:
+
+- **If the certificate is missing, expired or unbound, DSMT starts on plain
+  HTTP rather than refusing to start**, so a certificate that expires
+  overnight does not take the console down with it — and the screen where you
+  fix it stays reachable. It is not quiet about it: the startup banner names
+  the cause and the fix, the log records it at ERROR, and a bar across the top
+  of every screen, including sign-in, says the connection is not encrypted.
+  A browser is not silently downgraded either — opening `https://` against a
+  plain HTTP listener fails the TLS handshake rather than sending anything.
+- **DSMT will not replace an SSL binding it did not create.** If another
+  product on the host already owns that port, it says so and stops.
+
+Listening on all interfaces over HTTPS needs the URL reservation for the
+`https://` prefix, not the `http://` one — the console shows the exact command
+after you save.
 
 ---
 

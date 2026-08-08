@@ -99,8 +99,34 @@ function New-DsmtSession {
 
     $netbios = $cfg.Domain.Split('.')[0].ToUpper()
 
+    # Whether this operator may change DSMT's OWN settings. Resolved once,
+    # here, and cached on the session - see DsmtRoles.ps1 for why the scope is
+    # settings only and never directory operations. Wrapped because a failure
+    # to decide the role must not stop a sign-in that AD already accepted:
+    # Resolve-DsmtOperatorRole reports its own failure as "not an admin", and
+    # this catch covers the case where the function itself blows up.
+    $role = $null
+    try {
+        $role = Resolve-DsmtOperatorRole -SamAccountName $bare -Credential $cred
+    } catch {
+        Write-DsmtLog -Level 'WARN' -Message ('Could not resolve the DSMT role for ' + $bare + ': ' + $_.Exception.Message)
+        $role = @{
+            IsAdmin    = $false
+            Configured = $true
+            Reason     = 'Your DSMT role could not be determined, so changing DSMT settings is denied ' +
+                         'for this session.'
+            Error      = $_.Exception.Message
+        }
+    }
+
     $script:DsmtSessions[$token] = @{
         Token       = $token
+        # A reference that can safely leave this file. The TOKEN is a bearer
+        # credential - anything holding it can act as this operator - so the
+        # live-session list and its sign-out button address a session by this
+        # id instead. Handing tokens to the UI so an administrator could end a
+        # session would have made the feature an impersonation tool.
+        Id          = [guid]::NewGuid().ToString('N')
         Sam         = $bare
         Upn         = $upnUser
         Display     = $displayName
@@ -108,6 +134,9 @@ function New-DsmtSession {
         Dn          = $dn
         Ou          = $ouPath
         Credential  = $cred
+        IsAdmin     = [bool]$role.IsAdmin
+        RoleReason  = [string]$role.Reason
+        RoleConfigured = [bool]$role.Configured
         CreatedUtc  = $now.ToUniversalTime()
         LastSeenUtc = $now.ToUniversalTime()
     }
@@ -170,12 +199,59 @@ function Get-DsmtSessionSummary {
     foreach ($key in $script:DsmtSessions.Keys) {
         $s = $script:DsmtSessions[$key]
         $list += [ordered]@{
+            id       = [string]$s.Id
             account  = [string]$s.Account
+            display  = [string]$s.Display
+            since    = $s.CreatedUtc.ToString('s') + 'Z'
             idleMins = [int][math]::Floor(($now - $s.LastSeenUtc).TotalMinutes)
+            isAdmin  = [bool]$s.IsAdmin
         }
     }
 
-    return @{ Count = $list.Count; Sessions = @($list) }
+    # Longest idle first - the ones most likely to want ending.
+    $sorted = @($list | Sort-Object -Property @{ Expression = { $_.idleMins }; Descending = $true })
+    return @{ Count = @($sorted).Count; Sessions = @($sorted) }
+}
+
+function Remove-DsmtSessionById {
+    <#
+    .SYNOPSIS
+        Ends another operator's session, addressed by its public id.
+    .OUTPUTS
+        Hashtable with Ok, Account, Error.
+    .DESCRIPTION
+        Takes the public id, never the token. The token stays in this file.
+
+        Ending a session drops the PSCredential held for it, so the operator
+        must sign in again - which is the whole point the day someone leaves
+        mid-shift.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Id)
+
+    $out = @{ Ok = $false; Account = ''; Error = '' }
+
+    $victim = ''
+    foreach ($key in @($script:DsmtSessions.Keys)) {
+        if ([string]$script:DsmtSessions[$key].Id -eq $Id) { $victim = $key }
+    }
+
+    if (-not $victim) {
+        # Already gone is not an error worth alarming anyone about - an idle
+        # timeout may simply have got there first.
+        $out.Error = 'That session is no longer open. It may have timed out or been signed out already.'
+        return $out
+    }
+
+    $out.Account = [string]$script:DsmtSessions[$victim].Account
+
+    # Through Remove-DsmtSession, not by removing the key here: that function
+    # also closes the SQL session row and writes the log line. Removing the
+    # key directly would leave dbo.Sessions showing the operator as still
+    # signed in - the audit trail disagreeing with reality.
+    Remove-DsmtSession -Token $victim -Reason 'signed out by an administrator'
+
+    $out.Ok = $true
+    return $out
 }
 
 function Clear-DsmtExpiredSessions {
