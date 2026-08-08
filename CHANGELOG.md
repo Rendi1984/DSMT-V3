@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.20.1** | 2026-08-08 | Every audit-log time range (Last 24 hours through Last 30 days) failed with a `DateTimeStyles` error; only **All time** worked | Restart |
 | **1.20.0** | 2026-08-07 | The installer starts the service, **waits until the console answers**, and opens the browser itself. `prototype/` and an unused 4.9 MB image removed | Re-run installer |
 | **1.19.1** | 2026-08-07 | The installer now names `Start-Service DSMT` when it registers a service it did not start | Re-run installer |
 | **1.19.0** | 2026-08-07 | **Groups tab fixed for real**; the AD health clock reads again; confirmations name the target; profile actions moved above the fold | Restart + refresh |
@@ -66,6 +67,32 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.20.1 — 2026-08-08
+
+**Every time range on the audit log failed.** Picking *Last 24 hours*,
+*Last 48 hours*, *Last 7 days* or *Last 30 days* produced a toast reading
+
+    Could not read the audit log: Exception calling "TryParse" with "4"
+    argument(s): "The DateTimeStyles value RoundtripKind cannot be used with
+    the values AssumeLocal, AssumeUniversal or AdjustToUniversal."
+
+and no rows. *All time* worked, which is what made it look like a data
+problem rather than a code one: All time sends no `from`/`to` bounds, so it
+was the only selection that never reached the parsing code at all.
+
+`ConvertTo-DsmtUtcOrNull` in `server/lib/DsmtHttp.ps1` asked for
+`RoundtripKind -bor AssumeLocal`. .NET rejects that combination outright, so
+the call threw on **every** value - the input was never at fault. It now
+parses with `RoundtripKind` alone and, when the parsed value carries no zone
+(`Kind` is `Unspecified`), stamps it as local before converting to UTC, which
+is what the pairing was meant to express.
+
+**Deploy:** copy `server/lib/DsmtHttp.ps1` and `server/lib/DsmtCommon.ps1`
+into `server\lib\` and restart the service (`Restart-Service DSMT`). No web
+files changed, so no browser refresh is needed.
 
 ---
 

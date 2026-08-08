@@ -112,12 +112,31 @@ function ConvertTo-DsmtUtcOrNull {
 
     if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
 
+    # RoundtripKind CANNOT be combined with AssumeLocal, AssumeUniversal or
+    # AdjustToUniversal - .NET throws ArgumentException on the call itself,
+    # not on the value. So every time-bounded audit query failed with a
+    # message about "styles" that named nothing an operator could act on,
+    # while "All time" - which sends no bounds and never reaches here - worked
+    # perfectly. That is why it looked like the filter chips were broken
+    # rather than the parser.
+    #
+    # RoundtripKind alone is the right choice: the browser sends
+    # toISOString(), which always carries a Z, and RoundtripKind honours the
+    # offset that is there. A value with no offset is then treated as
+    # unspecified and read as local, which is the sane reading of a
+    # hand-typed datetime-local field.
     $parsed = [datetime]::MinValue
-    $styles = [System.Globalization.DateTimeStyles]::RoundtripKind -bor [System.Globalization.DateTimeStyles]::AssumeLocal
+    $styles = [System.Globalization.DateTimeStyles]::RoundtripKind
     $ok = [datetime]::TryParse($Value, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref] $parsed)
 
     if (-not $ok) {
         throw ('"' + $FieldName + '" is not a valid date/time: ' + $Value)
+    }
+
+    # An unspecified kind would make ToUniversalTime() a no-op on some hosts
+    # and a local conversion on others. State the assumption instead.
+    if ($parsed.Kind -eq [System.DateTimeKind]::Unspecified) {
+        $parsed = [datetime]::SpecifyKind($parsed, [System.DateTimeKind]::Local)
     }
     return $parsed.ToUniversalTime()
 }
