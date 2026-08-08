@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.26.3` — matches the top entry of `CHANGELOG.md` and
+`1.26.4` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -1006,6 +1006,22 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 3] A multi-step directory write reported as a single outcome.**
+  Found 2026-08-08 on the lab domain. "Create user" is FOUR AD operations
+  (create disabled, set password, set must-change, enable). An operator
+  without Reset Password rights got past step 1 and failed step 2; the console
+  said `Failed`, the **audit record said `Failed`** - and the account existed
+  in the directory, disabled and unusable. Fixed in 1.26.4 by rolling the
+  creation back, and by reporting explicitly when the rollback itself cannot
+  run.
+  **The pattern, not the instance: any console action that is more than one
+  directory operation has a partial-failure state, and reporting only
+  success/failure makes that state invisible - including in the audit log,
+  which is the one record that must not be wrong.** Before adding a new
+  multi-step write, decide what happens when step N fails: roll back, or
+  report precisely what remains. "Throw and let the caller say Failed" is
+  neither. Existing and proposed candidates to check against this: the gMSA
+  tool, bulk actions, CSV import, and anything in proposals 15-18 and 23.
 - **[Shape 2] "The parameters do not work."** 2026-08-06. Not a code fault:
   the identical files ran correctly in a VMware Workstation VM and were
   blocked on the physical endpoint. Ask which machine, and whether

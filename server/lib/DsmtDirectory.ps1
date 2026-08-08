@@ -856,9 +856,31 @@ function Remove-DsmtGroupMember {
 function New-DsmtUser {
     <#
     .SYNOPSIS
-        Creates a real user account. Password is set and the account enabled
-        only when a password was supplied - AD refuses to enable an account
-        that has no compliant password.
+        Creates a real user account, atomically.
+    .DESCRIPTION
+        Creating a usable account is FOUR directory operations, not one:
+        create (disabled), set the password, set "must change at next logon",
+        enable. AD refuses to enable an account that has no compliant
+        password, which is why the create is disabled first and the enable
+        comes last.
+
+        THE FAILURE THIS GUARDS AGAINST, found on the lab domain 2026-08-08.
+        An operator without Reset Password rights created a user: step 1
+        succeeded, step 2 threw, and the console reported "Failed" - while the
+        account sat in the directory, disabled, with no usable password. The
+        audit record said Failed too, so the log claimed nothing happened when
+        an object had in fact been created. An audit log that misses a
+        creation is worse than no audit log, because it is trusted.
+
+        So every step after the create is wrapped, and on any failure the
+        half-made account is REMOVED. Either the operation happened or it did
+        not; there is no third state left in the directory.
+
+        If the rollback itself fails - the likeliest reason being that the
+        operator can create but not delete - the account is left in place and
+        the error SAYS SO, naming the account and what state it is in. That is
+        the one case where something remains, and it is reported rather than
+        hidden.
     #>
     param(
         $Credential,
@@ -892,20 +914,53 @@ function New-DsmtUser {
     if ($Department) { $new.Department = $Department }
     if ($Title)      { $new.Title      = $Title }
 
+    # Step 1. If this throws, nothing was created and there is nothing to
+    # undo - let it propagate untouched.
     New-ADUser @ad @new -ErrorAction Stop
 
-    if ($Password) {
+    if (-not $Password) { return $upn }
+
+    # Steps 2-4. From here the account EXISTS, so any failure has to be
+    # cleaned up before it is reported.
+    $failedStep = ''
+    $failure    = ''
+    try {
+        $failedStep = 'set the password'
         $secure = ConvertTo-SecureString -String $Password -AsPlainText -Force
         Set-ADAccountPassword @ad -Identity $SamAccountName -Reset -NewPassword $secure -ErrorAction Stop
+
         if ($MustChange) {
+            $failedStep = 'require a password change at next logon'
             Set-ADUser @ad -Identity $SamAccountName -ChangePasswordAtLogon $true -ErrorAction Stop
         }
         if ($Enabled) {
+            $failedStep = 'enable the account'
             Enable-ADAccount @ad -Identity $SamAccountName -ErrorAction Stop
         }
+    } catch {
+        $failure = $_.Exception.Message
     }
 
-    return $upn
+    if (-not $failure) { return $upn }
+
+    # Roll the creation back. Piped to Out-Null: uncaptured output inside a
+    # function joins the return value.
+    $rollbackError = ''
+    try {
+        Remove-ADUser @ad -Identity $SamAccountName -Confirm:$false -ErrorAction Stop | Out-Null
+    } catch {
+        $rollbackError = $_.Exception.Message
+    }
+
+    if ($rollbackError) {
+        throw ('The account ' + $SamAccountName + ' was created but DSMT could not ' + $failedStep +
+               ', and could not remove the half-created account either. IT STILL EXISTS in ' + $TargetOu +
+               ', disabled and without a usable password - finish it or delete it by hand. ' +
+               'Original failure: ' + $failure + ' Rollback failure: ' + $rollbackError)
+    }
+
+    throw ('Could not ' + $failedStep + ' for ' + $SamAccountName +
+           ', so the account was removed again and nothing was left in the directory. ' + $failure)
 }
 
 function New-DsmtGroup {

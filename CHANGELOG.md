@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.26.4** | 2026-08-08 | **Create user said Failed while leaving the account in the directory** - and the audit log said Failed too. Creation is now atomic | Restart |
 | **1.26.3** | 2026-08-08 | The Administrators card contradicted itself - "no groups configured" printed above a configured group. Says which DC membership is read from | Restart + refresh |
 | **1.26.2** | 2026-08-08 | **Fixes the administrator role, which could not have worked at all**: the group-membership read used the wrong LDAP search scope | Restart + refresh |
 | **1.26.1** | 2026-08-08 | Settings -> Administrators searches the directory as you type, instead of asking you to know the group name exactly | Refresh |
@@ -77,6 +78,58 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.26.4 — 2026-08-08
+
+### Create user reported Failed while leaving the account in the directory
+
+Found on the lab domain: an operator without Reset Password rights created a
+user, the console said **Failed** — and the account existed in AD anyway.
+Trying again then behaved differently, because the second attempt was no longer
+creating a fresh object.
+
+Creating a usable account is **four** directory operations, not one: create
+(disabled), set the password, set "must change at next logon", enable. AD
+refuses to enable an account with no compliant password, which is why the
+create is disabled first and the enable comes last.
+
+Step 1 succeeded. Step 2 threw. Nothing undid step 1, so the account sat there
+disabled and unusable while the console reported total failure.
+
+**The worst part was the audit record.** It said `Failed` too — so the log
+claimed nothing happened at the exact moment an object was created in the
+directory. An audit log that misses a creation is worse than no audit log,
+because it is trusted.
+
+**Creation is now atomic.** Every step after the create is wrapped, and on any
+failure the half-made account is removed. Either it happened or it did not;
+no third state is left behind.
+
+If the rollback *itself* fails — the likeliest reason being an operator who can
+create but not delete — the account is left in place and **the error says so**,
+naming the account, the OU, and the state it is in. That is the one case where
+something remains, and it is reported rather than hidden. The message also
+names which of the four steps failed, so "Failed" is never the whole story
+again.
+
+### Confirmed working in the same round
+
+The administrator role gate was verified on the lab domain: `LAB\HD`, removed
+from the configured group, signed in normally, browsed the directory normally,
+and got **Denied** on `POST /api/settings/session` with the audit record to
+match. That is exactly the intended behaviour — the role governs DSMT's own
+settings, never console access or directory work.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+
+**To deploy:** copy the two files and restart DSMT. No front-end change.
 
 ---
 
