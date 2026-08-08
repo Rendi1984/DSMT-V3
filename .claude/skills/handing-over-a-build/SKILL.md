@@ -1,0 +1,52 @@
+---
+name: handing-over-a-build
+description: Rules for handing over a DSMT build — naming a release branch, the exact zip filename GitHub will produce, and building an archive locally. Use whenever a download link, release branch, zip archive, tag or release for DSMT-V3 is requested.
+---
+
+# Handing over a build
+
+Whenever a download link is given for this project, **name it `DSMT <version>`
+first** — "DSMT 1.13.0", then the link. A bare GitHub URL does not say which
+version is behind it, and branch zips move: the same URL served 1.8.1 and
+1.12.0 a day apart. State the version, then the link, then which files go
+where.
+
+**The downloaded file must carry the version too.** GitHub names an archive
+after the ref, so `refs/heads/main.zip` always arrives as `DSMT-V3-main.zip` —
+three of those in a downloads folder are indistinguishable. So every release
+gets a **branch named exactly the version number** (`1.13.0`, no `v`, no
+prefix), cut from `main` at the release commit, and that is the link handed
+over:
+
+    https://github.com/Rendi1984/DSMT-V3/archive/refs/heads/1.13.0.zip
+    -> DSMT-V3-1.13.0.zip
+
+Do not name the branch `DSMT-1.13.0` — the repo name is already in the
+filename and it comes out as `DSMT-V3-DSMT-1.13.0.zip`. A `v` prefix is also
+pointless: **GitHub strips a leading `v` from the ref when naming an archive**,
+so branch `v1.13.1` still downloads as `DSMT-V3-1.13.1.zip`.
+
+**The archive name cannot be controlled beyond that.** GitHub always builds it
+as `<repo>-<ref>.zip`, and this repo is `DSMT-V3`, so the `-V3` is unavoidable.
+Two consequences worth knowing before promising a filename:
+
+- Some browsers ignore `Content-Disposition` and save the URL's last segment
+  instead, which is why `.../1.13.1.zip` can land on disk as `1.13.1.zip`.
+- The only way to a freely chosen name is a **release asset**
+  (`/releases/download/v1.13.1/DSMT-v1.13.1.zip`), which needs a tag and an
+  upload — neither possible from the dev container.
+
+When an exact filename is asked for, **build it locally and send the file**:
+
+    git archive --format=zip -o DSMT-v1.13.1.zip HEAD
+
+That is the only method here that produces the requested name. **Do not pass
+`--prefix`** — the files go at the root of the archive, so extracting it gives
+`server\`, `web\`, `docs\` directly rather than a wrapper folder to dig
+through. (GitHub's own archives always add that wrapper; ours should not.)
+
+A git **tag** would be the proper mechanism and produces the same filename,
+but **tags cannot be pushed from the dev container** — the git proxy answers
+403 (`send-pack: unexpected disconnect`). Same for deleting a remote branch.
+Both have to be done by hand in the GitHub UI, so tag and release creation is
+a request to the operator, never a step to attempt silently.
