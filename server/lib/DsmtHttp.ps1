@@ -303,7 +303,7 @@ function Get-DsmtHealth {
     } catch {
         $checks += New-DsmtCheck -Name 'Domain' -Status 'bad' `
                                  -Detail $_.Exception.Message `
-                                 -Fix 'Check that this host can reach a domain controller for the configured domain (DNS first, then port 389/636). The domain is set in config\dsmt.config.json.'
+                                 -Fix 'Check that this host can reach a domain controller for the configured domain (DNS first, then port 389/636). The domain is set in HKLM\SOFTWARE\Rendi Group\DSMT\Settings.'
     }
 
     # --- a real directory read -------------------------------------------
@@ -716,7 +716,7 @@ function Invoke-DsmtApi {
                         pageSizeBounds = Get-DsmtPageSizeBounds
                         dataPath      = $cfg.DataPath
                         dataRoot      = $cfg.DataRoot
-                        configFile    = (Get-DsmtSettingsFile -ConfigPath $cfg.ConfigPath)
+                        settingsKey   = (Get-DsmtSettingsKeyPath)
                         installPath   = $cfg.RootPath
                         pathMode      = $cfg.PathMode
                         registryKey   = 'HKLM\SOFTWARE\Rendi Group\DSMT'
@@ -756,7 +756,7 @@ function Invoke-DsmtApi {
                 $previous = $cfg.SessionMinutes
                 $script:DsmtConfig.SessionMinutes = $minutes
 
-                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ SessionMinutes = $minutes }
+                $saved = Save-DsmtSavedSettings -Values @{ SessionMinutes = $minutes }
 
                 # [string] on the left: $previous is an int, and "int + string"
                 # makes PowerShell try to parse the string AS an int, which
@@ -803,7 +803,7 @@ function Invoke-DsmtApi {
                     $clean += [ordered]@{ label = $label; terms = @($terms) }
                 }
 
-                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ GroupFilters = @($clean) }
+                $saved = Save-DsmtSavedSettings -Values @{ GroupFilters = @($clean) }
                 if (-not $saved.Ok) {
                     Send-DsmtError -Response $Response -Message ('Could not save the filters: ' + $saved.Error) -StatusCode 500
                     return
@@ -835,7 +835,7 @@ function Invoke-DsmtApi {
                 }
 
                 $previous = $cfg.Port
-                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ Port = $port }
+                $saved = Save-DsmtSavedSettings -Values @{ Port = $port }
 
                 Write-DsmtAudit -Action 'Change listening port' -Target ([string]$previous + ' -> ' + [string]$port) `
                                 -Operator $session.Account -Reason 'Console configuration change' `
@@ -881,7 +881,7 @@ function Invoke-DsmtApi {
                 $previous = $cfg.IdentityMode
                 $script:DsmtConfig.IdentityMode = $mode
 
-                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ IdentityMode = $mode }
+                $saved = Save-DsmtSavedSettings -Values @{ IdentityMode = $mode }
 
                 # A change to who reads the directory is a security-relevant
                 # change, so it is audited like any other.
@@ -973,7 +973,7 @@ function Invoke-DsmtApi {
                 }
 
                 # Persist it so the database survives a restart of the server.
-                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{
+                $saved = Save-DsmtSavedSettings -Values @{
                     SqlServer   = $server
                     SqlDatabase = $database
                 }
@@ -1596,6 +1596,23 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/settings/export$' {
+                if ($method -ne 'GET') { break }
+
+                # The whole settings store as readable JSON. Generated on
+                # demand and never written back - the registry is the only
+                # store, and a second one that could disagree with it is the
+                # exact drift this project keeps a rule about. This exists so
+                # a configuration can still be read at a glance, diffed
+                # between two hosts, or pasted into a ticket.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok          = $true
+                    settingsKey = (Get-DsmtSettingsKeyPath)
+                    json        = (Export-DsmtSettings)
+                }
+                return
+            }
+
             '^/api/alerts$' {
                 if ($method -ne 'GET') { break }
 
@@ -1661,7 +1678,7 @@ function Invoke-DsmtApi {
                     return
                 }
 
-                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{
+                $saved = Save-DsmtSavedSettings -Values @{
                     HealthAlertsEnabled  = $enabled
                     HealthAlertsInterval = $minutes
                 }
@@ -1706,7 +1723,7 @@ function Invoke-DsmtApi {
                 $previous = $cfg.PageSize
                 $script:DsmtConfig.PageSize = $size
 
-                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ PageSize = $size }
+                $saved = Save-DsmtSavedSettings -Values @{ PageSize = $size }
 
                 Write-DsmtAudit -Action 'Change search result cap' -Target 'Console' -Operator $session.Account `
                                 -Reason 'Console configuration change' -Result 'Success' -Category 'session' `

@@ -2860,10 +2860,17 @@ function renderSettings() {
       '<p class="set-sub">Where things are</p>' +
       '<dl class="detail-fields">' +
         settingsRow('Program files', s.installPath || '') +
-        settingsRow('Settings file', s.configFile || '') +
+        settingsRow('Settings', s.settingsKey || '') +
         settingsRow('Audit / log folder', s.dataPath) +
-        settingsRow('Registry pointers', s.registryKey || '') +
+        settingsRow('Path pointers', s.registryKey || '') +
       '</dl>' +
+      '<p class="dialog-note">Every setting on these screens is stored in the registry key above, ' +
+      'machine-wide. It can be read or edited directly with <code>regedit</code>, which needs local ' +
+      'administrator rights - the same rights as the host itself.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-ghost" type="button" id="exportSettings">Show all settings as JSON</button>' +
+      '</div>' +
+      '<div class="set-result" id="exportResult"></div>' +
       (s.pathMode === 'portable'
         ? '<p class="dialog-note"><strong>Portable layout.</strong> Settings and data live inside the ' +
           'program folder, so replacing that folder to upgrade takes them with it - which is how an ' +
@@ -3574,6 +3581,23 @@ function wireSettings(bounds) {
                   (res.persisted ? '' : ' Not saved: ' + res.persistError), res.persisted);
       })
       .catch(function (err) { setResult('idleResult', err.message, false); });
+  });
+
+  // ---- settings export ----
+  $('exportSettings').addEventListener('click', function () {
+    api('/api/settings/export').then(function (res) {
+      openDialog({
+        title: 'All settings',
+        hideConfirm: true,
+        cancelLabel: 'Close',
+        body: '<p class="dialog-note">Read live from ' + esc(res.settingsKey) + '. This is a view, not ' +
+              'a second copy - editing it here is not possible, and nothing is written back. Copy it ' +
+              'into a ticket, or compare it against another host.</p>' +
+              '<div class="secret secret-block">' + esc(res.json) + '</div>'
+      });
+    }).catch(function (err) {
+      setResult('exportResult', explainApiError(err.message), false);
+    });
   });
 
   // ---- search result cap ----

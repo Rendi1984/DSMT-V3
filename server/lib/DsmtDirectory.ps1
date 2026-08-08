@@ -512,7 +512,7 @@ function Get-DsmtGroupFilters {
           must not be editable into something misleading.
 
           CUSTOM - whatever this organisation cares about, defined once by an
-          administrator and stored in config\dsmt.config.json. NOT in the
+          administrator and stored in the registry. NOT in the
           browser: a filter one person defines is a filter the whole team
           should see, and localStorage would make it personal to one machine.
 
@@ -530,7 +530,7 @@ function Get-DsmtGroupFilters {
 
     $cfg = Get-DsmtConfig
     $saved = $null
-    try { $saved = Get-DsmtSavedSettings -ConfigPath $cfg.ConfigPath } catch { $saved = $null }
+    try { $saved = Get-DsmtSavedSettings } catch { $saved = $null }
 
     if ($null -ne $saved -and $saved.PSObject.Properties['GroupFilters']) {
         foreach ($f in @($saved.GroupFilters)) {

@@ -16,7 +16,8 @@
       8. Reserves the HTTP URL so the console can listen without elevation
       9. Opens the firewall port
      10. Registers DSMT to run unattended - a Windows service by default
-     11. Writes config\dsmt.config.json so Start-DSMT.ps1 remembers all of it
+     11. Writes every setting into HKLM\SOFTWARE\Rendi Group\DSMT\Settings
+         so Start-DSMT.ps1 remembers all of it
      12. Re-verifies everything and prints a summary
 
     Every step reports [ok], [skip] or [FAIL] with the reason. A step that
@@ -661,7 +662,7 @@ if ($ChangeServiceAccount) {
     }
 
     $previous = ''
-    $saved = Get-DsmtSavedSettings -ConfigPath (Join-Path $dataRoot 'config')
+    $saved = Get-DsmtSavedSettings
     if ($null -ne $saved -and $saved.PSObject.Properties['ServiceAccount']) {
         $previous = [string]$saved.ServiceAccount
     }
@@ -810,7 +811,7 @@ if ($ChangeServiceAccount) {
     # --- 5 of 5: saved settings ----------------------------------------------
     Write-Step 'Saved configuration'
 
-    $update = Save-DsmtSavedSettings -ConfigPath (Join-Path $dataRoot 'config') -Values @{
+    $update = Save-DsmtSavedSettings -Values @{
         ServiceAccount = $newAccount
         AccountKind    = $newKind
         AccountChangedOn = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -1333,8 +1334,8 @@ $serviceName = 'DSMT'
 $startPath   = Join-Path $scriptDir 'Start-DSMT.ps1'
 $serviceExe  = Join-Path $scriptDir 'DsmtService.exe'
 
-# Start-DSMT.ps1 reads dsmt.config.json, written a step later, so neither the
-# task nor the service needs the settings on its command line.
+# Start-DSMT.ps1 reads the settings from the registry, written a step later,
+# so neither the task nor the service needs them on its command line.
 #
 # -DataRoot IS passed, rather than left to the registry pointer, because the
 # registry write can fail (it needs elevation) while everything else succeeds.
@@ -1635,7 +1636,17 @@ Write-Step 'Saved configuration'
 # 15 minutes, and now that the previous configuration is migrated forward,
 # overwriting it would defeat the migration a few steps above. So: read what
 # is there, and only fill in what is missing.
-$existing = Get-DsmtSavedSettings -ConfigPath $configPath
+# A pre-1.22.0 install keeps its settings in dsmt.config.json. Import once,
+# before reading them, or this installer writes a fresh set over the top of a
+# configuration it never saw.
+$legacySettings = Import-DsmtLegacySettings -ConfigPath $configPath
+if ($legacySettings.Imported) {
+    Write-Ok ('Imported ' + $legacySettings.Count + ' settings from dsmt.config.json into the registry')
+} elseif ($legacySettings.Error) {
+    Write-Warn2 ('Could not import the previous settings file: ' + $legacySettings.Error)
+}
+
+$existing = Get-DsmtSavedSettings
 
 $keepSession = 15
 $keepPage    = 500
@@ -1664,16 +1675,18 @@ $settings = [ordered]@{
 }
 if ($sqlReady) { $settings.SqlServer = $sqlTarget }
 
-$settingsFile = Get-DsmtSettingsFile -ConfigPath $configPath
+$settingsKey = Get-DsmtSettingsKeyPath
 
-# Merged, not overwritten: a key this installer does not mention - the group
+# Merged, not overwritten: a value this installer does not mention - the group
 # filter chips, the health alert settings - survives untouched.
-$write = Save-DsmtSavedSettings -ConfigPath $configPath -Values $settings
+$write = Save-DsmtSavedSettings -Values $settings
 if ($write.Ok) {
-    Write-Ok ('Written to ' + $settingsFile)
-    Write-Info 'Start-DSMT.ps1 reads this file, so it can now be started with no parameters.'
+    Write-Ok ('Written to ' + $settingsKey)
+    Write-Info 'Start-DSMT.ps1 reads them from there, so it can now be started with no parameters.'
+    Write-Info 'To review or edit them by hand: regedit, or'
+    Write-Info ('    reg query "' + $settingsKey + '"')
 } else {
-    Write-Fail ('Could not write ' + $settingsFile + ': ' + $write.Error) `
+    Write-Fail ('Could not write ' + $settingsKey + ': ' + $write.Error) `
                'DSMT still runs - pass the settings on the command line instead.'
 }
 

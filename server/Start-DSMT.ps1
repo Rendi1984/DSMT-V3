@@ -127,9 +127,20 @@ if ($dataRootInfo.Mode -eq 'installed') {
     }
 }
 
+# Settings moved from dsmt.config.json into the registry in 1.22.0. Import an
+# existing file once, or this upgrade is the one that loses the SQL server.
+$import = Import-DsmtLegacySettings -ConfigPath $configDir
+if ($import.Imported) {
+    Write-Host ('  [ok]   Imported ' + $import.Count + ' settings from dsmt.config.json into ' +
+                (Get-DsmtSettingsKeyPath)) -ForegroundColor Green
+    Write-Host '         The file was renamed to .migrated and is no longer read.' -ForegroundColor DarkGray
+} elseif ($import.Error) {
+    Write-Host ('  [warn] Could not import the previous settings file: ' + $import.Error) -ForegroundColor Yellow
+}
+
 # Settings chosen by Install-DSMT.ps1 fill in for anything not passed on the
-# command line. An explicit parameter always wins over the saved file.
-$saved = Get-DsmtSavedSettings -ConfigPath $configDir
+# command line. An explicit parameter always wins over what is stored.
+$saved = Get-DsmtSavedSettings
 if ($null -ne $saved) {
     foreach ($name in @('Domain', 'Server', 'Port', 'ListenAddress', 'SessionHours', 'SessionMinutes', 'PageSize', 'IdentityMode', 'SqlServer', 'SqlDatabase')) {
         if ($PSBoundParameters.ContainsKey($name)) { continue }
@@ -162,7 +173,7 @@ Write-Host ''
 Write-Host '  DSMT - Directory Service Management Tool' -ForegroundColor White
 Write-Host ('  Version ' + $cfg.Version) -ForegroundColor DarkGray
 if ($null -ne $saved) {
-    Write-Host ('  Settings from ' + (Get-DsmtSettingsFile -ConfigPath $configDir) + ' (installed ' + $saved.InstalledOn + ')') -ForegroundColor DarkGray
+    Write-Host ('  Settings from ' + (Get-DsmtSettingsKeyPath) + ' (installed ' + $saved.InstalledOn + ')') -ForegroundColor DarkGray
 }
 Write-Host ''
 

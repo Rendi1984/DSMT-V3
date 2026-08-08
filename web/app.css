@@ -809,6 +809,17 @@ body { overflow: hidden; }
   color: var(--color-accent-100);
 }
 
+/* Multi-line variant, for anything whose LINE BREAKS carry meaning - the
+   settings JSON. Plain .secret has no white-space rule and word-break:
+   break-all, which turns formatted JSON into one unreadable run of text.
+   max-height + overflow so a long store scrolls inside the dialog rather
+   than pushing its buttons off the screen. */
+.secret-block {
+  white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere;
+  max-height: 46vh; overflow: auto;
+  line-height: 1.5; letter-spacing: normal;
+}
+
 /* ============================ Toasts / busy ============================ */
 
 .toasts {

@@ -5,23 +5,34 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.21.0` — matches the top entry of `CHANGELOG.md` and
+`1.22.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
 installs RSAT, copies the code to `%ProgramFiles%\DSMT`, prepares state under
 `%ProgramData%\DSMT`, creates the SQL database, reserves the port, opens the
-firewall, registers the service, writes the registry pointers and saves
-`dsmt.config.json` — after which `Start-DSMT.ps1` needs no parameters.
+firewall, registers the service and writes every setting into the registry —
+after which `Start-DSMT.ps1` needs no parameters.
 
-**Where each setting lives (1.21.0):** the registry key
+**Where each setting lives (1.22.0):** everything is in the registry.
 `HKLM\SOFTWARE\Rendi Group\DSMT` holds `InstallPath`, `DataPath` and
-`Version` — pointers only. Everything else is in
-`%ProgramData%\DSMT\config\dsmt.config.json`: domain, port, listen address,
-identity mode, service account, SQL server/database, idle timeout, search
-result cap, group filters, health-alert settings. Per-browser preferences
-(visible columns, which Settings/Tools section was last open) stay in
-`localStorage` and are deliberately not server state.
+`Version`; `...\DSMT\Settings` beneath it holds every configurable value —
+domain, port, listen address, identity mode, service account, SQL
+server/database, idle timeout, search result cap, group filters, health-alert
+settings. `dsmt.config.json` no longer exists; an existing one is imported
+once on first start and renamed `.migrated`.
+
+`%ProgramData%\DSMT` still holds `data\` (audit JSONL + logs) and
+`uploads\`. Per-browser preferences (visible columns, which Settings/Tools
+section was last open) stay in `localStorage` and are deliberately not server
+state.
+
+**Three things a future session must not rediscover the hard way:** writing
+settings needs elevation (`HKLM`), so a hand-started non-elevated
+`Start-DSMT.ps1` can read but not save — the error says so; settings are
+machine-wide, so two copies on one host share them; and a new **structured**
+setting must be added to `$script:DsmtJsonSettings` in `DsmtCommon.ps1` or it
+round-trips as the literal string `@{...}`.
 
 Deployment guide for operators: `docs/deployment-guide.html` (open in a
 browser). It is the step-by-step install/first-connection document; keep it in

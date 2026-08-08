@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.22.0** | 2026-08-08 | Every setting moves into the registry, one central place; a JSON view for reading and diffing | Reinstall |
 | **1.21.0** | 2026-08-08 | Settings no longer live inside the program folder, so an upgrade cannot lose them; registry pointers; AD health runs on a schedule and raises the bell; the search result cap is editable | Reinstall |
 | **1.20.1** | 2026-08-08 | Every audit-log time range (Last 24 hours through Last 30 days) failed with a `DateTimeStyles` error; only **All time** worked | Restart |
 | **1.20.0** | 2026-08-07 | The installer starts the service, **waits until the console answers**, and opens the browser itself. `prototype/` and an unused 4.9 MB image removed | Re-run installer |
@@ -68,6 +69,63 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.22.0 — 2026-08-08
+
+### One central place for the settings: the registry
+
+`dsmt.config.json` is gone. Everything the console can configure now lives
+under
+
+    HKLM\SOFTWARE\Rendi Group\DSMT\Settings
+
+as ordinary registry values, editable with `regedit` by anyone with local
+administrator rights on the host — which is the whole audience for this
+console. The key created in 1.21.0 keeps holding `InstallPath`, `DataPath` and
+`Version` beside it, so the pointers and the settings sit together.
+
+**Existing installs are imported once, automatically.** On the first start
+after the upgrade, an existing `dsmt.config.json` is read into the registry and
+the file is renamed to `.migrated` — kept, not deleted, so it still proves
+what was imported if a value looks wrong afterwards. Without this step, the
+upgrade that centralises the settings would be the upgrade that loses the SQL
+server.
+
+**A JSON view, because that is the one thing a file was better at.**
+**Settings → System → Show all settings as JSON** renders the whole store,
+formatted, for reading at a glance, diffing between two hosts, or pasting into
+a ticket. It is generated on demand and never written back: the registry is the
+only store, and a second one that could disagree with it is exactly the drift
+this project keeps a rule about.
+
+### Three consequences worth knowing before you deploy
+
+1. **Writing settings needs administrator rights.** `HKLM` is not writable by a
+   standard user. The service runs as LocalSystem, so every change made in the
+   console works normally. But `Start-DSMT.ps1` launched by hand in a
+   non-elevated window can read settings and cannot save them — so that case
+   now returns a sentence saying so, and naming the fix, rather than a bare
+   "Requested registry access is not allowed".
+
+2. **Settings are machine-wide.** Two copies of DSMT on one host share one set
+   of settings. There is no per-folder configuration any more, portable or not.
+
+3. **Nested settings are stored as JSON text inside a REG_SZ.** `GroupFilters`
+   is a list of objects and the registry has no type for that. The names
+   treated this way are listed in `$script:DsmtJsonSettings`, and **a new
+   structured setting must be added to that list** — one that is not
+   round-trips as the literal string `@{...}`, which renders as data and is the
+   single most likely way to break this.
+
+Read-modify-write still happens in one function, so a call that saves the port
+cannot drop the group filters — the property that made the merging JSON file
+safe is preserved deliberately.
+
+**Deploy:** a reinstall, elevated — `.\server\Install-DSMT.ps1`. It imports
+the existing settings before writing its own, so nothing configured in the
+console is lost.
 
 ---
 

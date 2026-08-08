@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.21.0'
+$script:DsmtVersion = '1.22.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -27,7 +27,7 @@ $script:DsmtPublisher = 'Rendi Group'
 
 # ---------------------------------------------------------------------------
 # IDLE TIMEOUT bounds - defined once and enforced on every route that can set
-# the value: the -SessionMinutes parameter, config\dsmt.config.json, and the
+# the value: the -SessionMinutes parameter, the stored settings, and the
 # runtime API. The maximum is deliberate: a session that can outlive a working
 # day is not an idle control, it is a formality.
 # ---------------------------------------------------------------------------
@@ -87,11 +87,16 @@ $script:DsmtConfig = @{
 # server configured, quietly falling back to JSONL. That is the bug this
 # split exists to make impossible.
 #
-# The registry holds POINTERS to the two roots and nothing else. It is not a
-# settings store: settings stay in JSON under DataRoot, where they can be
-# read, diffed and mailed in a bug report. Two values answer the only
-# question a fresh process cannot answer for itself - "where was I installed,
-# and where is my state?" - and they are written once, by the installer.
+# The registry key beside these paths holds POINTERS to the two roots -
+# InstallPath and DataPath - which answer the one question a freshly started
+# process cannot answer for itself. Written once, by the installer.
+#
+# NOTE for anyone reading an older comment: through 1.21.0 this block said the
+# registry "is not a settings store" and must not become one. In 1.22.0 it
+# became exactly that, at the operator's explicit decision - one central place
+# they can edit with regedit, for an audience that all holds local admin on
+# the host. See "THE SETTINGS STORE" further down for what that costs and how
+# the costs are handled. DataRoot still holds data\ and uploads\.
 # ---------------------------------------------------------------------------
 $script:DsmtRegistryKey = 'HKLM:\SOFTWARE\Rendi Group\DSMT'
 
@@ -329,7 +334,7 @@ function Get-DsmtAlertSettings {
     $out = @{ Enabled = $true; IntervalMinutes = $script:DsmtAlertIntervalDefault }
 
     $saved = $null
-    try { $saved = Get-DsmtSavedSettings -ConfigPath $cfg.ConfigPath } catch { $saved = $null }
+    try { $saved = Get-DsmtSavedSettings } catch { $saved = $null }
     if ($null -eq $saved) { return $out }
 
     if ($saved.PSObject.Properties['HealthAlertsEnabled']) {
@@ -392,6 +397,14 @@ function Move-DsmtLegacyState {
         $destSettings = Get-DsmtSettingsFile -ConfigPath (Join-Path $DataRoot 'config')
         if (Test-Path -LiteralPath $destSettings) { return $out }
 
+        # ...and the same file after 1.22.0 imported it into the registry and
+        # renamed it. Without this the folder copy would run again on every
+        # later start, dragging the old config\ back out of the code folder.
+        # Nothing would be lost - the import refuses to overwrite a populated
+        # registry - but a migration that repeats forever is a migration that
+        # will eventually surprise somebody.
+        if (Test-Path -LiteralPath ($destSettings + '.migrated')) { return $out }
+
         $moved = New-Object System.Collections.Generic.List[string]
 
         foreach ($name in @('config', 'data', 'uploads')) {
@@ -421,76 +434,261 @@ function Move-DsmtLegacyState {
     return $out
 }
 
+# ---------------------------------------------------------------------------
+# THE SETTINGS STORE - the registry, since 1.22.0.
+#
+# Every setting lives under HKLM\SOFTWARE\Rendi Group\DSMT\Settings. One
+# central place, edited with regedit by people who already have local admin on
+# the host, which is exactly the audience this console has.
+#
+# WHAT THIS COSTS, so a future session does not rediscover it as a bug:
+#
+#   1. NESTED VALUES HAVE NO NATIVE TYPE. GroupFilters is a list of objects
+#      (a label and its terms), and the registry offers REG_SZ, REG_DWORD and
+#      REG_MULTI_SZ - none of which is that. It is stored as JSON inside a
+#      REG_SZ. $script:DsmtJsonSettings is the list of names treated that way,
+#      and a name missing from it round-trips as the literal string "@{...}",
+#      which reads as data and is the single most likely way to break this.
+#
+#   2. WRITING NEEDS ADMINISTRATOR RIGHTS. HKLM is not writable by a standard
+#      user. The service runs as LocalSystem so console changes are fine, but
+#      Start-DSMT.ps1 run by hand in a non-elevated window can READ settings
+#      and cannot SAVE them. Save-DsmtSavedSettings reports that in words
+#      rather than failing with a bare access-denied.
+#
+#   3. THE REGISTRY IS MACHINE-WIDE. Two copies of DSMT on one host now share
+#      one set of settings - there is no per-folder configuration any more,
+#      portable or not.
+#
+#   4. NOTHING TO ATTACH TO A TICKET. This is what the JSON file was good at,
+#      so Export-DsmtSettings writes the whole store out as JSON on demand and
+#      the console exposes it. That export is a COPY, never a source: the
+#      registry is the only store, and a second one that could disagree with
+#      it is precisely the drift CLAUDE.md warns about.
+#
+# Read-modify-write still happens in ONE function, so a call that sets the
+# port cannot drop the group filters.
+# ---------------------------------------------------------------------------
+$script:DsmtSettingsKey = 'HKLM:\SOFTWARE\Rendi Group\DSMT\Settings'
+
+# Names whose value is a structure rather than a scalar. Stored as JSON text.
+# A new nested setting MUST be added here.
+$script:DsmtJsonSettings = @('GroupFilters')
+
+# Names stored as REG_DWORD. Everything not listed is a string.
+$script:DsmtNumberSettings = @('Port', 'SessionMinutes', 'SessionHours', 'PageSize', 'HealthAlertsInterval')
+
+# Names stored as REG_DWORD 0/1 and read back as booleans.
+$script:DsmtBoolSettings = @('HealthAlertsEnabled')
+
+function Get-DsmtSettingsKeyPath {
+    <#
+    .SYNOPSIS
+        The settings key, in one place, in the display form a human types into
+        regedit (no PowerShell "HKLM:" drive prefix).
+    #>
+    return ($script:DsmtSettingsKey -replace '^HKLM:\\', 'HKLM\')
+}
+
 function Get-DsmtSavedSettings {
     <#
     .SYNOPSIS
-        Reads dsmt.config.json - the settings Install-DSMT.ps1 chose - so the
-        console can be started with no parameters at all.
+        Reads every setting from the registry.
     .DESCRIPTION
-        Returns $null when the file is absent (a perfectly normal state: the
-        installer was never run, or the operator passes everything on the
-        command line). A malformed file is reported rather than ignored,
-        because silently falling back to defaults is how a machine ends up
-        pointing at the wrong domain without anyone noticing.
-    #>
-    param([Parameter(Mandatory = $true)][string] $ConfigPath)
+        Returns $null when the key does not exist - a normal state, not an
+        error: the installer was never run, or everything is being passed on
+        the command line.
 
-    $path = Get-DsmtSettingsFile -ConfigPath $ConfigPath
-    if (-not (Test-Path -LiteralPath $path)) { return $null }
+        Returns a PSCustomObject so that every existing call site keeps
+        working unchanged. They all test with
+        $saved.PSObject.Properties['Name'], which is exactly what
+        ConvertFrom-Json used to hand back.
+    #>
+
+    if (-not (Test-Path -LiteralPath $script:DsmtSettingsKey)) { return $null }
 
     try {
-        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-        return (ConvertFrom-Json -InputObject $raw -ErrorAction Stop)
+        $key = Get-ItemProperty -LiteralPath $script:DsmtSettingsKey -ErrorAction Stop
     } catch {
-        Write-Host ('  [warn] ' + $path + ' could not be read (' + $_.Exception.Message + '); using defaults and command-line parameters only.') -ForegroundColor Yellow
+        Write-Host ('  [warn] ' + (Get-DsmtSettingsKeyPath) + ' could not be read (' +
+                    $_.Exception.Message + '); using defaults and command-line parameters only.') -ForegroundColor Yellow
         return $null
     }
+
+    $out = [ordered]@{}
+
+    foreach ($prop in $key.PSObject.Properties) {
+        # PowerShell decorates every registry object with these; they are not
+        # settings and must not reach the caller as if they were.
+        if ($prop.Name -like 'PS*') { continue }
+
+        $name  = $prop.Name
+        $value = $prop.Value
+
+        if ($script:DsmtJsonSettings -contains $name) {
+            $text = [string]$value
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            try {
+                $out[$name] = (ConvertFrom-Json -InputObject $text -ErrorAction Stop)
+            } catch {
+                # Report it. A structured setting that silently vanishes looks
+                # exactly like a feature that was never configured.
+                Write-Host ('  [warn] The registry value ' + $name + ' is not valid JSON and was ignored: ' +
+                            $_.Exception.Message) -ForegroundColor Yellow
+            }
+            continue
+        }
+
+        if ($script:DsmtBoolSettings -contains $name) {
+            $out[$name] = ([int]$value -ne 0)
+            continue
+        }
+
+        $out[$name] = $value
+    }
+
+    if ($out.Count -eq 0) { return $null }
+    return [pscustomobject]$out
 }
 
 function Save-DsmtSavedSettings {
     <#
     .SYNOPSIS
-        Writes dsmt.config.json, merging over whatever is already there so a
-        value this call does not mention is preserved.
+        Writes settings to the registry, merging so a value this call does not
+        mention is left alone.
     .OUTPUTS
         Hashtable with Ok and Error.
     #>
     param(
-        [Parameter(Mandatory = $true)][string] $ConfigPath,
         # IDictionary, not hashtable: the installer builds its values as
-        # [ordered]@{ } to keep the file readable, and an OrderedDictionary is
-        # not a Hashtable. Typing this too narrowly fails the call outright.
+        # [ordered]@{ } and an OrderedDictionary is not a Hashtable. Typing
+        # this too narrowly fails the call outright.
         [Parameter(Mandatory = $true)][System.Collections.IDictionary] $Values
     )
 
-    $dir  = $ConfigPath
-    $path = Get-DsmtSettingsFile -ConfigPath $dir
-
     try {
-        if (-not (Test-Path -LiteralPath $dir)) {
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        if (-not (Test-Path -LiteralPath $script:DsmtSettingsKey)) {
+            New-Item -Path $script:DsmtSettingsKey -Force -ErrorAction Stop | Out-Null
         }
 
-        $merged = [ordered]@{}
+        foreach ($name in @($Values.Keys)) {
+            $value = $Values[$name]
 
-        $existing = Get-DsmtSavedSettings -ConfigPath $dir
-        if ($null -ne $existing) {
-            foreach ($prop in $existing.PSObject.Properties) {
-                $merged[$prop.Name] = $prop.Value
+            if ($script:DsmtJsonSettings -contains $name) {
+                # -Compress: a REG_SZ shown on one line in regedit. -Depth 6
+                # covers a filter's terms with room to spare.
+                $text = ConvertTo-Json -InputObject $value -Depth 6 -Compress
+                New-ItemProperty -LiteralPath $script:DsmtSettingsKey -Name $name -Value $text `
+                                 -PropertyType String -Force -ErrorAction Stop | Out-Null
+                continue
             }
-        }
-        foreach ($key in $Values.Keys) {
-            $merged[$key] = $Values[$key]
-        }
 
-        ConvertTo-Json -InputObject $merged -Depth 4 |
-            Set-Content -LiteralPath $path -Encoding UTF8 -ErrorAction Stop
+            if ($script:DsmtBoolSettings -contains $name) {
+                $num = 0
+                if ($value) { $num = 1 }
+                New-ItemProperty -LiteralPath $script:DsmtSettingsKey -Name $name -Value $num `
+                                 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+                continue
+            }
+
+            if ($script:DsmtNumberSettings -contains $name) {
+                $num = 0
+                if (-not [int]::TryParse([string]$value, [ref] $num)) { $num = 0 }
+                New-ItemProperty -LiteralPath $script:DsmtSettingsKey -Name $name -Value $num `
+                                 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+                continue
+            }
+
+            New-ItemProperty -LiteralPath $script:DsmtSettingsKey -Name $name -Value ([string]$value) `
+                             -PropertyType String -Force -ErrorAction Stop | Out-Null
+        }
 
         return @{ Ok = $true; Error = '' }
+    } catch [System.UnauthorizedAccessException] {
+        # The predictable failure, named rather than passed through raw:
+        # HKLM needs elevation, and "Requested registry access is not allowed"
+        # does not tell an operator what to do about it.
+        return @{ Ok = $false
+                  Error = ('Settings are stored in ' + (Get-DsmtSettingsKeyPath) +
+                           ', which needs administrator rights to write. DSMT running as a service ' +
+                           '(LocalSystem) has them; a hand-started, non-elevated PowerShell window does not. ' +
+                           'Start DSMT as the service, or run the window as administrator.') }
     } catch {
         return @{ Ok = $false; Error = $_.Exception.Message }
     }
+}
+
+function Export-DsmtSettings {
+    <#
+    .SYNOPSIS
+        The whole settings store as formatted JSON text.
+    .DESCRIPTION
+        The one thing a file was better at: something to read at a glance,
+        diff between two hosts, or paste into a ticket. It is generated on
+        demand and never written back - the registry stays the only store.
+    #>
+    $saved = Get-DsmtSavedSettings
+    if ($null -eq $saved) { return '{}' }
+    return (ConvertTo-Json -InputObject $saved -Depth 6)
+}
+
+function Import-DsmtLegacySettings {
+    <#
+    .SYNOPSIS
+        One-time move of an existing dsmt.config.json into the registry.
+    .DESCRIPTION
+        Runs when the registry has no settings yet and a settings file exists.
+        Without it, upgrading to 1.22.0 is the upgrade that loses the SQL
+        server - the same failure the 1.21.0 folder split was built to prevent,
+        arriving through a different door.
+
+        The file is RENAMED to .migrated rather than deleted: it proves what
+        was imported if a value looks wrong afterwards, and it stops the
+        import running a second time over settings that have since been
+        changed in the registry.
+    .OUTPUTS
+        Hashtable: Imported (bool), Count, Error.
+    #>
+    param([Parameter(Mandatory = $true)][string] $ConfigPath)
+
+    $out = @{ Imported = $false; Count = 0; Error = '' }
+
+    try {
+        $path = Get-DsmtSettingsFile -ConfigPath $ConfigPath
+        if (-not (Test-Path -LiteralPath $path)) { return $out }
+
+        # Registry already populated: the file is history, not a source.
+        if ($null -ne (Get-DsmtSavedSettings)) { return $out }
+
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $out }
+
+        $parsed = ConvertFrom-Json -InputObject $raw -ErrorAction Stop
+
+        $values = [ordered]@{}
+        foreach ($prop in $parsed.PSObject.Properties) {
+            if ($null -eq $prop.Value) { continue }
+            $values[$prop.Name] = $prop.Value
+        }
+        if ($values.Count -eq 0) { return $out }
+
+        $write = Save-DsmtSavedSettings -Values $values
+        if (-not $write.Ok) { $out.Error = $write.Error; return $out }
+
+        $out.Imported = $true
+        $out.Count    = $values.Count
+
+        try {
+            Move-Item -LiteralPath $path -Destination ($path + '.migrated') -Force -ErrorAction Stop
+        } catch {
+            # Not fatal - the import succeeded, and the guard above means a
+            # second run will not overwrite the registry from this file.
+        }
+    } catch {
+        $out.Error = $_.Exception.Message
+    }
+
+    return $out
 }
 
 function Write-DsmtLog {

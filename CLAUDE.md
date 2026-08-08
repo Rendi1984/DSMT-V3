@@ -9,9 +9,10 @@ objects, act on them, and every write is recorded in an audit log with the
 operator, the controller and a mandatory reason string.
 
 - **Installer**: `server/Install-DSMT.ps1` — installs
-  RSAT, prepares `data/` and `config/`, creates the SQL database via the
-  server's own schema code, reserves the URL, opens the firewall, optionally
-  registers a boot task, and writes `config/dsmt.config.json`. Idempotent.
+  RSAT, copies the code to `%ProgramFiles%\DSMT`, prepares state under
+  `%ProgramData%\DSMT`, creates the SQL database via the server's own schema
+  code, reserves the URL, opens the firewall, registers the service, and
+  writes every setting into the registry. Idempotent.
   It deliberately does **not** download RSAT sources or SQL media, and does
   **not** touch AD delegation — see `README.md` for why.
 - **Server**: `server/Start-DSMT.ps1` — Windows PowerShell 5.1 running a
@@ -215,10 +216,23 @@ The server must run on **Windows PowerShell 5.1** — no `pwsh` on a lab DC.
   came back with no SQL configured and no error. New code reads
   `$cfg.ConfigPath` / `$cfg.DataPath`, never `Join-Path $cfg.RootPath 'data'`.
 
-  **The registry holds pointers only** — `InstallPath`, `DataPath`, `Version`.
-  It is not a settings store and must not become one: JSON under the data root
-  can be read, diffed and mailed in a bug report, and `Save-DsmtSavedSettings`
-  merges so writing one key cannot wipe another.
+  **Since 1.22.0 the registry IS the settings store**, at the operator's
+  explicit decision: `HKLM\SOFTWARE\Rendi Group\DSMT` holds `InstallPath`,
+  `DataPath` and `Version`, and `...\DSMT\Settings` beneath it holds every
+  configurable value. `dsmt.config.json` no longer exists; an existing one is
+  imported once by `Import-DsmtLegacySettings` and renamed `.migrated`.
+  `Save-DsmtSavedSettings` still merges in one function, so writing one value
+  cannot wipe another — that property was the point of the JSON file and was
+  kept deliberately.
+
+  Three things that will bite a future session:
+  - **`HKLM` needs elevation to write.** The service (LocalSystem) is fine; a
+    hand-started non-elevated `Start-DSMT.ps1` can read settings and not save
+    them. That case returns a sentence naming the fix, not a raw access-denied.
+  - **Settings are machine-wide.** Two copies of DSMT on one host share them.
+  - **A new STRUCTURED setting must be added to `$script:DsmtJsonSettings`**
+    in `DsmtCommon.ps1`, or it round-trips as the literal string `@{...}` —
+    which renders as data, with no error.
 - **State exactly which file(s) changed and where they go**, every time a fix
   ships — the person deploying should be able to hot-swap individual files
   instead of reasoning it out themselves.
