@@ -67,21 +67,11 @@ Two consequences worth knowing before promising a filename:
 
 - Some browsers ignore `Content-Disposition` and save the URL's last segment
   instead, which is why `.../1.13.1.zip` can land on disk as `1.13.1.zip`.
-- The only way to a freely chosen name is a **release asset**
-  (`/releases/download/v1.13.1/DSMT-v1.13.1.zip`), which needs a tag and an
-  upload — neither possible from the dev container.
+- The only way to a freely chosen name is a **release asset**, which needs a
+  tag and an upload — neither possible from the dev container.
 
-When an exact filename is asked for, **build it locally and send the file**:
+Which is the whole reason the archive is built locally: see the top of this
+file for the `git archive` recipe and the required `DSMT.v<version>.zip` name.
 
-    git archive --format=zip -o DSMT-v1.13.1.zip HEAD
-
-That is the only method here that produces the requested name. **Do not pass
-`--prefix`** — the files go at the root of the archive, so extracting it gives
-`server\`, `web\`, `docs\` directly rather than a wrapper folder to dig
-through. (GitHub's own archives always add that wrapper; ours should not.)
-
-A git **tag** would be the proper mechanism and produces the same filename,
-but **tags cannot be pushed from the dev container** — the git proxy answers
-403 (`send-pack: unexpected disconnect`). Same for deleting a remote branch.
-Both have to be done by hand in the GitHub UI, so tag and release creation is
-a request to the operator, never a step to attempt silently.
+Deleting a remote branch is blocked by the same 403 as pushing a tag, so it is
+also a request to the operator rather than a step to attempt silently.
