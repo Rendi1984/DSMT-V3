@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.26.1** | 2026-08-08 | Settings -> Administrators searches the directory as you type, instead of asking you to know the group name exactly | Refresh |
 | **1.26.0** | 2026-08-08 | A broken certificate no longer takes the console down: DSMT falls back to plain HTTP and says so in the banner, the log, and a bar on every screen | Restart + refresh |
 | **1.25.1** | 2026-08-08 | The HTTPS refusal banner told you to open a console that is not running. `-NoHttps` recovery switch, and the banner now names the actual cause | Restart |
 | **1.25.0** | 2026-08-08 | **CSV import previews before it writes**: every row checked against the live directory, nothing written until the preview is seen | Restart + refresh |
@@ -74,6 +75,35 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.26.1 — 2026-08-08
+
+### Settings -> Administrators searches the directory as you type
+
+The group box was free text: you had to already know the name exactly, and a
+typo only surfaced on save. It now searches Active Directory as you type,
+using **the same picker the "Add to group" dialog already uses** - the same
+helper, the same 250ms debounce, the same two-character floor. Deliberately
+not a second kind of directory picker; there is one way to find an object in
+this console.
+
+Three small things that came with it:
+
+- The typed box still works on its own. A group the search does not surface
+  can be entered by hand, and the server resolves either form to a SID before
+  anything is stored - so nothing that worked before stopped working.
+- The pending row shows the **friendly name** while sending the
+  samAccountName, so what you read and what gets resolved are both right.
+- Adding the same group twice is refused with a message. It previously saved a
+  duplicate mapping and drew two identical rows, with nothing on screen
+  explaining why.
+
+**Files changed:** `web/app.js`, `server/lib/DsmtCommon.ps1` (version only).
+
+**To deploy:** copy `web\app.js`, hard refresh (Ctrl+F5). No restart needed -
+nothing on the server changed.
 
 ---
 

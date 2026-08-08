@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.26.0` — matches the top entry of `CHANGELOG.md` and
+`1.26.1` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -1301,7 +1301,21 @@ Re-run these; they predate this work and are unaffected by it.
   pull request; documentation-only fixes may go straight to `main`. The
   original `claude/new-session-6q2ky9` branch was merged into `main` and
   deleted — do not go looking for history there.
-- **Nothing has been verified at runtime yet.** Open task 1 is still open and
-  is the single most important thing outstanding: neither the installer nor
-  the server has ever been executed. Do not treat "it is on `main`" as "it
-  works".
+- **FIRST CONFIRMED RUN: 2026-08-08.** The console was deployed and reached on
+the lab domain at 1.26.0 - signed in, Settings rendered, SQL connected
+(`app.lab.local / DSMT`). So the "it has never been executed" caveat that ran
+through this file no longer holds in general.
+
+**But treat that as "it starts and serves", not as "the checklist passed."**
+What was confirmed by observation is the shell: startup, sign-in, the Settings
+screen and the SQL connection. The individual behaviours in the acceptance
+checklist above - the HTTPS fallback banner, the role gate returning 403 to a
+non-admin API call, nested group membership, the CSV dry-run verdicts - have
+NOT been reported as tested and must not be recorded as passing until they
+are. Marking something verified that was not is exactly the drift this file
+exists to prevent.
+
+**Do not treat "it is on `main`" as "it works".** The console is confirmed to
+  start and serve (see above), but each individual behaviour still needs its
+  own check against the acceptance checklist. Open task 1 remains the single
+  most important thing outstanding.

@@ -3152,9 +3152,18 @@ function renderSettings() {
       'be renamed and built-in groups are localised. Nested membership counts. The role is resolved at ' +
       '<strong>sign-in</strong>, so a change takes effect the next time someone signs in.</p>' +
       '<div id="roleList">' + roleRows + '</div>' +
+      // Search box + results list, the same pair the "Add to group" dialog
+      // already uses (wirePicker). Deliberately not a second kind of
+      // directory picker: one way to find an object in this console.
+      // The free-text box still works on its own, so a group the search does
+      // not surface can still be typed exactly - the server resolves either
+      // to a SID before anything is stored.
       '<div class="set-form">' +
-        '<div class="field"><label for="roleAdd">Add a group (name or DOMAIN\\Name)</label>' +
-        '<input class="input" id="roleAdd" placeholder="DSMT Admins" autocomplete="off"></div>' +
+        '<div class="field"><label for="roleAdd">Find a group</label>' +
+        '<input class="input" id="roleAdd" placeholder="Type at least two characters" autocomplete="off"></div>' +
+        '<div class="field"><label for="roleMatches">Group</label>' +
+        '<select class="input" id="roleMatches">' +
+        '<option value="">Search for a group first</option></select></div>' +
       '</div>' +
       '<p class="dialog-note">DSMT refuses to save a list you are not a member of - that would lock you ' +
       'out immediately, and the only way back would be regedit on the DSMT host.</p>' +
@@ -3886,21 +3895,50 @@ function wireSettings(bounds) {
   // The pending list lives in the DOM rather than in a variable, so what is
   // saved is exactly what is on screen.
   if ($('roleAddBtn')) {
+    // Live search against the directory as they type. Same helper, same
+    // debounce and same two-character floor as every other picker here.
+    wirePicker('roleAdd', 'roleMatches', '/api/groups');
+
     $('roleAddBtn').addEventListener('click', function () {
-      var name = $('roleAdd').value.trim();
+      // A chosen match wins; the typed text is the fallback so a group the
+      // search did not return can still be entered by hand.
+      var sel = $('roleMatches');
+      var picked = sel.value;
+      var name = picked || $('roleAdd').value.trim();
       if (!name) { return; }
 
+      // Show the friendly name where the picker knows it, but send the
+      // samAccountName - that is what the server resolves to a SID.
+      var label = name;
+      if (picked && sel.selectedIndex >= 0) {
+        label = sel.options[sel.selectedIndex].textContent || name;
+      }
+
       var list = $('roleList');
+
+      // Adding the same group twice would save a duplicate mapping and show
+      // two identical rows, with nothing on screen explaining why.
+      var already = list.querySelectorAll('.role-row');
+      for (var ai = 0; ai < already.length; ai++) {
+        var have = already[ai].getAttribute('data-pending') || already[ai].getAttribute('data-sid') || '';
+        if (have.toLowerCase() === name.toLowerCase()) {
+          setResult('roleResult', '"' + label + '" is already in the list.', false);
+          return;
+        }
+      }
+
       if (list.querySelector('p.role-note')) { list.innerHTML = ''; }
 
       var row = document.createElement('div');
       row.className = 'role-row';
       row.setAttribute('data-pending', name);
-      row.innerHTML = '<div class="role-main"><strong>' + esc(name) + '</strong>' +
+      row.innerHTML = '<div class="role-main"><strong>' + esc(label) + '</strong>' +
                       '<div class="role-note">Not saved yet - the SID is resolved when you save.</div></div>' +
                       '<button class="btn btn-ghost role-remove" type="button">Remove</button>';
       list.appendChild(row);
+
       $('roleAdd').value = '';
+      sel.innerHTML = '<option value="">Search for a group first</option>';
     });
   }
 
