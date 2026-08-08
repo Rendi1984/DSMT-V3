@@ -385,8 +385,17 @@ function Get-DsmtRoleState {
         }
     }
 
+    # Which DC answered. Group membership read from one controller can lag
+    # a change made on another until replication catches up, and that shows up
+    # as "I removed them from the group and DSMT still says they are in it" -
+    # which looks exactly like a bug in this code. Naming the controller turns
+    # that into something the operator can check in seconds.
+    $controller = ''
+    try { $controller = Get-DsmtServer -Credential $Credential } catch { $controller = '' }
+
     return [ordered]@{
         configured = ($groups.Count -gt 0)
         groups     = @($rows)
+        controller = $controller
     }
 }

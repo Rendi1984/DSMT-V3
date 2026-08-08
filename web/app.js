@@ -3141,6 +3141,17 @@ function renderSettings() {
         '</div>' +
         '<p class="muted">' + esc(s.roleReason || '') + '</p>' +
       '</div>' +
+      // The state box describes THIS SESSION, decided at sign-in. The list
+      // below is read live. When they disagree the card was contradicting
+      // itself - "no administrator groups are configured" printed directly
+      // above a configured group - which reads as a bug rather than as the
+      // sign-in caching it actually is.
+      (s.roleConfigured !== r.configured
+        ? '<div class="error-box">The box above describes <strong>your current session</strong>, and it ' +
+          'is out of date: your role was decided when you signed in, before this list was last changed. ' +
+          '<strong>Sign out and back in</strong> to pick up the change. Everyone else picks it up at ' +
+          'their next sign-in.</div>'
+        : '') +
       '<p class="dialog-note"><strong>This controls DSMT\'s own settings only</strong> - the database it ' +
       'points at, the identity mode, the idle timeout, the listening port, HTTPS, and this list. ' +
       'Nothing in Active Directory governs those, which is why a role here has real teeth.</p>' +
@@ -3150,7 +3161,13 @@ function renderSettings() {
       'Someone not listed here can still open ADUC and do whatever AD permits.</p>' +
       '<p class="dialog-note">Membership is matched on <strong>SID</strong>, never on name: a group can ' +
       'be renamed and built-in groups are localised. Nested membership counts. The role is resolved at ' +
-      '<strong>sign-in</strong>, so a change takes effect the next time someone signs in.</p>' +
+      '<strong>sign-in</strong>, so a change takes effect the next time someone signs in - signing in ' +
+      'itself is never blocked by this list, only changing DSMT settings is.</p>' +
+      (r.controller
+        ? '<p class="dialog-note">Membership is read from <strong>' + esc(r.controller) + '</strong>. ' +
+          'If you have just added or removed someone and DSMT still disagrees, check that controller ' +
+          'specifically - a change made on a different DC applies here only once it has replicated.</p>'
+        : '') +
       '<div id="roleList">' + roleRows + '</div>' +
       // Search box + results list, the same pair the "Add to group" dialog
       // already uses (wirePicker). Deliberately not a second kind of

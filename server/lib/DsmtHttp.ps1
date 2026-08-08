@@ -743,9 +743,15 @@ function Invoke-DsmtApi {
                         listenAddress = $cfg.ListenAddress
                         scheme        = $cfg.Scheme
                         https         = Get-DsmtHttpsState
-                        isAdmin       = $session.IsAdmin
-                        roleReason    = $session.RoleReason
-                        roles         = Get-DsmtRoleState -Credential $session.Credential
+                        # isAdmin/roleReason/roleConfigured are what THIS
+                        # SESSION was told at sign-in. roles is read live. They
+                        # disagree between saving a mapping and signing in
+                        # again, and the UI has to say which is which rather
+                        # than print both as if they described the same moment.
+                        isAdmin        = $session.IsAdmin
+                        roleReason     = $session.RoleReason
+                        roleConfigured = $session.RoleConfigured
+                        roles          = Get-DsmtRoleState -Credential $session.Credential
                         sessionMinutes = $cfg.SessionMinutes
                         sessionBounds  = Get-DsmtSessionBounds
                         pageSize      = $cfg.PageSize

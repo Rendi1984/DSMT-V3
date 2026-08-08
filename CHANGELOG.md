@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.26.3** | 2026-08-08 | The Administrators card contradicted itself - "no groups configured" printed above a configured group. Says which DC membership is read from | Restart + refresh |
 | **1.26.2** | 2026-08-08 | **Fixes the administrator role, which could not have worked at all**: the group-membership read used the wrong LDAP search scope | Restart + refresh |
 | **1.26.1** | 2026-08-08 | Settings -> Administrators searches the directory as you type, instead of asking you to know the group name exactly | Refresh |
 | **1.26.0** | 2026-08-08 | A broken certificate no longer takes the console down: DSMT falls back to plain HTTP and says so in the banner, the log, and a bar on every screen | Restart + refresh |
@@ -76,6 +77,54 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.26.3 — 2026-08-08
+
+### The Administrators card contradicted itself
+
+Reported from the lab with a screenshot: the state box read *"No administrator
+groups are configured, so every operator can change DSMT settings"* directly
+above a row showing **Domain Admins** with its resolved SID.
+
+Both statements were true, about different moments. The box describes **your
+session**, whose role was decided at sign-in; the list is read **live**. Save a
+group and they disagree until you sign in again — and the card printed both as
+if they described the same thing, which reads as a bug rather than as the
+sign-in caching it actually is.
+
+The card now detects the disagreement and says it plainly: your session
+predates the change, sign out and back in to pick it up.
+
+### It also now names the domain controller it reads membership from
+
+Removing someone from a group on one DC and asking DSMT on another produces
+exactly the symptom *"I took them out of the group and DSMT still says they are
+in it"* — which looks identical to a bug in the role check. The card names the
+controller it read from, so that is a ten-second check rather than a
+code-reading exercise.
+
+### Not a bug, and now said on screen
+
+**Signing in is never blocked by this list.** The administrator role governs
+who may change DSMT's own settings, not who may use the console. An operator
+removed from every administrator group still signs in, still browses the
+directory, and still performs every directory action Active Directory permits
+them — they just get 403 on a settings write. The card said this in prose about
+directory *operations*; it now says it about *signing in* too, because that is
+the thing people check first.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the four files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 
