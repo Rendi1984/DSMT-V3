@@ -522,10 +522,23 @@ function Get-DsmtGroupFilters {
         Array of hashtables: key, label, kind, terms.
     #>
 
+    # "how" states what each built-in actually matches on, so the Settings
+    # screen can LIST them rather than describe them in prose. A filter that
+    # is invisible on the screen meant to list filters is the reason this
+    # field exists.
     $filters = @(
-        @{ key = 'all';        label = 'All';        kind = 'builtin'; terms = @() }
-        @{ key = 'privileged'; label = 'Privileged'; kind = 'builtin'; terms = @() }
-        @{ key = 'protected';  label = 'AdminSDHolder'; kind = 'builtin'; terms = @() }
+        @{ key = 'all';        label = 'All';           kind = 'builtin'; terms = @()
+           how = 'Every group. No filtering.' }
+        @{ key = 'privileged'; label = 'Privileged';    kind = 'builtin'; terms = @()
+           how = 'Matched on SID, never on name: the well-known RIDs (Domain Admins 512, Domain ' +
+                 'Controllers 516, Schema Admins 518, Enterprise Admins 519, Group Policy Creator ' +
+                 'Owners 520) and the built-in aliases in S-1-5-32-* (Administrators 544, Account ' +
+                 'Operators 548, Print Operators 550, Server Operators 549, Backup Operators 551). ' +
+                 'A name match would find nothing on a renamed or non-English domain.' }
+        @{ key = 'protected';  label = 'AdminSDHolder'; kind = 'builtin'; terms = @()
+           how = 'adminCount = 1, which marks objects protected by AdminSDHolder. Shown as a signal, ' +
+                 'not used as the Privileged test: it lingers on accounts already removed from a ' +
+                 'privileged group, so on its own it over-reports.' }
     )
 
     $cfg = Get-DsmtConfig

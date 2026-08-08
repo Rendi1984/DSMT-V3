@@ -99,6 +99,26 @@ function New-DsmtSession {
 
     $netbios = $cfg.Domain.Split('.')[0].ToUpper()
 
+    # Whether this operator may change DSMT's OWN settings. Resolved once,
+    # here, and cached on the session - see DsmtRoles.ps1 for why the scope is
+    # settings only and never directory operations. Wrapped because a failure
+    # to decide the role must not stop a sign-in that AD already accepted:
+    # Resolve-DsmtOperatorRole reports its own failure as "not an admin", and
+    # this catch covers the case where the function itself blows up.
+    $role = $null
+    try {
+        $role = Resolve-DsmtOperatorRole -SamAccountName $bare -Credential $cred
+    } catch {
+        Write-DsmtLog -Level 'WARN' -Message ('Could not resolve the DSMT role for ' + $bare + ': ' + $_.Exception.Message)
+        $role = @{
+            IsAdmin    = $false
+            Configured = $true
+            Reason     = 'Your DSMT role could not be determined, so changing DSMT settings is denied ' +
+                         'for this session.'
+            Error      = $_.Exception.Message
+        }
+    }
+
     $script:DsmtSessions[$token] = @{
         Token       = $token
         Sam         = $bare
@@ -108,6 +128,9 @@ function New-DsmtSession {
         Dn          = $dn
         Ou          = $ouPath
         Credential  = $cred
+        IsAdmin     = [bool]$role.IsAdmin
+        RoleReason  = [string]$role.Reason
+        RoleConfigured = [bool]$role.Configured
         CreatedUtc  = $now.ToUniversalTime()
         LastSeenUtc = $now.ToUniversalTime()
     }

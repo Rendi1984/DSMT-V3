@@ -682,6 +682,26 @@ body { overflow: hidden; }
 .gf-row:last-child { border-bottom: none; margin-bottom: 0; }
 @media (max-width: 640px) { .gf-row { grid-template-columns: 1fr; } }
 
+/* One configured administrator group. Its own class rather than .gf-row:
+   that one carries only grid-template-columns and relies on .set-form for
+   display:grid, so reusing it alone would silently lay out as a block. */
+.role-row {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-neutral-800);
+}
+.role-row:last-child { border-bottom: none; margin-bottom: 0; }
+.role-main { flex: 1 1 auto; min-width: 0; }
+/* Font stack comes from the shared .secret rule below; only size and colour
+   differ here. */
+.role-sid { font-size: 11.5px; color: var(--color-neutral-500); word-break: break-all; }
+.role-note { font-size: 12.5px; color: var(--color-neutral-400); }
+.role-missing { font-size: 12.5px; color: var(--color-accent-200); }
+@media (max-width: 640px) {
+  .role-row { flex-wrap: wrap; }
+}
+
 .set-good { margin: 0; font-size: 13px; color: var(--color-neutral-300); }
 .set-warn { margin: 0; font-size: 13px; color: var(--color-accent-200); }
 .set-cmd-label { font-size: 12px; color: var(--color-neutral-400); }
@@ -743,6 +763,37 @@ body { overflow: hidden; }
 
 .profile-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
 
+/* Tab strip inside the profile window. Physical properties only and no
+   :has() - this strip sits inside a dialog, and the 1.7.5 incident was
+   exactly an overlay whose layout silently became something else on a
+   browser that dropped a modern property.
+
+   It scrolls sideways rather than wrapping or shrinking: at 640px inside a
+   slide-over this is the element most likely to overflow, and hiding a tab
+   would hide directory data, which the rules at the top of this file
+   forbid. */
+.profile-tabs {
+  display: flex; gap: var(--space-1);
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border-bottom: 1px solid var(--color-neutral-800);
+  margin-bottom: var(--space-4);
+}
+.profile-tab {
+  background: none; border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-neutral-400);
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 13.5px; white-space: nowrap;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+.profile-tab:hover { color: var(--color-neutral-200); }
+.profile-tab.is-on {
+  color: var(--color-accent-200);
+  border-bottom-color: var(--color-accent-500);
+}
+.profile-tab:focus-visible { outline: 2px solid var(--color-accent-500); outline-offset: -2px; }
+
 .profile-grid {
   display: grid; grid-template-columns: 1fr; gap: var(--space-6) var(--space-6);
 }
@@ -801,8 +852,14 @@ body { overflow: hidden; }
 .result-list li { display: flex; gap: 8px; align-items: baseline; }
 .result-ok   { color: var(--color-neutral-300); }
 .result-bad  { color: var(--color-accent-200); }
-.secret {
+/* The one monospace stack in the console. There is no --font-mono token in
+   Nocturne, so anything needing monospace joins THIS selector - which carries
+   the font and nothing else, so joining it cannot drag along a border or a
+   background the way joining .secret would. */
+.secret, .role-sid {
   font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+}
+.secret {
   font-size: 13px; letter-spacing: 0.04em; word-break: break-all;
   padding: var(--space-3); border-radius: var(--radius-sm);
   border: 1px solid var(--color-accent-700); background: var(--color-accent-900);

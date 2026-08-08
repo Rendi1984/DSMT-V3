@@ -671,6 +671,26 @@ function Invoke-DsmtApi {
         return
     }
 
+    # ---- DSMT's own settings need the administrator role ------------------
+    # Checked HERE, once, against a central list - not sprinkled through the
+    # handlers. A role enforced route by route is a role that is missing from
+    # the route somebody adds next week. Hiding a button in app.js is a
+    # convenience, never the enforcement: the API is reachable directly.
+    #
+    # This gates DSMT's OWN configuration only. Directory routes are
+    # deliberately untouched: there, AD is the authority and a DSMT role could
+    # only ever subtract. See DsmtRoles.ps1.
+    if (Test-DsmtRouteNeedsAdmin -Path $Path -Method $method) {
+        if (-not $session.IsAdmin) {
+            Write-DsmtAudit -Action 'Denied - not a DSMT administrator' -Target ($method + ' ' + $Path) `
+                            -Operator $session.Account -Reason 'Role check' `
+                            -Result 'Denied' -Category 'session'
+            Send-DsmtError -Response $Response -StatusCode 403 -Message (
+                'Changing DSMT settings needs the DSMT administrator role. ' + $session.RoleReason)
+            return
+        }
+    }
+
     if ($Path -eq '/api/session' -and $method -eq 'DELETE') {
         Write-DsmtAudit -Action 'Sign out' -Target $session.Account -Operator $session.Account `
                         -Reason 'Console sign-out' -Result 'Success' -Category 'session'
@@ -686,6 +706,9 @@ function Invoke-DsmtApi {
             publisher      = $cfg.Publisher
             sessionMinutes = $cfg.SessionMinutes
             user           = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
+            isAdmin        = $session.IsAdmin
+            roleReason     = $session.RoleReason
+            roleConfigured = $session.RoleConfigured
         }
         return
     }
@@ -712,6 +735,9 @@ function Invoke-DsmtApi {
                         listenAddress = $cfg.ListenAddress
                         scheme        = $cfg.Scheme
                         https         = Get-DsmtHttpsState
+                        isAdmin       = $session.IsAdmin
+                        roleReason    = $session.RoleReason
+                        roles         = Get-DsmtRoleState -Credential $session.Credential
                         sessionMinutes = $cfg.SessionMinutes
                         sessionBounds  = Get-DsmtSessionBounds
                         pageSize      = $cfg.PageSize
@@ -865,6 +891,85 @@ function Invoke-DsmtApi {
                     firewall      = ('New-NetFirewallRule -DisplayName "DSMT console (TCP ' + $port +
                                      ')" -Direction Inbound -Protocol TCP -LocalPort ' + $port +
                                      ' -Action Allow -Profile Domain')
+                }
+                return
+            }
+
+            '^/api/settings/roles$' {
+                if ($method -eq 'GET') {
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok    = $true
+                        roles = (Get-DsmtRoleState -Credential $session.Credential)
+                    }
+                    return
+                }
+                if ($method -ne 'POST') { break }
+
+                $body  = Read-DsmtBody -Request $Request
+                $names = @(Get-DsmtBodyValue -Body $body -Name 'groups' -Default @())
+
+                # Every name is resolved to a SID BEFORE anything is saved, so
+                # a typo in the third group cannot leave the first two written
+                # and the mapping half-applied.
+                $resolved = @()
+                foreach ($n in $names) {
+                    $text = ([string]$n).Trim()
+                    if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+                    $r = Resolve-DsmtGroupSid -Identity $text -Credential $session.Credential
+                    if (-not $r.Ok) {
+                        Send-DsmtError -Response $Response -Message $r.Error -StatusCode 400
+                        return
+                    }
+                    $resolved += @{ Sid = $r.Sid; Name = $r.Name }
+                }
+
+                # Refusing to save a mapping that locks the author out. Every
+                # other guard here is recoverable from the console; this one
+                # would not be - it would need regedit on the DSMT host.
+                if ($resolved.Count -gt 0) {
+                    $check = Get-DsmtOperatorGroupSids -SamAccountName $session.Sam -Credential $session.Credential
+                    if (-not $check.Ok) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'Your own group membership could not be read, so DSMT cannot confirm this ' +
+                            'mapping would not lock you out. Nothing was saved. ' + $check.Error)
+                        return
+                    }
+
+                    $selfIn = $false
+                    foreach ($g in $resolved) {
+                        foreach ($s in @($check.Sids)) {
+                            if ($s -eq $g.Sid) { $selfIn = $true }
+                        }
+                    }
+                    if (-not $selfIn) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'You are not a member of any of those groups, so saving this would lock you ' +
+                            'out of DSMT settings immediately and the only way back would be regedit on ' +
+                            'the DSMT host. Add a group you belong to. Nothing was saved.')
+                        return
+                    }
+                }
+
+                $saved = Save-DsmtSavedSettings -Values @{ RoleAdminGroups = $resolved }
+
+                $summary = 'none (every operator administers)'
+                if ($resolved.Count -gt 0) {
+                    $summary = (@($resolved | ForEach-Object { $_.Name }) -join ', ')
+                }
+
+                Write-DsmtAudit -Action 'Change DSMT administrator groups' -Target $summary `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session'
+                Write-DsmtLog -Message ($session.Account + ' set the DSMT administrator groups to: ' + $summary)
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    count        = $resolved.Count
+                    groups       = @($resolved)
+                    persisted    = $saved.Ok
+                    persistError = $saved.Error
+                    needsSignIn  = $true
                 }
                 return
             }

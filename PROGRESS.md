@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.23.0` — matches the top entry of `CHANGELOG.md` and
+`1.24.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -594,8 +594,19 @@ retrofit:**
 
 ### Roles from AD groups, and a dashboard (24-25) — raised 2026-07-31, NOT to be built yet
 
-24. **Application roles driven by AD group membership.** Members of one group
-    are administrators of DSMT; members of another get read-only.
+24. **[BUILT IN 1.24.0 - settings half only]** Application roles driven by AD
+    group membership. Settings -> Administrators maps AD groups to the right
+    to change DSMT's OWN settings, enforced at one choke point on the server
+    against a central route list. Matched on SID, nested membership via
+    `tokenGroups`, resolved at sign-in, fails open when unconfigured and
+    closed when a configured mapping cannot be evaluated.
+
+    **The read-only-role half was deliberately NOT built**, and a future
+    session must not add it without checking in: for directory operations a
+    role can only subtract, and a read-only flag would constrain this console
+    rather than the person - the same operator can open ADUC. Shipping it
+    would have been shipping a control that looks like a permission and is
+    not. Original reasoning kept below.
 
     **Read this before designing it, because it touches a decision recorded in
     `CLAUDE.md`:** DSMT deliberately has no permission model of its own - every
@@ -822,8 +833,13 @@ concern already flagged for attribute writes in 28c.
 
 ### Small UI items (30-31) — raised 2026-08-08, NOT to be built yet
 
-**30. Group filters: show the built-in ones, and make the list editable in
-place.** Settings -> Group filters currently *describes* `Privileged` and
+**30. [BUILT IN 1.24.0] Group filters: show the built-in ones, and make the
+list editable in place.** Built-ins are now rows in the same list, read-only,
+each stating what it matches on. Custom filters already had inline edit. Note
+for a future session: the `how` text for each built-in lives beside the filter
+definition in `Get-DsmtGroupFilters` (`DsmtDirectory.ps1`), not in `app.js` -
+keep it there so there is one place that knows what a filter matches.
+Original note: Settings -> Group filters currently *describes* `Privileged` and
 `AdminSDHolder` in prose and then says "No custom filters yet." Two problems
 with that: the two filters that actually exist are invisible on the screen
 that is supposed to list them, and a custom filter can only be created, not
@@ -840,8 +856,11 @@ edited, without deleting and retyping it.
 - Small, self-contained, and entirely in `renderSettings()` plus the existing
   `/api/settings/groupfilters` route — no new backend capability needed.
 
-**31. Tabs inside the profile window, with group memberships on their own
-tab.** Raised with a screenshot: the profile window is now a single long
+**31. [BUILT IN 1.24.0] Tabs inside the profile window, with group
+memberships on their own tab.** Overview / Memberships. The strip is built
+from a list in `profileHtml()`, so item 28's Attributes section is added as
+another entry in that list - do NOT introduce a second navigation pattern.
+Actions stay outside the strip. Original note: Raised with a screenshot: the profile window is now a single long
 scroll — identity, organisation, account, distinguished name, and then group
 memberships below the fold. Splitting it into tabs (Overview / Memberships,
 and later Attributes from item 28) would show more with less crowding, and

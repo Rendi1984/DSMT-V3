@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.24.0** | 2026-08-08 | **DSMT administrators**: AD groups decide who may change DSMT's own settings. Built-in group filters are listed instead of described; the profile window gets tabs | Restart + refresh |
 | **1.23.0** | 2026-08-08 | **HTTPS**, configured from Settings after installation: pick a certificate from the machine store and bind it to a port. The console never receives a private key | Restart + refresh |
 | **1.22.0** | 2026-08-08 | Every setting moves into the registry, one central place; a JSON view for reading and diffing | Reinstall |
 | **1.21.0** | 2026-08-08 | Settings no longer live inside the program folder, so an upgrade cannot lose them; registry pointers; AD health runs on a schedule and raises the bell; the search result cap is editable | Reinstall |
@@ -70,6 +71,105 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.24.0 — 2026-08-08
+
+### DSMT administrators — who may change the console's own settings
+
+Until now, any operator who could sign in could repoint the console at a
+different database, change the identity mode or the idle timeout, move the
+listening port, or create the forest KDS root key. Nothing in Active Directory
+governs those, so nothing stopped them.
+
+Settings -> Administrators now maps AD groups to that right.
+
+**Read this before extending it, because it touches a decision recorded in
+`CLAUDE.md`.** DSMT deliberately has no permission model of its own: every
+directory read and write runs as the signed-in operator, so AD is the
+authority. That decision is *not* overturned, and the distinction is the whole
+design:
+
+- **Directory operations are untouched.** A role there could only ever
+  *subtract* — putting someone in "DSMT Admins" cannot grant a right AD
+  withheld, because the write still runs as them and still fails. And a
+  read-only role would constrain *this console*, not the person: the same
+  operator can open ADUC and do whatever AD permits. Presenting that as a
+  security control would be presenting a lie, so it was not built. The UI says
+  so in as many words.
+- **DSMT's own settings are where a role has real teeth**, because nothing in
+  AD governs them. That is the gap this closes, and it is the entire feature.
+
+Five things that shape it:
+
+- **Matched on SID, never on name.** A group called Domain Admins can be
+  renamed and is localised on a non-English install. The name is stored beside
+  the SID for display and is re-read rather than trusted.
+- **Nested membership counts.** The check reads the constructed `tokenGroups`
+  attribute, which is what the domain controller itself computes, rather than
+  `memberOf` — which lists direct membership only and would miss an
+  administrator who is one through a nested group, i.e. most real directories.
+- **Enforced at one choke point on the server**, against a central route list,
+  not sprinkled through the handlers. A role enforced route by route is a role
+  that is missing from the route somebody adds next week. Hiding a button in
+  `app.js` is a convenience; the API is reachable directly.
+- **Fails open when nothing is configured**, so an upgrade cannot lock a team
+  out of their own console. It fails *closed* in one case: a mapping that is
+  configured while the operator's group membership cannot be read. Being
+  locked out is obvious and recoverable at the registry key named in the
+  error; being wrongly granted admin is neither.
+- **DSMT refuses to save a list you are not a member of.** Every other guard
+  here is recoverable from the console; that one would need regedit on the
+  DSMT host.
+
+The role is resolved once at sign-in and cached on the session, so a change
+takes effect at each operator's next sign-in. Stated plainly rather than left
+to be discovered: re-reading `tokenGroups` per request would put a directory
+round-trip in front of every settings write.
+
+### Group filters: the built-in ones are now listed, not described
+
+Settings -> Group filters described `Privileged` and `AdminSDHolder` in prose
+and then said "No custom filters yet" — so the two filters that actually exist
+were invisible on the screen meant to list them. Both are now rows in the same
+list, marked **read-only**, each stating what it matches on (`Privileged` on
+well-known RIDs and `S-1-5-32-*` aliases; `AdminSDHolder` on `adminCount`).
+They stay uneditable on purpose: exposing a SID match as an editable term list
+would invite someone to break it exactly where it matters most.
+
+### The profile window has tabs
+
+It had become one long scroll — identity, organisation, account, then group
+memberships below the fold. Overview and Memberships are now tabs.
+
+The strip is built from a list rather than hardcoded, so the Attributes
+section proposed in `PROGRESS.md` item 28 slots in as another entry instead of
+arriving as a second navigation pattern beside this one. **The action buttons
+stay outside the strip** — they apply to the user, not to a tab, and moving
+them inside one would hide half of them depending on which tab is open. The
+strip scrolls sideways rather than wrapping, because at 640px inside a
+slide-over it is the element most likely to overflow and hiding a tab would
+hide directory data.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` *(new)* | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtSession.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
+
+**New registry value** under `HKLM\SOFTWARE\Rendi Group\DSMT\Settings`:
+`RoleAdminGroups` (string, JSON). It is registered in
+`$script:DsmtJsonSettings` — a structured setting that is not would round-trip
+as the literal `@{...}`.
 
 ---
 

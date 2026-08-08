@@ -105,6 +105,7 @@ $repoRoot  = Split-Path -Parent $scriptDir
 . (Join-Path $scriptDir 'lib\DsmtGmsa.ps1')
 . (Join-Path $scriptDir 'lib\DsmtAdHealth.ps1')
 . (Join-Path $scriptDir 'lib\DsmtHttps.ps1')
+. (Join-Path $scriptDir 'lib\DsmtRoles.ps1')
 . (Join-Path $scriptDir 'lib\DsmtHttp.ps1')
 
 # Where state lives has to be settled BEFORE the settings file is read - the

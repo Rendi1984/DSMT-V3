@@ -2457,22 +2457,76 @@ function profileHtml(d, isGroup) {
       }).join('') + '</ul>';
   }
 
+  // The window was one long scroll: identity, organisation, account, then
+  // memberships below the fold. Tabs split it so more is visible with less
+  // crowding.
+  //
+  // The tab strip is built ONCE, from a list, so the Attributes section
+  // planned in PROGRESS item 28 slots in as another entry rather than as a
+  // second navigation pattern bolted on beside this one.
+  var panes = [
+    { key: 'overview', label: 'Overview', body:
+        '<div class="profile-grid">' +
+          '<section class="profile-sec"><h4>Identity</h4>' + profileRows(identity) + '</section>' +
+          '<section class="profile-sec"><h4>' + (isGroup ? 'Directory' : 'Organisation') + '</h4>' +
+            profileRows(org) + '</section>' +
+          '<section class="profile-sec profile-wide"><h4>Account</h4>' + profileRows(account) + '</section>' +
+        '</div>' },
+    { key: 'members', label: memberTitle + ' (' + members.length + ')', body:
+        '<div class="profile-grid">' +
+          '<section class="profile-sec profile-wide">' + memberBody + '</section>' +
+        '</div>' }
+  ];
+
+  var strip = '<div class="profile-tabs" role="tablist">' +
+    panes.map(function (p, i) {
+      return '<button class="profile-tab' + (i === 0 ? ' is-on' : '') + '" type="button" ' +
+             'role="tab" aria-selected="' + (i === 0 ? 'true' : 'false') + '" ' +
+             'data-ptab="' + esc(p.key) + '">' + esc(p.label) + '</button>';
+    }).join('') + '</div>';
+
+  var bodies = panes.map(function (p, i) {
+    return '<div class="profile-pane" data-ppane="' + esc(p.key) + '"' +
+           (i === 0 ? '' : ' hidden') + '>' + p.body + '</div>';
+  }).join('');
+
   return tags +
-    // Actions above the content, not below it. With six group memberships the
-    // buttons were past the fold, so the most-used controls moved further
-    // away the more there was to read - exactly backwards.
+    // Actions above the content and OUTSIDE the tab strip. They apply to the
+    // user, not to a tab - moving them inside one would hide half of them
+    // depending on which tab happened to be open. With six group memberships
+    // they were already past the fold, so the most-used controls moved
+    // further away the more there was to read - exactly backwards.
     '<div class="set-actions profile-actions" id="profileActions"></div>' +
-    '<div class="profile-grid">' +
-      '<section class="profile-sec"><h4>Identity</h4>' + profileRows(identity) + '</section>' +
-      '<section class="profile-sec"><h4>' + (isGroup ? 'Directory' : 'Organisation') + '</h4>' +
-        profileRows(org) + '</section>' +
-      '<section class="profile-sec profile-wide"><h4>Account</h4>' + profileRows(account) + '</section>' +
-      '<section class="profile-sec profile-wide">' +
-        '<h4>' + esc(memberTitle) + ' (' + members.length + ')</h4>' + memberBody + '</section>' +
-    '</div>';
+    strip + bodies;
+}
+
+function wireProfileTabs() {
+  var strip = el('.profile-tabs');
+  if (!strip) { return; }
+
+  strip.addEventListener('click', function (e) {
+    var btn = e.target.closest('.profile-tab');
+    if (!btn) { return; }
+
+    var key = btn.getAttribute('data-ptab');
+    var tabs = strip.querySelectorAll('.profile-tab');
+    var i;
+    for (i = 0; i < tabs.length; i++) {
+      var on = (tabs[i] === btn);
+      tabs[i].className = 'profile-tab' + (on ? ' is-on' : '');
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+
+    var panes = document.querySelectorAll('[data-ppane]');
+    for (i = 0; i < panes.length; i++) {
+      panes[i].hidden = (panes[i].getAttribute('data-ppane') !== key);
+    }
+  });
 }
 
 function wireProfile(d, isGroup, rowId) {
+  wireProfileTabs();
+
   // The same actions the detail pane offers, so there is one set of verbs in
   // the console and they behave identically wherever they are pressed.
   var actions = isGroup
@@ -2954,6 +3008,66 @@ function renderSettings() {
       '<div class="set-result" id="portResult"></div>' +
       '<div id="portCommands"></div>' });
 
+  // ---- Roles ----
+  // Scope is DSMT's own settings and nothing else. The copy says so at the
+  // top, because a role that looks like a directory permission and is not
+  // would be relied on as one.
+  var r = s.roles || {};
+  var roleGroups = asArray(r.groups);
+
+  var roleRows = '';
+  for (var ri = 0; ri < roleGroups.length; ri++) {
+    var rg = roleGroups[ri];
+    roleRows +=
+      '<div class="role-row" data-sid="' + esc(rg.sid) + '">' +
+        '<div class="role-main">' +
+          '<strong>' + esc(rg.name || rg.sid) + '</strong>' +
+          (rg.present
+            ? '<div class="role-note">' + esc(rg.ou || '') + '</div>'
+            : '<div class="role-missing">Not found in the directory - this entry grants nobody anything.</div>') +
+          '<div class="role-sid">' + esc(rg.sid) + '</div>' +
+        '</div>' +
+        '<button class="btn btn-ghost role-remove" type="button">Remove</button>' +
+      '</div>';
+  }
+  if (!roleGroups.length) {
+    roleRows = '<p class="role-note">No groups configured - every operator who can sign in can change ' +
+               'every DSMT setting.</p>';
+  }
+
+  sections.push({ key: 'roles', label: 'Administrators',
+    hint: (r.configured ? roleGroups.length + ' group(s)' : 'Everyone'), body:
+      '<h2 class="set-h">DSMT administrators</h2>' +
+      '<div class="set-state' + (s.isAdmin ? ' set-state-on' : ' set-state-off') + '">' +
+        '<div class="set-state-head">' +
+          '<span class="set-state-dot"></span>' +
+          '<span>' + (s.isAdmin ? 'You can change DSMT settings' : 'You cannot change DSMT settings') + '</span>' +
+        '</div>' +
+        '<p class="muted">' + esc(s.roleReason || '') + '</p>' +
+      '</div>' +
+      '<p class="dialog-note"><strong>This controls DSMT\'s own settings only</strong> - the database it ' +
+      'points at, the identity mode, the idle timeout, the listening port, HTTPS, and this list. ' +
+      'Nothing in Active Directory governs those, which is why a role here has real teeth.</p>' +
+      '<p class="dialog-note"><strong>It does not affect directory operations.</strong> Every user, ' +
+      'group and password change still runs as the signed-in operator, so Active Directory decides what ' +
+      'they may do - a DSMT role cannot grant a right AD withheld, and cannot take one away either. ' +
+      'Someone not listed here can still open ADUC and do whatever AD permits.</p>' +
+      '<p class="dialog-note">Membership is matched on <strong>SID</strong>, never on name: a group can ' +
+      'be renamed and built-in groups are localised. Nested membership counts. The role is resolved at ' +
+      '<strong>sign-in</strong>, so a change takes effect the next time someone signs in.</p>' +
+      '<div id="roleList">' + roleRows + '</div>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="roleAdd">Add a group (name or DOMAIN\\Name)</label>' +
+        '<input class="input" id="roleAdd" placeholder="DSMT Admins" autocomplete="off"></div>' +
+      '</div>' +
+      '<p class="dialog-note">DSMT refuses to save a list you are not a member of - that would lock you ' +
+      'out immediately, and the only way back would be regedit on the DSMT host.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="roleAddBtn">Add</button>' +
+        '<button class="btn btn-primary" type="button" id="roleSave">Save administrators</button>' +
+      '</div>' +
+      '<div class="set-result" id="roleResult"></div>' });
+
   // ---- HTTPS ----
   // The live transport and the saved intent are shown as two separate facts.
   // They disagree between saving a certificate and restarting, and a screen
@@ -3033,11 +3147,9 @@ function renderSettings() {
 
   sections.push({ key: 'groupfilters', label: 'Group filters', hint: 'Chips on the Groups tab', body:
       '<h2 class="set-h">Group filters</h2>' +
-      '<p class="dialog-note"><strong>Privileged</strong> and <strong>AdminSDHolder</strong> are built in ' +
-      'and cannot be edited - they are facts about Active Directory, not settings. Privileged is matched ' +
-      'on <strong>SID</strong>, never on name: a group called Domain Admins can be renamed, and is ' +
-      'localised on a non-English install, so a name match would find nothing on exactly the domain ' +
-      'where it matters most.</p>' +
+      '<p class="dialog-note">Every filter the Groups tab offers is listed below. The built-in ones are ' +
+      '<strong>read-only</strong> - they are facts about Active Directory, not settings, and each says ' +
+      'what it matches on.</p>' +
       '<p class="dialog-note">Add your own below. A group matches when any term appears in its name, ' +
       'sAMAccountName, description or OU. These are stored on the server, so everyone using this console ' +
       'sees the same filters.</p>' +
@@ -3319,16 +3431,41 @@ function gfFromServer() {
   return out;
 }
 
+function builtinFilterRows() {
+  // The built-ins are listed HERE, on the screen that lists filters, rather
+  // than described in a paragraph above it. They stay read-only and say so:
+  // Privileged is matched on SID precisely because a group called Domain
+  // Admins can be renamed and is localised, so exposing it as an editable
+  // term list would invite someone to break it where it matters most.
+  var rows = asArray(state.groupFilters).filter(function (f) {
+    return f.kind === 'builtin' && f.key !== 'all';
+  });
+  if (!rows.length) { return ''; }
+
+  return rows.map(function (f) {
+    return '<div class="role-row">' +
+             '<div class="role-main">' +
+               '<strong>' + esc(f.label) + '</strong> ' +
+               '<span class="tag">Built in - read only</span>' +
+               '<div class="role-note">' + esc(f.how || '') + '</div>' +
+             '</div>' +
+           '</div>';
+  }).join('');
+}
+
 function renderGroupFilterEditor() {
   var box = $('gfList');
   if (!box) { return; }
 
+  var builtins = builtinFilterRows();
+
   if (!state.gfDraft.length) {
-    box.innerHTML = '<p class="muted-sm">No custom filters yet.</p>';
+    box.innerHTML = builtins +
+      '<p class="muted-sm">No custom filters yet.</p>';
     return;
   }
 
-  box.innerHTML = state.gfDraft.map(function (row, i) {
+  box.innerHTML = builtins + state.gfDraft.map(function (row, i) {
     return '<div class="set-form gf-row">' +
              '<div class="field"><label for="gfName' + i + '">Name</label>' +
              '<input class="input" id="gfName' + i + '" data-gf="' + i + '" data-gffield="label" ' +
@@ -3637,6 +3774,67 @@ function wireSettings(bounds) {
       })
       .catch(function (err) { setResult('portResult', err.message, false); });
   });
+
+  // ---- Roles ----
+  // The pending list lives in the DOM rather than in a variable, so what is
+  // saved is exactly what is on screen.
+  if ($('roleAddBtn')) {
+    $('roleAddBtn').addEventListener('click', function () {
+      var name = $('roleAdd').value.trim();
+      if (!name) { return; }
+
+      var list = $('roleList');
+      if (list.querySelector('p.role-note')) { list.innerHTML = ''; }
+
+      var row = document.createElement('div');
+      row.className = 'role-row';
+      row.setAttribute('data-pending', name);
+      row.innerHTML = '<div class="role-main"><strong>' + esc(name) + '</strong>' +
+                      '<div class="role-note">Not saved yet - the SID is resolved when you save.</div></div>' +
+                      '<button class="btn btn-ghost role-remove" type="button">Remove</button>';
+      list.appendChild(row);
+      $('roleAdd').value = '';
+    });
+  }
+
+  if ($('roleList')) {
+    $('roleList').addEventListener('click', function (e) {
+      var btn = e.target.closest('.role-remove');
+      if (!btn) { return; }
+      var row = btn.closest('.role-row');
+      if (row && row.parentNode) { row.parentNode.removeChild(row); }
+    });
+  }
+
+  if ($('roleSave')) {
+    $('roleSave').addEventListener('click', function () {
+      var rows = $('roleList').querySelectorAll('.role-row');
+      var names = [];
+      for (var i = 0; i < rows.length; i++) {
+        // A saved row is sent back by SID, a pending one by the typed name -
+        // both are re-resolved server-side, so a group renamed since it was
+        // added keeps working and gets its display name refreshed.
+        var sid = rows[i].getAttribute('data-sid');
+        var pending = rows[i].getAttribute('data-pending');
+        names.push(sid || pending);
+      }
+
+      api('/api/settings/roles', { method: 'POST', body: { groups: names } })
+        .then(function (res) {
+          var message;
+          if (!res.count) {
+            message = 'Cleared. Every operator who can sign in can now change every DSMT setting.';
+          } else {
+            message = res.count + ' group(s) saved. This takes effect at each operator\'s next sign-in, ' +
+                      'because the role is resolved once when they sign in.';
+          }
+          if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+          setResult('roleResult', message, res.persisted);
+          loadSettings();
+        })
+        .catch(function (err) { setResult('roleResult', err.message, false); });
+    });
+  }
 
   // ---- HTTPS ----
   if ($('applyHttps')) {
