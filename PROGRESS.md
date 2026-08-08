@@ -1096,6 +1096,15 @@ and the IIS question. Both are in the sections below.
 ---
 
 ## Notes for next session
+- **`CLAUDE.md` was trimmed on 2026-08-08 and the build-handover rules moved
+  to a skill.** The `server/lib/` file list and the SQL table list were
+  removed — they are reconstructible with `ls server/lib/` and
+  `grep "CREATE TABLE" sql/schema.sql`, and the file list had already gone
+  stale (`DsmtAdHealth.ps1`, shipped in 1.17.0, was never added to it). Do not
+  re-add either list: a hand-maintained copy of something the filesystem
+  already answers is what went wrong the first time. The full "Handing over a
+  build" rules now live in `.claude/skills/handing-over-a-build/SKILL.md` —
+  read that skill before giving anyone a download link.
 - **The version lives in exactly one place**: `$script:DsmtVersion` in
   `server/lib/DsmtCommon.ps1`. It reaches the sign-in footer and the About
   dialog through `GET /api/meta`. Never type a version literal anywhere else.
