@@ -1,9 +1,44 @@
 ---
 name: handing-over-a-build
-description: Rules for handing over a DSMT build — naming a release branch, the exact zip filename GitHub will produce, and building an archive locally. Use whenever a download link, release branch, zip archive, tag or release for DSMT-V3 is requested.
+description: Rules for handing over a DSMT build - the required DSMT.v<version>.zip filename, which a GitHub link can never produce, plus release branch naming and building the archive locally. Use whenever a download link, build, release branch, zip archive, tag or release for DSMT-V3 is requested.
 ---
 
 # Handing over a build
+
+## The filename is `DSMT.v<version>.zip`. This is not negotiable.
+
+`DSMT.v1.26.0.zip`. Dot before the `v`, no space, no hyphen, no repo name.
+Asked for explicitly on 2026-08-08 after a GitHub branch link was handed over
+instead, and it is the first thing to get right.
+
+**A GitHub archive URL can never produce it.** GitHub always names an archive
+`<repo>-<ref>.zip`, and this repo is `DSMT-V3`, so the best a branch link can
+do is `DSMT-V3-1.26.0.zip`. Do not hand over a branch link and hope the name
+is close enough — it is the wrong name, every time.
+
+**So build it locally and send the file:**
+
+    git archive --format=zip -o DSMT.v1.26.0.zip refs/heads/1.26.0
+
+Then send it with `SendUserFile`. Two details that bite:
+
+- Use `refs/heads/<version>`, not the bare version — git reads `1.26.0` as an
+  ambiguous revision and fails with `Needed a single revision`.
+- **Do not pass `--prefix`** — files go at the root of the archive, so
+  extracting gives `server\`, `web\`, `docs\` directly rather than a wrapper
+  folder to dig through. (GitHub's own archives always add that wrapper; ours
+  must not.) Verify with `unzip -l` before sending.
+
+A release asset would also allow a free filename, but it needs a tag and an
+upload, and **tags cannot be pushed from the dev container** (the git proxy
+answers 403). Tag and release creation is a request to the operator, never a
+step to attempt silently.
+
+Still cut the release branch named exactly the version number — it is how the
+release is anchored in the repo, and the GitHub link stays useful as a
+secondary. Just never present that link as the deliverable on its own.
+
+---
 
 Whenever a download link is given for this project, **name it `DSMT <version>`
 first** — "DSMT 1.13.0", then the link. A bare GitHub URL does not say which
