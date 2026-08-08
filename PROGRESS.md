@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.24.0` — matches the top entry of `CHANGELOG.md` and
+`1.25.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -266,10 +266,14 @@ Ordered by value for the effort, highest first.
    "No logon in 90 days") turns a repeated five-click task into one. Local to
    the browser is enough to start; SQL later would share them across operators.
 2. ~~Undo the last action~~ — **built in 1.11.0.**
-3. **Bulk import from CSV.** Named in the project description and still not
-   built. Requires a dry-run pass that reports what *would* happen before
-   anything is written; an import that half-succeeds with no preview is the
-   worst possible shape for this feature.
+3. ~~Bulk import from CSV~~ — **the import itself shipped early; the dry-run
+   it always required was added in 1.25.0.** Note for a future session: the
+   import route serves BOTH passes, so a new validation rule must be added to
+   the dry-run branch AND remain true of the write branch, or the preview and
+   the import will disagree - which is worse than having no preview. The
+   duplicate-within-the-file check exists only in the dry-run because AD
+   itself catches it on the write, with an error that names the account but
+   not the file.
 4. **Password expiry and stale-account report.** "Expires in N days",
    "no logon in 90 days", "password never expires" — read straight from
    attributes DSMT already fetches. Mostly a query and a view.

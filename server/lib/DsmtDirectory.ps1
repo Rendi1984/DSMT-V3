@@ -950,3 +950,55 @@ function Remove-DsmtObject {
 
     Remove-ADObject @ad -Identity $obj.DistinguishedName -Recursive -Confirm:$false -ErrorAction Stop
 }
+
+function Test-DsmtUserExists {
+    <#
+    .SYNOPSIS
+        True when an account with this samAccountName already exists.
+    .DESCRIPTION
+        Used by the CSV import preview. Deliberately returns a BOOLEAN and
+        swallows only the not-found case: any other failure (no rights, no
+        controller) is re-thrown, because reporting "does not exist" when the
+        truth is "could not check" would turn a preview into a lie and the
+        import would then fail on a row the preview called safe.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $SamAccountName,
+        [Parameter(Mandatory = $true)] $Credential
+    )
+
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
+
+    # -Filter rather than -Identity: -Identity throws when the object is
+    # absent, and "absent" is the normal answer here, not an error.
+    $escaped = ConvertTo-DsmtLdapEscape -Value $SamAccountName
+    $found = @(Get-ADUser @ad -LDAPFilter ('(sAMAccountName=' + $escaped + ')') -ResultSetSize 1 -ErrorAction Stop)
+
+    return ($found.Count -gt 0)
+}
+
+function Test-DsmtOuExists {
+    <#
+    .SYNOPSIS
+        True when a distinguished name resolves to a container that can hold
+        a user. Accepts an OU or a plain container such as CN=Users.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $DistinguishedName,
+        [Parameter(Mandatory = $true)] $Credential
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DistinguishedName)) { return $false }
+
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
+
+    try {
+        $obj = Get-ADObject @ad -Identity $DistinguishedName -Properties 'objectClass' -ErrorAction Stop
+    } catch {
+        return $false
+    }
+    if ($null -eq $obj) { return $false }
+
+    $class = [string]$obj.objectClass
+    return ($class -eq 'organizationalUnit' -or $class -eq 'container' -or $class -eq 'domainDNS')
+}

@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.25.0** | 2026-08-08 | **CSV import previews before it writes**: every row checked against the live directory, nothing written until the preview is seen | Restart + refresh |
 | **1.24.0** | 2026-08-08 | **DSMT administrators**: AD groups decide who may change DSMT's own settings. Built-in group filters are listed instead of described; the profile window gets tabs | Restart + refresh |
 | **1.23.0** | 2026-08-08 | **HTTPS**, configured from Settings after installation: pick a certificate from the machine store and bind it to a port. The console never receives a private key | Restart + refresh |
 | **1.22.0** | 2026-08-08 | Every setting moves into the registry, one central place; a JSON view for reading and diffing | Reinstall |
@@ -71,6 +72,58 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.25.0 — 2026-08-08
+
+### The CSV import shows what it would do, before it does it
+
+Bulk CSV import has existed since early on and it worked: it created the
+accounts and wrote an audit record per row. What it did not have is the thing
+`PROGRESS.md` named as mandatory when the feature was proposed - *"requires a
+dry-run pass that reports what would happen before anything is written; an
+import that half-succeeds with no preview is the worst possible shape for this
+feature."* It shipped without one, so the operator found out what the import
+was going to do by reading what it had already done.
+
+The dialog is now two steps. The confirm button says **Preview** until a
+preview has been seen; only then does it become **Create N user(s)**.
+
+Each row is checked against the live directory and comes back as *create* or
+*skip* with the reason:
+
+- the `SamAccountName` column is empty;
+- **the same samAccountName appears earlier in the same file** - caught here
+  and nowhere else, because AD would create the first and reject the second
+  with a duplicate error that names the account but not the file;
+- an account with that samAccountName already exists;
+- the target OU does not resolve, on the row or as the fallback.
+
+Two things it deliberately does not claim:
+
+- **It is a preview, not a guarantee**, and says so on screen. The directory
+  can change between the check and the write, and AD still has the last word
+  on the password policy and on whether this operator may create anything in
+  that OU.
+- **Any edit invalidates it.** Changing the CSV, the file or the OU resets the
+  button to Preview. Otherwise editing after previewing would arm the write
+  button for a file nobody has seen checked - the same failure one step later.
+
+`Test-DsmtUserExists` re-throws anything that is not "not found" rather than
+answering `$false`: reporting "does not exist" when the truth is "could not
+check" would make the preview lie, and the import would then fail on a row the
+preview called safe.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the three files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 

@@ -1345,6 +1345,98 @@ function Invoke-DsmtApi {
                     return
                 }
 
+                # ---- DRY RUN --------------------------------------------
+                # An import that half-succeeds with no preview is the worst
+                # possible shape for this feature: the operator finds out what
+                # it was going to do by reading what it already did. So every
+                # row is checked against the live directory FIRST, nothing is
+                # written, and the verdict comes back per row.
+                #
+                # This is a preview, not a guarantee. It says so on the screen:
+                # the directory can change between the check and the write, and
+                # AD still has the last word on the password policy and on
+                # whether this operator may create anything in that OU.
+                $dryRun = [bool](Get-DsmtBodyValue -Body $body -Name 'dryRun' -Default $false)
+
+                if ($dryRun) {
+                    $preview = @()
+                    $wouldCreate = 0
+                    $seen = @{}
+
+                    foreach ($row in $rows) {
+                        $rowSam     = ([string]$row.SamAccountName).Trim()
+                        $rowDisplay = ([string]$row.DisplayName).Trim()
+                        $rowOu      = ([string]$row.OU).Trim()
+                        if ([string]::IsNullOrWhiteSpace($rowOu)) { $rowOu = $ou }
+                        if ([string]::IsNullOrWhiteSpace($rowDisplay)) { $rowDisplay = $rowSam }
+
+                        $verdict = 'create'
+                        $why     = ''
+
+                        if ([string]::IsNullOrWhiteSpace($rowSam)) {
+                            $verdict = 'skip'
+                            $why     = 'SamAccountName column is empty.'
+                        } elseif ($seen.ContainsKey($rowSam.ToLower())) {
+                            # Caught here and nowhere else: AD would create the
+                            # first and reject the second with a duplicate
+                            # error that names the account but not the file.
+                            $verdict = 'skip'
+                            $why     = 'This samAccountName appears earlier in the same file.'
+                        } elseif ([string]::IsNullOrWhiteSpace($rowOu)) {
+                            $verdict = 'skip'
+                            $why     = 'No OU on the row and no target OU selected.'
+                        } else {
+                            $seen[$rowSam.ToLower()] = $true
+
+                            $exists = $false
+                            try {
+                                $exists = Test-DsmtUserExists -SamAccountName $rowSam -Credential $session.Credential
+                            } catch {
+                                $exists = $false
+                            }
+                            if ($exists) {
+                                $verdict = 'skip'
+                                $why     = 'An account with this samAccountName already exists.'
+                            } else {
+                                $ouOk = $false
+                                try {
+                                    $ouOk = Test-DsmtOuExists -DistinguishedName $rowOu -Credential $session.Credential
+                                } catch {
+                                    $ouOk = $false
+                                }
+                                if (-not $ouOk) {
+                                    $verdict = 'skip'
+                                    $why     = 'The target OU could not be found: ' + $rowOu
+                                }
+                            }
+                        }
+
+                        if ($verdict -eq 'create') { $wouldCreate++ }
+
+                        $preview += [ordered]@{
+                            sam       = $rowSam
+                            display   = $rowDisplay
+                            ou        = $rowOu
+                            generated = [string]::IsNullOrWhiteSpace([string]$row.Password)
+                            verdict   = $verdict
+                            why       = $why
+                        }
+                    }
+
+                    Write-DsmtLog -Message ($session.Account + ' previewed a CSV import of ' +
+                                            [string]$rows.Count + ' row(s): ' + [string]$wouldCreate + ' would be created')
+
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok          = $true
+                        dryRun      = $true
+                        rows        = @($preview)
+                        total       = $rows.Count
+                        wouldCreate = $wouldCreate
+                        wouldSkip   = ($rows.Count - $wouldCreate)
+                    }
+                    return
+                }
+
                 $controller = ''
                 try { $controller = Get-DsmtServer -Credential $session.Credential } catch { }
 

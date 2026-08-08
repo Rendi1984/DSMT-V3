@@ -34,6 +34,9 @@ var state = {
   detail: null,
   checked: {},
   visibleCols: null,
+  // True once the CSV import dialog has shown a dry-run result for exactly
+  // the CSV and OU currently in the form. Reset on open and on any edit.
+  csvPreviewed: false,
   ous: null,
   auditRows: [],
   auditTotal: 0,
@@ -1798,11 +1801,37 @@ function actionCreateGroup() {
   });
 }
 
+function importPreviewHtml(res) {
+  var rows = asArray(res.rows);
+
+  var body = rows.map(function (r) {
+    var ok = (r.verdict === 'create');
+    return '<li>' +
+      '<span class="' + (ok ? 'result-ok' : 'result-bad') + '">' + (ok ? 'create' : 'skip') + '</span>' +
+      '<span><strong>' + esc(r.sam || '(blank)') + '</strong>' +
+      (ok ? ' &rarr; ' + esc(r.ou) + (r.generated ? ' (password generated)' : '') : '') +
+      (r.why ? ' - ' + esc(r.why) : '') +
+      '</span></li>';
+  }).join('');
+
+  return '<div class="set-state' + (res.wouldSkip ? ' set-state-off' : ' set-state-on') + '">' +
+           '<div class="set-state-head"><span class="set-state-dot"></span>' +
+           '<span>' + res.wouldCreate + ' of ' + res.total + ' rows would be created' +
+           (res.wouldSkip ? ', ' + res.wouldSkip + ' skipped' : '') + '</span></div>' +
+         '</div>' +
+         '<ul class="result-list">' + body + '</ul>' +
+         '<p class="dialog-note"><strong>Nothing has been written yet.</strong> This is a preview, not a ' +
+         'guarantee: the directory can change between this check and the import, and Active Directory ' +
+         'still has the last word on the password policy and on whether you may create accounts in ' +
+         'that OU.</p>';
+}
+
 function actionImportCsv() {
+  state.csvPreviewed = false;
   withOus(function () {
     openDialog({
       title: 'Bulk CSV import',
-      confirmLabel: 'Import',
+      confirmLabel: 'Preview',
       body: '<p class="dialog-note">Header row required. Recognised columns: ' +
             '<strong>SamAccountName</strong> (required), DisplayName, GivenName, Surname, ' +
             'Department, Title, Password, OU. A row without a Password gets a generated one; ' +
@@ -1811,21 +1840,64 @@ function actionImportCsv() {
             '<input class="input" id="dlgFile" type="file" accept=".csv,text/csv"></div>' +
             '<div class="field"><label for="dlgCsv">or paste the CSV</label>' +
             '<textarea class="input" id="dlgCsv" placeholder="SamAccountName,DisplayName,Department"></textarea></div>' +
-            ouSelect(null) + reasonField(),
+            ouSelect(null) + reasonField() +
+            '<div id="dlgPreview"></div>',
       onOpen: function () {
+        // Any edit invalidates the preview. Without this, changing the CSV
+        // after previewing would arm the write button for a file nobody has
+        // seen checked - which is the exact failure the preview exists to
+        // prevent, just one step later.
+        var invalidate = function () {
+          if (!state.csvPreviewed) { return; }
+          state.csvPreviewed = false;
+          $('dlgPreview').innerHTML = '';
+          $('dialogConfirm').hidden = false;
+          $('dialogConfirm').textContent = 'Preview';
+        };
+
+        $('dlgCsv').addEventListener('input', invalidate);
+        $('dlgOu').addEventListener('change', invalidate);
+
         $('dlgFile').addEventListener('change', function (e) {
           var file = e.target.files && e.target.files[0];
           if (!file) { return; }
           var reader = new FileReader();
-          reader.onload = function () { $('dlgCsv').value = String(reader.result); };
+          reader.onload = function () {
+            $('dlgCsv').value = String(reader.result);
+            invalidate();
+          };
           reader.readAsText(file);
         });
       },
+      // Two steps, and the first one is not optional. An import that
+      // half-succeeds with no preview means the operator finds out what it
+      // was going to do by reading what it already did. The confirm button
+      // says "Preview" until a preview has been seen; only then does it
+      // become the button that writes.
       onConfirm: function () {
         var reason = readReason();
         var csv = $('dlgCsv').value.trim();
         if (!csv) { dialogError('Choose a file or paste the CSV.'); return; }
         if (!reason) { dialogError('A reason is required.'); return; }
+
+        if (!state.csvPreviewed) {
+          api('/api/users/import', {
+            method: 'POST',
+            body: { csv: csv, ou: $('dlgOu').value, reason: reason, dryRun: true }
+          }).then(function (res) {
+            $('dlgPreview').innerHTML = importPreviewHtml(res);
+            state.csvPreviewed = true;
+
+            if (!res.wouldCreate) {
+              $('dialogConfirm').hidden = true;
+              dialogError('Nothing in this file would be created. Fix the rows above and preview again.');
+            } else {
+              $('dialogConfirm').textContent = 'Create ' + res.wouldCreate + ' user(s)';
+            }
+          }).catch(function (err) { dialogError(err.message); });
+          return;
+        }
+
         runAction('/api/users/import', {
           csv: csv, ou: $('dlgOu').value, reason: reason
         }, 'Bulk CSV import', refreshAfterWrite);
