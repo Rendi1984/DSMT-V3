@@ -296,10 +296,14 @@ path does not exist.
 
 Two behaviours worth knowing before you switch it on:
 
-- **If the certificate is missing or unusable, DSMT refuses to start** rather
-  than falling back to HTTP. A silent downgrade would leave operators typing
-  domain passwords into a console that looks configured and is not encrypted.
-  The startup banner names the port, the fix, and how to switch HTTPS off.
+- **If the certificate is missing, expired or unbound, DSMT starts on plain
+  HTTP rather than refusing to start**, so a certificate that expires
+  overnight does not take the console down with it — and the screen where you
+  fix it stays reachable. It is not quiet about it: the startup banner names
+  the cause and the fix, the log records it at ERROR, and a bar across the top
+  of every screen, including sign-in, says the connection is not encrypted.
+  A browser is not silently downgraded either — opening `https://` against a
+  plain HTTP listener fails the TLS handshake rather than sending anything.
 - **DSMT will not replace an SSL binding it did not create.** If another
   product on the host already owns that port, it says so and stops.
 

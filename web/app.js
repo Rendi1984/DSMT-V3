@@ -345,6 +345,28 @@ function showApp() {
 // Version - one value, from the API, painted everywhere it is shown
 // ---------------------------------------------------------------------------
 
+function applyInsecureBar(data) {
+  // Painted from /api/meta and from /api/session, so it is up before anyone
+  // types a password and stays up afterwards. Reading both is deliberate:
+  // the sign-in screen is exactly where the warning matters most.
+  var bar = $('insecureBar');
+  if (!bar || !data) { return; }
+
+  if (!data.httpsDegraded) {
+    bar.hidden = true;
+    bar.innerHTML = '';
+    return;
+  }
+
+  bar.innerHTML =
+    '<strong>This connection is not encrypted.</strong> ' +
+    'HTTPS is configured on this server but is not working, so DSMT fell back to plain HTTP - ' +
+    'domain passwords and directory data cross the network in clear text. ' +
+    '<span class="insecure-cause">' + esc(data.httpsDegradedCause || '') + '</span> ' +
+    '<span class="insecure-fix">' + esc(data.httpsDegradedFix || '') + '</span>';
+  bar.hidden = false;
+}
+
 function applyVersion(version, publisher) {
   if (version) {
     state.version = version;
@@ -368,6 +390,7 @@ function boot() {
   api('/api/meta', { allow401: true }).then(function (meta) {
     if (meta) {
       applyVersion(meta.version, meta.publisher);
+      applyInsecureBar(meta);
       state.storage = meta.storage || null;
       state.identity = meta.identity || null;
       if (meta.sessionMinutes) { state.sessionMinutes = meta.sessionMinutes; }
@@ -385,6 +408,7 @@ function boot() {
   api('/api/session', { allow401: true }).then(function (data) {
     if (!data || !data.ok) { signOutLocal(); return; }
     applyVersion(data.version, data.publisher);
+    applyInsecureBar(data);
     if (data.sessionMinutes) { state.sessionMinutes = data.sessionMinutes; }
     state.user = data.user;
     enterApp();
@@ -3162,9 +3186,18 @@ function renderSettings() {
     '</div>';
 
   if (!liveHttps) {
-    httpsState += '<p class="set-warn">Operators sign in with their <strong>domain password</strong>. ' +
-                  'Until HTTPS is on, that password and every directory record cross the network in ' +
-                  '<strong>clear text</strong>.</p>';
+    // Two different situations, and conflating them would be the fake-data
+    // failure again: "HTTPS was never set up" and "HTTPS is set up and BROKEN"
+    // need different actions from the reader.
+    if (h.enabled) {
+      httpsState += '<div class="error-box"><strong>HTTPS is switched on but is not working, so ' +
+                    'DSMT fell back to plain HTTP.</strong> The console is up so you can fix it here, ' +
+                    'but this connection is not encrypted.</div>';
+    } else {
+      httpsState += '<p class="set-warn">Operators sign in with their <strong>domain password</strong>. ' +
+                    'Until HTTPS is on, that password and every directory record cross the network in ' +
+                    '<strong>clear text</strong>.</p>';
+    }
   }
 
   if (h.warning) {
@@ -3207,9 +3240,11 @@ function renderSettings() {
         'certificate itself. It will show you the command to run instead. DSMT running as the ' +
         'installed Windows service does not have this limitation.</p>') +
       '<p class="dialog-note">A listener cannot change scheme or port while it is running, so this is ' +
-      'saved and applied on the next start. <strong>If the certificate is wrong, DSMT refuses to start ' +
-      'rather than falling back to plain HTTP</strong> - a silent downgrade would be invisible, which ' +
-      'is the worst outcome for this particular setting.</p>' +
+      'saved and applied on the next start. <strong>If the certificate is ever missing, expired or ' +
+      'unbound, DSMT starts on plain HTTP rather than refusing to start</strong> - so a certificate ' +
+      'that expires overnight does not take the console down with it. It is not quiet about it: the ' +
+      'startup banner, the log and a bar across the top of every screen all say the connection is ' +
+      'not encrypted until it is fixed.</p>' +
       '<div class="set-actions">' +
         '<button class="btn btn-primary" type="button" id="applyHttps">Enable HTTPS</button>' +
         (h.enabled ? '<button class="btn btn-ghost" type="button" id="disableHttps">Switch HTTPS off</button>' : '') +
@@ -4196,6 +4231,7 @@ function wireEvents() {
       button.disabled = false;
       saveToken(data.token);
       applyVersion(data.version, data.publisher);
+      applyInsecureBar(data);
       state.user = data.user;
       $('loginPass').value = '';
       enterApp();

@@ -9,6 +9,14 @@
 </head>
 <body>
 
+<!-- HTTPS is configured but not working, so this connection is not encrypted.
+     Deliberately the FIRST element in the body and in normal document flow -
+     not fixed, not an overlay, not positioned. The 1.7.5 incident was every
+     overlay in this console silently rendering nowhere; a warning that can
+     disappear the same way is worse than no warning at all. It has no dismiss
+     control on purpose. -->
+<div id="insecureBar" class="insecure-bar" hidden></div>
+
 <!-- ===================== Sign in ===================== -->
 <section id="loginView" class="login" hidden>
   <div class="login-hero">

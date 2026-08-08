@@ -610,6 +610,11 @@ function Invoke-DsmtApi {
             publisher = $cfg.Publisher
             domain    = $cfg.Domain
             product   = 'DSMT - Directory Service Management Tool'
+            # On the sign-in screen too, not only after signing in: the
+            # password typed there is the one this warning is about.
+            httpsDegraded      = $cfg.HttpsDegraded
+            httpsDegradedCause = $cfg.HttpsDegradedCause
+            httpsDegradedFix   = $cfg.HttpsDegradedFix
             identity  = @{
                 mode        = $cfg.IdentityMode
                 serviceUser = ($env:USERDOMAIN + '\' + $env:USERNAME)
@@ -709,6 +714,9 @@ function Invoke-DsmtApi {
             isAdmin        = $session.IsAdmin
             roleReason     = $session.RoleReason
             roleConfigured = $session.RoleConfigured
+            httpsDegraded      = $cfg.HttpsDegraded
+            httpsDegradedCause = $cfg.HttpsDegradedCause
+            httpsDegradedFix   = $cfg.HttpsDegradedFix
         }
         return
     }

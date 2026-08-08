@@ -761,6 +761,29 @@ body { overflow: hidden; }
 }
 .name-link:hover { color: var(--color-accent-200); border-bottom-color: var(--color-accent-500); }
 
+/* "This connection is not encrypted."
+
+   The most conservative rule in this file, on purpose. It is a plain block in
+   normal document flow - no position, no inset, no fixed, no grid, no
+   transform. Every one of those is a way for an element to end up somewhere
+   invisible on a browser that drops the property, which is precisely what
+   1.7.5 was, and a security warning that silently renders nowhere is worse
+   than having none: it makes the console look safe.
+
+   It also has no dismiss control. This state is not an annoyance to be
+   acknowledged, it is a fact about the connection, and it ends when HTTPS
+   works again. */
+.insecure-bar {
+  display: block;
+  background: var(--color-accent-900);
+  border-bottom: 2px solid var(--color-accent-500);
+  color: var(--color-accent-100);
+  padding: var(--space-3) var(--space-4);
+  font-size: 13px; line-height: 1.6;
+}
+.insecure-bar[hidden] { display: none; }
+.insecure-cause, .insecure-fix { display: block; color: var(--color-accent-200); }
+
 .profile-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
 
 /* Tab strip inside the profile window. Physical properties only and no

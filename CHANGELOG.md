@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.26.0** | 2026-08-08 | A broken certificate no longer takes the console down: DSMT falls back to plain HTTP and says so in the banner, the log, and a bar on every screen | Restart + refresh |
 | **1.25.1** | 2026-08-08 | The HTTPS refusal banner told you to open a console that is not running. `-NoHttps` recovery switch, and the banner now names the actual cause | Restart |
 | **1.25.0** | 2026-08-08 | **CSV import previews before it writes**: every row checked against the live directory, nothing written until the preview is seen | Restart + refresh |
 | **1.24.0** | 2026-08-08 | **DSMT administrators**: AD groups decide who may change DSMT's own settings. Built-in group filters are listed instead of described; the profile window gets tabs | Restart + refresh |
@@ -73,6 +74,68 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.26.0 — 2026-08-08
+
+### A broken certificate no longer takes the console down
+
+1.23.0 made DSMT **refuse to start** when HTTPS was configured and the
+certificate was missing, expired or unbound. 1.25.1 papered over the worst of
+that with a `-NoHttps` recovery switch. Both were treating a symptom: the
+refusal itself was the wrong call, and it is reversed here.
+
+The reasoning behind it was wrong twice over.
+
+**It was not actually silent.** A browser opening `https://` against a plain
+HTTP listener fails the TLS handshake and shows an error — it does not quietly
+send the password in clear text. The real risk is a human retyping `http://`
+to make it work and then forgetting, which is a reason to warn loudly, not a
+reason to take the console down.
+
+**And it weighed one failure against nothing.** The other failure is that the
+domain administration console is dead because a certificate expired — far
+likelier, immediate, and it disables the very screen where the fix lives.
+Refusing to start meant the recovery path for "Settings → HTTPS" was "you
+cannot open Settings".
+
+So DSMT now starts, works, and makes the degraded state impossible to miss:
+
+- **The startup banner names the cause**, not just the symptom: the
+  certificate was never chosen, it is gone from the store, it is present but
+  unusable (with the reason), or it is fine and only the binding is missing —
+  in which case it prints the rebind command with the real thumbprint.
+- **The log records it at ERROR** on every start, so it shows up in a service
+  install where nobody sees a console.
+- **A bar across the top of every screen, including sign-in**, states that the
+  connection is not encrypted, with the cause and the fix. It has no dismiss
+  control: this is a fact about the connection, not a notice to acknowledge,
+  and it clears itself when HTTPS works.
+- **Settings → HTTPS distinguishes "never set up" from "set up and broken."**
+  Conflating those would be the fake-data failure again — they call for
+  different actions from whoever is reading.
+
+The warning bar is the most conservative rule in `app.css` on purpose: a plain
+block in normal document flow, no `position`, no `inset`, no `fixed`, no grid,
+no transform. Every one of those is a way for an element to end up invisible on
+a browser that drops the property — which is exactly what 1.7.5 was — and a
+security warning that silently renders nowhere is worse than none, because it
+makes the console look safe.
+
+**`-NoHttps` is removed.** It existed only to escape the refusal, and there is
+nothing left to escape.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 
