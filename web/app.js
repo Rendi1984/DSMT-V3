@@ -47,6 +47,8 @@ var state = {
   userFilter: 'all',
   userFilters: [],
   userTotal: 0,
+  reports: [],
+  report: null,
   auditRange: 'all',
   auditFrom: null,
   auditTo: null,
@@ -831,6 +833,158 @@ function loadRows() {
    Test-DsmtPrivilegedGroup - because group names are renameable and localised.
    --------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------
+   Saved searches (proposal 1).
+
+   A saved search is the three things that define what is on screen: which
+   tab, the search text, and the filter chip. Restoring it restores exactly
+   that and nothing else - it does not carry a selected row or a scroll
+   position, because a preset that moves your selection is a preset people
+   stop trusting.
+
+   STORED PER BROWSER, in localStorage, and that is a deliberate first step
+   rather than an oversight: the proposal says so, and it means no server
+   change and no shared state to get wrong. If these ever move to SQL so a
+   team shares them, they become configuration and need the same treatment as
+   the group filters - defined once on the server, not mirrored here.
+
+   The tab is part of the record because a users filter key means nothing on
+   the Groups tab; applying one restores its own tab first.
+   --------------------------------------------------------------------------- */
+
+var SEARCH_KEY = 'dsmt.searches';
+
+function savedSearches() {
+  var raw = null;
+  try { raw = JSON.parse(window.localStorage.getItem(SEARCH_KEY) || '[]'); } catch (e) { raw = null; }
+  if (!raw || !raw.length) { return []; }
+
+  // Anything that is not a complete record is dropped rather than half-used.
+  // A preset that restores a tab and silently loses its filter is worse than
+  // one that is not offered.
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var r = raw[i];
+    if (!r || !r.name || !r.tab) { continue; }
+    out.push({ name: String(r.name), tab: String(r.tab), q: String(r.q || ''), filter: String(r.filter || 'all') });
+  }
+  return out;
+}
+
+function writeSavedSearches(list) {
+  try { window.localStorage.setItem(SEARCH_KEY, JSON.stringify(list)); } catch (e) { /* private mode */ }
+}
+
+function renderSavedSearches() {
+  var box = $('savedSearches');
+  if (!box) { return; }
+
+  var list = savedSearches().filter(function (p) { return p.tab === state.tab; });
+  if (!list.length) { box.hidden = true; box.innerHTML = ''; return; }
+
+  box.hidden = false;
+  box.innerHTML = '<span class="saved-label">Saved</span>' + list.map(function (p, i) {
+    var where = p.q ? ('"' + p.q + '"') : 'no text';
+    return '<span class="saved-chip">' +
+             '<button class="chip" type="button" data-saved="' + i + '" title="' +
+             esc(where + ', filter: ' + p.filter) + '">' + esc(p.name) + '</button>' +
+             '<button class="saved-drop" type="button" data-savedrm="' + i + '" ' +
+             'aria-label="Delete the saved search ' + esc(p.name) + '">&times;</button>' +
+           '</span>';
+  }).join('');
+
+  box.onclick = function (e) {
+    var drop = e.target.closest('[data-savedrm]');
+    if (drop) {
+      var victim = list[parseInt(drop.getAttribute('data-savedrm'), 10)];
+      writeSavedSearches(savedSearches().filter(function (p) {
+        return !(p.name === victim.name && p.tab === victim.tab);
+      }));
+      renderSavedSearches();
+      return;
+    }
+
+    var chip = e.target.closest('[data-saved]');
+    if (!chip) { return; }
+    applySavedSearch(list[parseInt(chip.getAttribute('data-saved'), 10)]);
+  };
+}
+
+function applySavedSearch(preset) {
+  if (!preset) { return; }
+
+  // The state is set BEFORE anything loads, and the load happens exactly once.
+  //
+  // The obvious order - setTab() then set the query then loadRows() - fires
+  // two requests: setTab() loads on its own with the OLD query, then this
+  // loads with the new one. Both are for the same tab, so loadRows()'s own
+  // "did the tab change under me" guard does not catch it, and whichever
+  // response arrives last wins. That is a race that shows the wrong rows
+  // occasionally and is close to impossible to reproduce on purpose.
+  //
+  // The filter is written by tab explicitly rather than through
+  // setActiveFilter(), which keys off state.tab and would otherwise write the
+  // preset's filter onto whichever tab happens to be open right now.
+  if (preset.tab === 'groups') { state.groupFilter = preset.filter; }
+  else { state.userFilter = preset.filter; }
+
+  state.query = preset.q;
+  $('search').value = preset.q;
+  state.selectedId = null;
+
+  if (state.tab !== preset.tab) {
+    setTab(preset.tab);   // loads once, with the state above already in place
+    return;
+  }
+
+  closeDetail();
+  loadRows();
+}
+
+function saveCurrentSearch() {
+  var current = activeFilter() || 'all';
+  if (!state.query && current === 'all') {
+    toast('There is nothing to save - type a search or pick a filter first.', 'bad');
+    return;
+  }
+
+  var suggested = state.query || '';
+  var defs = asArray(state.tab === 'groups' ? state.groupFilters : state.userFilters);
+  var chip = defs.filter(function (f) { return f.key === current; })[0];
+  if (chip && current !== 'all') {
+    suggested = suggested ? (chip.label + ' - ' + suggested) : chip.label;
+  }
+
+  openDialog({
+    title: 'Save this search',
+    confirmLabel: 'Save',
+    body: '<p class="dialog-note">Saves the tab, the search text and the filter, so one click puts ' +
+          'this view back. Stored in <strong>this browser</strong> only.</p>' +
+          '<dl class="detail-fields">' +
+            settingsRow('Tab', state.tab) +
+            settingsRow('Search text', state.query || '(none)') +
+            settingsRow('Filter', chip ? chip.label : current) +
+          '</dl>' +
+          '<div class="field"><label for="dlgSearchName">Name</label>' +
+          '<input class="input" id="dlgSearchName" autocomplete="off" value="' + esc(suggested) + '"></div>',
+    onConfirm: function () {
+      var name = $('dlgSearchName').value.trim();
+      if (!name) { dialogError('Give it a name.'); return; }
+
+      var list = savedSearches();
+      // Same name on the same tab replaces rather than duplicating - two
+      // identical chips with different contents is a trap.
+      list = list.filter(function (p) { return !(p.name === name && p.tab === state.tab); });
+      list.push({ name: name, tab: state.tab, q: state.query || '', filter: current });
+
+      writeSavedSearches(list);
+      closeDialog();
+      renderSavedSearches();
+      toast('Saved "' + name + '".');
+    }
+  });
+}
+
 function activeFilter() {
   return (state.tab === 'groups') ? state.groupFilter : state.userFilter;
 }
@@ -840,6 +994,10 @@ function setActiveFilter(key) {
 }
 
 function renderRowFilters() {
+  // Saved searches are their own bar and must appear whether or not this tab
+  // reported any filter chips - an early return here used to skip them.
+  renderSavedSearches();
+
   var box = $('groupFilters');
   var list = asArray(state.tab === 'groups' ? state.groupFilters : state.userFilters);
   if (!list.length) { box.hidden = true; return; }
@@ -1399,6 +1557,31 @@ function formatStamp(iso) {
   if (day.getTime() === today.getTime()) { return 'Today ' + hm; }
   if (day.getTime() === today.getTime() - 86400000) { return 'Yesterday ' + hm; }
   return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }) + ' ' + hm;
+}
+
+function formatAbsoluteStamp(iso) {
+  // formatStamp() is deliberately relative - "Today 17:48" is the friendly
+  // and correct thing on a live audit screen. It is the WRONG thing for a
+  // report stamp: a CSV that says "Today 17:48" is meaningless the moment it
+  // is forwarded, and even its fallback branch omits the year, so
+  // "12 Aug 14:30" is ambiguous a year later.
+  //
+  // A report stamp must survive being emailed, so it is absolute, full,
+  // unambiguous, and carries the offset - the reader may not be in the same
+  // timezone as the server.
+  if (!iso) { return ''; }
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) { return iso; }
+
+  function p2(n) { return ('0' + n).slice(-2); }
+
+  var off = -d.getTimezoneOffset();
+  var sign = (off < 0) ? '-' : '+';
+  var abs = Math.abs(off);
+
+  return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) +
+         ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) +
+         ' (UTC' + sign + p2(Math.floor(abs / 60)) + ':' + p2(abs % 60) + ')';
 }
 
 // ---------------------------------------------------------------------------
@@ -2023,7 +2206,8 @@ function storageLine() {
 // ---------------------------------------------------------------------------
 
 var TOOLS = [
-  { key: 'gmsa',     label: 'gMSA',      hint: 'Service account for DSMT', render: renderGmsaTool },
+  { key: 'reports',  label: 'Reports',   hint: 'Named queries, dated',      render: renderReportsTool },
+  { key: 'gmsa',     label: 'gMSA',      hint: 'Service account for DSMT',  render: renderGmsaTool },
   { key: 'adhealth', label: 'AD health', hint: 'Replication, FSMO, clocks', render: renderAdHealthTool }
 ];
 
@@ -2064,6 +2248,197 @@ function loadTools() {
   for (i = 0; i < TOOLS.length; i++) {
     if (TOOLS[i].key === current) { TOOLS[i].render(); }
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Reports.
+
+   A report is a saved filter plus a column set - the SAME Get-DsmtUsers /
+   Select-DsmtUsersByFilter path the Users grid uses. Definitions live on the
+   server so the list, the labels and the columns have one source.
+
+   THE DATE IS THE FEATURE. A directory report with no "as at" stamp gets
+   circulated for months as if it were current. The stamp is shown above the
+   table AND written into the export, and neither is optional - the server
+   returns it with the rows for exactly that reason.
+
+   Nothing here auto-runs. Each report reads the whole directory, and a screen
+   that fires several of those on open is how a diagnostic tool becomes the
+   thing people blame.
+   --------------------------------------------------------------------------- */
+
+function renderReportsTool() {
+  $('toolsBody').innerHTML = '<p class="muted-sm">Loading the report list...</p>';
+
+  api('/api/reports').then(function (data) {
+    state.reports = asArray(data.reports);
+    paintReportsTool(null);
+  }).catch(function (err) {
+    $('toolsBody').innerHTML = '<section class="set-card"><h2 class="set-h">Reports</h2>' +
+      '<div class="error-box">' + esc(err.message) + '</div></section>';
+  });
+}
+
+function paintReportsTool(result) {
+  var list = asArray(state.reports);
+
+  var picker = list.map(function (r) {
+    var on = (result && result.key === r.key);
+    return '<button class="chip" type="button" data-report="' + esc(r.key) + '" aria-pressed="' +
+           (on ? 'true' : 'false') + '" title="' + esc(r.question || '') + '">' +
+           esc(r.label) + '</button>';
+  }).join('');
+
+  var body = '';
+  if (!result) {
+    body = '<p class="muted-sm">Pick a report. Each one reads the directory live when you run it - ' +
+           'nothing is cached and nothing runs on its own.</p>';
+  } else {
+    body = reportResultHtml(result);
+  }
+
+  $('toolsBody').innerHTML =
+    '<section class="set-card">' +
+      '<h2 class="set-h">Reports</h2>' +
+      '<p class="dialog-note">Every report is read <strong>live from ' +
+      esc(state.domainInfo ? state.domainInfo.domain : 'the directory') + '</strong> at the moment you ' +
+      'run it, never from the SQL snapshot, and every one is stamped with the time it was taken - on ' +
+      'screen and in the export. A directory report with no date gets forwarded for months as if it ' +
+      'were still true.</p>' +
+      '<div class="chips">' + picker + '</div>' +
+      '<div id="reportBody">' + body + '</div>' +
+    '</section>';
+
+  var chips = $('toolsBody').querySelectorAll('[data-report]');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].onclick = function () { runReport(this.getAttribute('data-report')); };
+  }
+
+  if (result) {
+    $('reportExport').onclick = function () { exportReport(result); };
+  }
+}
+
+function runReport(key) {
+  $('reportBody').innerHTML = '<p class="muted-sm">Reading the directory...</p>';
+
+  api('/api/reports/' + encodeURIComponent(key)).then(function (res) {
+    state.report = res;
+    paintReportsTool(res);
+  }).catch(function (err) {
+    $('reportBody').innerHTML = '<div class="error-box">' + esc(err.message) + '</div>';
+  });
+}
+
+function reportResultHtml(res) {
+  var cols = asArray(res.columns);
+  var rows = asArray(res.rows);
+
+  // The stamp, first and unmissable. Local time for the reader, with the DC
+  // named because a report is only as current as the controller that answered.
+  var head =
+    '<div class="set-state set-state-on">' +
+      '<div class="set-state-head"><span class="set-state-dot"></span>' +
+      '<span>' + esc(res.label) + '</span></div>' +
+      '<dl class="detail-fields">' +
+        settingsRow('As at', formatAbsoluteStamp(res.asAt) + ' - live read, not a snapshot') +
+        settingsRow('Domain / controller', res.domain + ' / ' + (res.controller || 'unknown')) +
+        settingsRow('Rows', String(rows.length)) +
+      '</dl>' +
+    '</div>';
+
+  // Truncation first and in the error style, not as a footnote. A report that
+  // is incomplete but dated and formatted reads as authoritative, which is the
+  // worst way for it to be wrong.
+  if (res.truncated) {
+    head += '<div class="error-box"><strong>This report is INCOMPLETE.</strong> The directory read hit ' +
+            'the ' + esc(String(res.maxRows)) + '-row cap, so accounts beyond it were never examined. ' +
+            'Do not circulate this as a full list.</div>';
+  }
+
+  if (res.caveat) {
+    head += '<p class="set-warn">' + esc(res.caveat) + '</p>';
+  }
+
+  if (!rows.length) {
+    return head + '<p class="muted-sm">No accounts match this report right now. That is an answer, ' +
+           'not an error - it was read live at the time above.</p>' +
+           '<div class="set-actions"><button class="btn btn-ghost" type="button" id="reportExport" disabled>' +
+           'Export CSV</button></div>';
+  }
+
+  var labels = cols.map(reportColLabel);
+
+  var table =
+    '<div class="table-wrap"><table class="table dsmt-table">' +
+      '<thead><tr>' + labels.map(function (l) { return '<th>' + esc(l) + '</th>'; }).join('') + '</tr></thead>' +
+      '<tbody>' + rows.map(function (r) {
+        return '<tr>' + cols.map(function (c, i) {
+          return '<td data-label="' + esc(labels[i]) + '">' + esc(reportCell(r, c)) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody>' +
+    '</table></div>';
+
+  return head + table +
+    '<div class="set-actions"><button class="btn btn-secondary" type="button" id="reportExport">' +
+    'Export CSV</button></div>';
+}
+
+// Column labels for report columns. Reuses USER_COLS where the key matches so
+// "Last logon" is called the same thing here as on the grid; the rest are
+// report-only and named here.
+var REPORT_COL_LABELS = {
+  logonDays:   'Days since logon',
+  pwdDays:     'Days to expiry',
+  createdDays: 'Age (days)',
+  created:     'Created',
+  group:       'Group',
+  member:      'Member',
+  meta:        'Detail'
+};
+
+function reportColLabel(key) {
+  if (REPORT_COL_LABELS[key]) { return REPORT_COL_LABELS[key]; }
+  var found = USER_COLS.filter(function (c) { return c.key === key; })[0];
+  return found ? found.label : key;
+}
+
+function reportCell(row, key) {
+  var v = row[key];
+  if (v === undefined || v === null) { return ''; }
+  // -1 is the server's "does not apply" sentinel. Printing it as a number
+  // would read as a real count, and a negative one at that.
+  if ((key === 'logonDays' || key === 'pwdDays' || key === 'createdDays') && v === -1) { return '-'; }
+  return String(v);
+}
+
+function exportReport(res) {
+  var cols = asArray(res.columns);
+  var rows = asArray(res.rows);
+  if (!rows.length) { return; }
+
+  // The stamp goes INTO the file, as its own rows above the header. A CSV
+  // that leaves the building without its date is the exact failure this
+  // report screen was built to avoid - and once it is in someone's inbox,
+  // nothing on the screen it came from can help.
+  var meta = [
+    ['DSMT report', res.label],
+    ['As at', formatAbsoluteStamp(res.asAt)],
+    ['Read live from', res.domain + ' via ' + (res.controller || 'unknown')],
+    ['Rows', String(rows.length)],
+    []
+  ];
+  // The warning has to travel in the file too. Once this is in someone's
+  // inbox, nothing on the screen it came from can qualify it.
+  if (res.truncated) {
+    meta.splice(4, 0, ['INCOMPLETE', 'Hit the ' + res.maxRows + '-row read cap; accounts beyond it were never examined']);
+  }
+
+  var header = cols.map(reportColLabel);
+  var body = rows.map(function (r) { return cols.map(function (c) { return reportCell(r, c); }); });
+
+  downloadCsv('dsmt-report-' + res.key + '-' + stampName() + '.csv', meta[0], meta.slice(1).concat([header]).concat(body));
+  toast('Exported ' + rows.length + ' rows, stamped ' + formatAbsoluteStamp(res.asAt) + '.');
 }
 
 /* ---------------------------------------------------------------------------
@@ -4544,6 +4919,7 @@ function wireEvents() {
       if (chip) { toggleCol(chip.getAttribute('data-col')); }
     });
   }
+  $('saveSearchBtn').addEventListener('click', saveCurrentSearch);
   wireColumns('colsBtn', 'colPicker');
   wireColumns('auditColsBtn', 'auditColPicker');
   $('exportBtn').addEventListener('click', exportCurrent);

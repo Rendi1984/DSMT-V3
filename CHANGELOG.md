@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.28.0** | 2026-08-08 | **Reports** under Tools - eight named queries, read live and stamped with the time they were taken, on screen and in the export. Saved searches on the directory tabs | Restart + refresh |
 | **1.27.0** | 2026-08-08 | Account-state filters on Users (expiring, expired, stale, never logged on...), a column chooser on the Audit table, and two keyboard shortcuts | Restart + refresh |
 | **1.26.4** | 2026-08-08 | **Create user said Failed while leaving the account in the directory** - and the audit log said Failed too. Creation is now atomic | Restart |
 | **1.26.3** | 2026-08-08 | The Administrators card contradicted itself - "no groups configured" printed above a configured group. Says which DC membership is read from | Restart + refresh |
@@ -79,6 +80,83 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.28.0 — 2026-08-08
+
+### Reports (proposal 19)
+
+Eight named queries under **Tools → Reports**: stale accounts, passwords
+expiring, passwords expired, password never expires, never logged on, disabled
+accounts, created in the last 30 days, and privileged group membership.
+
+A report here is **a saved filter plus a column set**, running the same
+`Get-DsmtUsers` / `Select-DsmtUsersByFilter` path the Users grid uses — not a
+second query engine. The definitions live on the server so the list, the labels
+and the column sets have one source.
+
+**The date is the feature.** Every report is stamped with the moment it was
+taken, the domain and the controller that answered — above the table *and* in
+the exported CSV. The server returns the stamp *with* the rows precisely so
+there is no shape of the response that carries data without its date. A
+directory report with no "as at" gets forwarded for months as if it were still
+true, which is the fake-data failure in a form that survives being emailed.
+
+Reports read **live**, never from the SQL snapshot, and say so on the page.
+
+Nothing auto-runs. Each report reads the directory, and a screen that fires
+several of those on open is how a diagnostic tool becomes the thing people
+blame.
+
+**Three defects caught by review before this shipped**, all of the same family
+— something that looks right and is quietly wrong:
+
+- **Reports would have silently truncated at 500 rows.** `Get-DsmtUsers` treats
+  `-Limit 0` as "use PageSize", so a report on a larger domain would have
+  returned the first 500 accounts, dated, formatted and authoritative. Reports
+  now pass an explicit 20,000-row cap, and **when the cap is actually reached
+  the report says it is incomplete** — on screen in the error style, and as a
+  row inside the exported file, because once a CSV is in someone's inbox
+  nothing on the screen it came from can qualify it. The check runs on the
+  *unfiltered* read, where the cap actually bites; checking after filtering
+  would miss it entirely.
+- **The stamp used the relative formatter.** `formatStamp()` renders
+  "Today 17:48", which is correct on a live audit screen and meaningless in an
+  exported file — and its fallback branch omitted the year, so "12 Aug 14:30"
+  is ambiguous a year later. Reports use a new absolute formatter with the
+  full date and the UTC offset.
+- **Double-escaping** in the report header, from passing `esc()` output to
+  `settingsRow()`, which escapes its own values.
+
+### Saved searches (proposal 1)
+
+**Save search** on the directory toolbar stores the tab, the search text and
+the filter chip; the saved bar puts that view back in one click, and each entry
+has its own delete control.
+
+Stored **per browser** in `localStorage`, which is the proposal's own first
+step rather than an oversight — no server change and no shared state to get
+wrong. If these ever move to SQL so a team shares them they become
+configuration, and need the same treatment as the group filters.
+
+Two things review caught here too: applying a preset that changed tab fired
+**two** overlapping loads — `setTab()` loading with the old query, then the new
+one — a race that occasionally shows the wrong rows and is near-impossible to
+reproduce deliberately. And the saved bar was rendered inside the filter-chip
+function *after* its early return, so it never appeared on a tab that reported
+no chips.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 

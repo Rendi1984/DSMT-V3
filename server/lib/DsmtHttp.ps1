@@ -1949,6 +1949,50 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/reports$' {
+                if ($method -ne 'GET') { break }
+
+                # Definitions only. Running one is a separate, slower call, so
+                # opening the screen does not read the whole directory.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok      = $true
+                    reports = @(Get-DsmtReports)
+                }
+                return
+            }
+
+            '^/api/reports/(?<key>[a-z]+)$' {
+                if ($method -ne 'GET') { break }
+
+                $result = Invoke-DsmtReport -Key $Matches['key'] -Credential $session.Credential
+                if (-not $result.Ok) {
+                    Send-DsmtError -Response $Response -Message $result.Error -StatusCode 400
+                    return
+                }
+
+                Write-DsmtLog -Message ($session.Account + ' ran the "' + $result.Label + '" report (' +
+                                        [string]@($result.Rows).Count + ' rows)')
+
+                # asAt and controller ship WITH the rows. A response shape that
+                # can carry data without its date is the one thing this feature
+                # exists to prevent.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok         = $true
+                    key        = $result.Key
+                    label      = $result.Label
+                    caveat     = $result.Caveat
+                    columns    = @($result.Columns)
+                    rows       = @($result.Rows)
+                    count      = @($result.Rows).Count
+                    truncated  = $result.Truncated
+                    maxRows    = $result.MaxRows
+                    asAt       = $result.AsAtUtc
+                    controller = $result.Controller
+                    domain     = $result.Domain
+                }
+                return
+            }
+
             '^/api/tools/adhealth$' {
                 if ($method -ne 'GET') { break }
                 # Deliberately slow and deliberately on demand: several remote

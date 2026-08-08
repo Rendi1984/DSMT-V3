@@ -131,6 +131,8 @@
       <div class="toolbar">
         <input class="input search" id="search" type="search" placeholder="Search" autocomplete="off">
         <div class="toolbar-actions">
+          <button class="btn btn-ghost"     id="saveSearchBtn" type="button"
+                  title="Save the current tab, search text and filter">Save search</button>
           <button class="btn btn-ghost"     id="colsBtn"   type="button">Columns</button>
           <button class="btn btn-secondary" id="importBtn" type="button">Import CSV</button>
           <button class="btn btn-secondary" id="exportBtn" type="button">Export</button>
@@ -144,6 +146,10 @@
            group kind on Groups. They come from the server, so a custom filter
            added in Settings appears here without a code change. -->
       <div class="chips" id="groupFilters" hidden></div>
+
+      <!-- Saved searches for the current tab. Per-browser (localStorage), so
+           these are a personal shortcut, not shared configuration. -->
+      <div class="chips saved-bar" id="savedSearches" hidden></div>
 
       <div class="bulk-bar" id="bulkBar" hidden>
         <span class="bulk-count" id="bulkCount"></span>

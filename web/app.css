@@ -784,6 +784,22 @@ body { overflow: hidden; }
 .insecure-bar[hidden] { display: none; }
 .insecure-cause, .insecure-fix { display: block; color: var(--color-accent-200); }
 
+/* Saved searches. A chip plus its own delete control, so removing one does
+   not need a mode or a dialog. Flex and physical properties only - the rules
+   at the top of this file apply to anything that has to be visible. */
+.saved-bar { align-items: center; }
+.saved-label {
+  font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-neutral-500); margin-right: var(--space-1);
+}
+.saved-chip { display: inline-flex; align-items: center; gap: 2px; }
+.saved-drop {
+  background: none; border: none; cursor: pointer; line-height: 1;
+  color: var(--color-neutral-500); font-size: 15px; padding: 0 4px;
+}
+.saved-drop:hover { color: var(--color-accent-200); }
+.saved-drop:focus-visible { outline: 2px solid var(--color-accent-500); outline-offset: 1px; }
+
 .profile-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
 
 /* Tab strip inside the profile window. Physical properties only and no

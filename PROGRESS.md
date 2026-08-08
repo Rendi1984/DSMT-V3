@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.27.0` — matches the top entry of `CHANGELOG.md` and
+`1.28.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -272,7 +272,11 @@ is picked, move it into "Open tasks" first.
 
 Ordered by value for the effort, highest first.
 
-1. **Saved searches / filter presets.** The Users grid already filters by OU,
+1. ~~Saved searches / filter presets~~ - **built in 1.28.0.** Per-browser
+   (`localStorage`, key `dsmt.searches`), storing tab + query + filter. If
+   these ever move to SQL to be shared they become configuration and need the
+   group-filter treatment: defined once on the server, not mirrored in
+   `app.js`. Original note: The Users grid already filters by OU,
    department and text. Saving a combination under a name ("Disabled in Sales",
    "No logon in 90 days") turns a repeated five-click task into one. Local to
    the browser is enough to start; SQL later would share them across operators.
@@ -456,7 +460,12 @@ plumbing before the unbounded one is exposed.
 
 ### Reports, DNS/DHCP, and sensitive-group filters (19-22) — raised 2026-07-31, NOT to be built yet
 
-19. **Reports out of Active Directory.** Named queries with an export, run
+19. ~~Reports out of Active Directory~~ - **built in 1.28.0** as Tools ->
+    Reports, eight named queries. Placed under Tools rather than as a new
+    top-level tab, because the tab count is the real constraint (see below).
+    Decided and now fixed: reports read LIVE, never the SQL snapshot, and say
+    so on the page. **Do not add a report that reads the snapshot without
+    labelling it one with its LastSyncUtc.** Original note: Named queries with an export, run
     against the live directory. The four that earn their place immediately:
     stale accounts (no logon in N days), password state (expiring, expired,
     never expires), privileged group membership (see 22 — the same SID list
@@ -1013,6 +1022,25 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 3] A read cap inherited from a screen that wanted one.** Found by
+  review before 1.28.0 shipped. `Get-DsmtUsers -Limit 0` means "use PageSize"
+  (500), which is right for a grid and catastrophic for a report: the report
+  would have returned the first 500 accounts of a larger domain, dated,
+  formatted and looking authoritative. Fixed with an explicit 20,000 cap plus
+  an INCOMPLETE banner on screen AND a row inside the exported CSV.
+  **The pattern: a default that is a sensible UI limit becomes silent data
+  loss the moment a non-UI caller inherits it.** Any new caller of
+  `Get-DsmtUsers` / `Get-DsmtGroups` must state its own limit deliberately and
+  decide what it does when the limit is hit. Note the check must run on the
+  UNFILTERED read - a filter keeping 12 rows out of a truncated 20,000 looks
+  entirely normal.
+- **[Shape 3] A relative timestamp that escapes the screen.** `formatStamp()`
+  renders "Today 17:48" and, on its fallback branch, omits the year. Correct
+  on a live audit table; meaningless in an exported file that gets forwarded.
+  1.28.0 added `formatAbsoluteStamp()` for anything that leaves the browser.
+  **The pattern: a display format chosen for a live screen is the wrong format
+  for anything exported, and the failure is invisible until someone reads the
+  file weeks later.**
 - **[Shape 3] A multi-step directory write reported as a single outcome.**
   Found 2026-08-08 on the lab domain. "Create user" is FOUR AD operations
   (create disabled, set password, set must-change, enable). An operator
@@ -1343,6 +1371,14 @@ Re-run these; they predate this work and are unaffected by it.
 ---
 
 ## Notes for next session
+- **The brace/paren balance check reports `server/Install-DSMT.ps1` as -2
+  parens. That is a FALSE POSITIVE and the file is fine.** Lines 836 and 1866
+  each contain `') '` - a closing parenthesis inside a string literal, which
+  the naive counter cannot see is quoted. Verified 2026-08-08; do not "fix"
+  it, and do not start ignoring the check because of it. The check is one of
+  only two verification tools this repo has (the other is `node --check` on
+  `app.js`), so a known false positive is worth remembering rather than
+  rediscovering.
 - **`CLAUDE.md` was trimmed on 2026-08-08 and the build-handover rules moved
   to a skill.** The `server/lib/` file list and the SQL table list were
   removed — they are reconstructible with `ls server/lib/` and

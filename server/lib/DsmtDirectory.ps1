@@ -254,6 +254,14 @@ function ConvertTo-DsmtUser {
         catch { $logonDays = -1 }
     }
 
+    # Days since the account was created. Same -1 sentinel and same
+    # compute-before-the-literal rule as the two above.
+    $createdDays = -1
+    if ($AdUser.whenCreated) {
+        try { $createdDays = [int][math]::Floor(((Get-Date) - [datetime]$AdUser.whenCreated).TotalDays) }
+        catch { $createdDays = -1 }
+    }
+
     $managerName = ''
     if ($AdUser.manager) { $managerName = Get-DsmtNameFromDn -DistinguishedName ([string]$AdUser.manager) }
 
@@ -276,6 +284,8 @@ function ConvertTo-DsmtUser {
         logon    = ConvertTo-DsmtDisplayTime -Value $AdUser.LastLogonDate
         logonRaw = ''
         pwd      = ConvertTo-DsmtRelativeExpiry -Value $expiry -NeverExpires ([bool]$AdUser.PasswordNeverExpires)
+        created    = ConvertTo-DsmtDisplayTime -Value $AdUser.whenCreated
+        createdDays = $createdDays
         pwdDays    = $pwdDays
         pwdNever   = $pwdNever
         pwdExpired = $pwdExpired
@@ -299,7 +309,6 @@ function ConvertTo-DsmtUser {
         $map.office      = [string]$AdUser.physicalDeliveryOfficeName
         $map.company     = [string]$AdUser.company
         $map.employeeId  = [string]$AdUser.employeeID
-        $map.created     = ConvertTo-DsmtDisplayTime -Value $AdUser.whenCreated
         $map.sid         = [string]$AdUser.objectSid
         $map.pwdExpired  = [bool]$AdUser.PasswordExpired
     }
@@ -1198,4 +1207,195 @@ function Test-DsmtOuExists {
 
     $class = [string]$obj.objectClass
     return ($class -eq 'organizationalUnit' -or $class -eq 'container' -or $class -eq 'domainDNS')
+}
+
+# ---------------------------------------------------------------------------
+# Reports
+#
+# A report is a SAVED FILTER PLUS A COLUMN SET. It is not a second query
+# engine, and it must not become one: every row below comes from the same
+# Get-DsmtUsers / Select-DsmtUsersByFilter path the Users grid uses, so a
+# fix to either is a fix to both.
+#
+# TWO RULES THAT ARE NOT NEGOTIABLE, both recorded in PROGRESS.md item 19:
+#
+#   1. EVERY REPORT IS DATED, on the page and in the export. A directory
+#      report with no "as at" stamp gets circulated for months as if it were
+#      current - the same failure the fake-data rule guards against, in a form
+#      that survives being emailed. AsAtUtc and Controller are returned with
+#      the rows, not alongside them, so they cannot be dropped by a caller
+#      that only wanted the data.
+#
+#   2. REPORTS READ LIVE. They never read the SQL snapshot. The snapshot is
+#      written after a live read and goes stale the moment the directory
+#      changes; rendering a report from it would be exactly the bug CLAUDE.md
+#      devotes a section to. If that ever changes, the report must be labelled
+#      a snapshot with its LastSyncUtc, and it must say so on the page.
+# ---------------------------------------------------------------------------
+
+$script:DsmtRecentDays = 30
+
+# Reports read the whole directory, so they must NOT inherit the grid's result
+# cap: Get-DsmtUsers treats -Limit 0 as "use PageSize" (500 by default), which
+# would silently return the first 500 accounts of a larger domain as a dated,
+# authoritative-looking, WRONG report. That is the fake-data failure wearing a
+# report's clothes.
+#
+# So reports pass an explicit, much higher cap - and when the cap is actually
+# reached the report SAYS SO rather than presenting a truncated list as
+# complete. A bounded cap still exists because an unbounded read on a large
+# domain is a hang, not a feature.
+$script:DsmtReportMaxRows = 20000
+
+function Get-DsmtReports {
+    <#
+    .SYNOPSIS
+        The reports the Tools screen offers.
+    .DESCRIPTION
+        Definitions only - key, label, what it answers, which user filter it
+        runs and which columns it shows. Held here rather than in app.js so
+        the list, the labels and the column sets have one source.
+
+        Returns @($list): the call site wraps in @( ), and the comma operator
+        would leave the outer array in place.
+    #>
+    $stale  = [string]$script:DsmtStaleLogonDays
+    $recent = [string]$script:DsmtRecentDays
+
+    $reports = @(
+        @{ key = 'stale'; label = ('Stale accounts (' + $stale + ' days)'); kind = 'users'; filter = 'stale'
+           question = ('Which accounts have not been used in ' + $stale + ' days?')
+           caveat = ('Read from lastLogonTimestamp, which a domain controller replicates only every ' +
+                     '9-14 days by default. Treat it as accurate to about a fortnight - it answers ' +
+                     '"not used in months", not "last seen".')
+           columns = @('name', 'sam', 'ou', 'status', 'logon', 'logonDays', 'manager') }
+
+        @{ key = 'pwdexpiring'; label = 'Passwords expiring soon'; kind = 'users'; filter = 'pwdexpiring'
+           question = 'Whose password is about to expire?'
+           caveat = 'Excludes passwords that have already expired and accounts set never to expire - each has its own report.'
+           columns = @('name', 'sam', 'ou', 'status', 'pwd', 'pwdDays', 'mail') }
+
+        @{ key = 'pwdexpired'; label = 'Passwords already expired'; kind = 'users'; filter = 'pwdexpired'
+           question = 'Who cannot sign in because their password has expired?'
+           caveat = ''
+           columns = @('name', 'sam', 'ou', 'status', 'pwd', 'logon') }
+
+        @{ key = 'pwdnever'; label = 'Password never expires'; kind = 'users'; filter = 'pwdnever'
+           question = 'Which accounts are exempt from password expiry?'
+           caveat = 'Common and legitimate on service accounts, rarely right on a person. This is a review list, not a fault list.'
+           columns = @('name', 'sam', 'ou', 'status', 'logon', 'dept', 'title') }
+
+        @{ key = 'neverlogon'; label = 'Never logged on'; kind = 'users'; filter = 'neverlogon'
+           question = 'Which accounts were created and never used?'
+           caveat = 'A brand new account belongs here legitimately - check the created date before acting.'
+           columns = @('name', 'sam', 'ou', 'status', 'created', 'createdDays') }
+
+        @{ key = 'disabled'; label = 'Disabled accounts'; kind = 'users'; filter = 'disabled'
+           question = 'Which accounts are disabled?'
+           caveat = ''
+           columns = @('name', 'sam', 'ou', 'status', 'logon', 'created') }
+
+        @{ key = 'recent'; label = ('Created in the last ' + $recent + ' days'); kind = 'users'; filter = 'all'
+           question = ('Which accounts were created in the last ' + $recent + ' days?')
+           caveat = ''
+           columns = @('name', 'sam', 'ou', 'status', 'created', 'createdDays', 'dept') }
+
+        @{ key = 'privileged'; label = 'Privileged group membership'; kind = 'groups'; filter = 'privileged'
+           question = 'Who holds privileged group membership?'
+           caveat = ('Groups are matched on SID, never on name - a group called Domain Admins can be ' +
+                     'renamed and is localised. Membership shown is DIRECT; a member that is itself a ' +
+                     'group is listed as that group, not expanded.')
+           columns = @('group', 'member', 'meta') }
+    )
+
+    return @($reports)
+}
+
+function Invoke-DsmtReport {
+    <#
+    .SYNOPSIS
+        Runs one report against the LIVE directory.
+    .OUTPUTS
+        Hashtable with Ok, Key, Label, Rows, Columns, AsAtUtc, Controller,
+        Domain, Caveat, Error.
+    .DESCRIPTION
+        The stamp travels WITH the rows. A caller that renders the table and
+        forgets the date is the failure this whole feature is guarded against,
+        so there is no shape of this return value that has data without a date.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Key,
+        [Parameter(Mandatory = $true)] $Credential
+    )
+
+    $out = @{
+        Ok = $false; Key = $Key; Label = ''; Rows = @(); Columns = @()
+        AsAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
+        Controller = ''; Domain = ''; Caveat = ''; Error = ''
+        Truncated = $false; MaxRows = $script:DsmtReportMaxRows
+    }
+
+    $def = $null
+    foreach ($r in @(Get-DsmtReports)) { if ($r.key -eq $Key) { $def = $r } }
+    if ($null -eq $def) {
+        $out.Error = 'No report called "' + $Key + '".'
+        return $out
+    }
+
+    $out.Label   = [string]$def.label
+    $out.Caveat  = [string]$def.caveat
+    $out.Columns = @($def.columns)
+
+    $cfg = Get-DsmtConfig
+    $out.Domain = [string]$cfg.Domain
+    try { $out.Controller = Get-DsmtServer -Credential $Credential } catch { $out.Controller = '' }
+
+    try {
+        if ($def.kind -eq 'groups') {
+            # Privileged membership. Read the groups, keep the privileged
+            # ones, then read each one's members - a handful of groups, so the
+            # per-group read is bounded rather than a scan.
+            $groups = @(Get-DsmtGroups -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+            if (@($groups).Count -ge $script:DsmtReportMaxRows) { $out.Truncated = $true }
+            $groups = @(Select-DsmtGroupsByFilter -Rows $groups -Filter ([string]$def.filter))
+
+            $rows = @()
+            foreach ($g in $groups) {
+                $detail = $null
+                try { $detail = Get-DsmtGroup -Credential $Credential -Identity ([string]$g.sam) } catch { $detail = $null }
+                if ($null -eq $detail) { continue }
+
+                foreach ($m in @($detail.memberships)) {
+                    $rows += [ordered]@{
+                        group  = [string]$g.name
+                        member = [string]$m.name
+                        meta   = [string]$m.meta
+                    }
+                }
+            }
+            $out.Rows = @($rows)
+        } else {
+            $read = @(Get-DsmtUsers -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+
+            # Truncation is detected on the UNFILTERED read - that is where the
+            # cap bites. Checking after filtering would miss it entirely: a
+            # filter that keeps 12 of a truncated 20000 looks perfectly normal.
+            if (@($read).Count -ge $script:DsmtReportMaxRows) { $out.Truncated = $true }
+
+            $rows = @(Select-DsmtUsersByFilter -Rows $read -Filter ([string]$def.filter))
+
+            # The one report whose test is not a chip: created within N days.
+            if ($Key -eq 'recent') {
+                $window = $script:DsmtRecentDays
+                $rows = @(@($rows) | Where-Object { $_.createdDays -ge 0 -and $_.createdDays -le $window })
+            }
+            $out.Rows = @($rows)
+        }
+
+        $out.Ok = $true
+    } catch {
+        $out.Error = $_.Exception.Message
+    }
+
+    return $out
 }
