@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.21.0** | 2026-08-08 | Settings no longer live inside the program folder, so an upgrade cannot lose them; registry pointers; AD health runs on a schedule and raises the bell; the search result cap is editable | Reinstall |
 | **1.20.1** | 2026-08-08 | Every audit-log time range (Last 24 hours through Last 30 days) failed with a `DateTimeStyles` error; only **All time** worked | Restart |
 | **1.20.0** | 2026-08-07 | The installer starts the service, **waits until the console answers**, and opens the browser itself. `prototype/` and an unused 4.9 MB image removed | Re-run installer |
 | **1.19.1** | 2026-08-07 | The installer now names `Start-Service DSMT` when it registers a service it did not start | Re-run installer |
@@ -67,6 +68,107 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.21.0 — 2026-08-08
+
+### The settings no longer live in the folder an upgrade replaces
+
+Until now `config\dsmt.config.json` sat inside the folder DSMT was unzipped
+into. So upgrading meant extracting a new build over the old folder — or, more
+often, beside it — and the console came back up with **no SQL server
+configured**, quietly writing JSONL instead. Nothing errored. The settings
+were simply in the folder that got replaced.
+
+Code and state are now separate, and the separation is enforced by where
+Windows lets you write:
+
+| | Holds | An upgrade |
+| --- | --- | --- |
+| `%ProgramFiles%\DSMT` | `server\`, `web\`, `_ds\`, `sql\`, `docs\` | replaces it wholesale |
+| `%ProgramData%\DSMT` | `config\`, `data\`, `uploads\` | never touches it |
+
+`Install-DSMT.ps1` copies the code into place, creates the state folders and
+registers the service against them. `-InstallPath` and `-DataPath` override
+either; `-Portable` keeps the old single-folder behaviour for a lab scratch
+copy and now says so in the startup banner and in **Settings → System** rather
+than leaving it implied.
+
+**Existing installs are migrated, once, automatically.** If the new location
+has no settings file and the old folder does, `config\`, `data\` and
+`uploads\` are **copied** across — copied, not moved, so a bad upgrade can be
+walked back by starting the old build again. Without this step, the very
+upgrade that fixes the problem would be the one that loses the SQL settings.
+
+### Two registry values, and only two
+
+`HKLM\SOFTWARE\Rendi Group\DSMT` now holds `InstallPath`, `DataPath` and a
+`Version` string for whoever is reading the key. That is all it will ever
+hold. It is **not** a settings store: settings stay in JSON where they can be
+read, diffed and attached to a bug report, and where `Save-DsmtSavedSettings`
+can keep merging so changing the port cannot wipe the group filters. The
+registry answers the one question a freshly started process cannot answer for
+itself — where am I installed, and where is my state.
+
+`Start-DSMT.ps1` resolves the state folder in a fixed order: `-DataRoot`, then
+the registry, then the folder it sits in. An absent key is not an error; it is
+what a portable run looks like.
+
+### Re-running the installer no longer resets what you tuned
+
+The installer wrote the settings file wholesale, so re-running it to change
+the port also put the idle timeout back to 15 minutes and the search cap back
+to 500. It now merges, and reads the existing values first, so only what it
+was actually asked to change changes.
+
+### AD health runs on a schedule and raises the bell
+
+**Settings → AD health alerts**: on by default, at most one check per hour
+(5–1440 minutes). Anything wrong appears on the bell at the top right, one
+line per fault, naming the controller and the reason — replication behind, a
+DC that stopped answering LDAP, a clock drifting towards the Kerberos limit,
+an FSMO role held by a machine that is gone. Opening the bell acknowledges
+exactly the faults on screen, so a *new* fault lights the badge again instead
+of being silenced by an earlier glance.
+
+**What it does not do, stated plainly because the alternative is a feature
+that lies.** DSMT is a single-threaded HTTP listener with no spare thread for
+a timer, and running AD reads unattended would mean storing an operator's
+credentials — the one design decision this project has explicitly refused
+(see `CLAUDE.md`, "Attempted and deliberately NOT pursued"). So the check is
+cached and demand-driven: an open console asks every five minutes, and the
+server runs the real checks only when its cached answer is older than the
+interval. **While somebody has DSMT open, the directory is checked on
+schedule. On a server with nobody signed in, it is not**, and neither the UI
+nor this changelog will pretend otherwise. Unattended monitoring needs a
+scheduled task with its own identity, which remains a separate decision.
+
+The polling request never flashes the busy bar and never raises a toast on
+failure — a background check that interrupts you every five minutes because a
+controller blinked is a background check you will switch off.
+
+### The search result cap is editable
+
+**Settings → Search** — 25 to 5000, applied to the next search with no
+restart. It was displayed as a read-only fact and could only be changed by
+passing `-PageSize` on a command line nobody was typing any more once DSMT ran
+as a service. The ceiling is a browser limit rather than a directory one:
+every row is a live AD read and a row of markup.
+
+### Also
+
+- **Settings → System** now shows where everything actually is: the program
+  folder, the settings file, the audit folder, and the registry key.
+- `ConvertTo-DsmtUtcOrNull`, `Save-DsmtSavedSettings` and friends take a
+  config **directory** rather than a repo root, so the filename
+  `dsmt.config.json` appears exactly once in the codebase.
+
+**Deploy:** this one is a reinstall, not a file copy —
+`.\server\Install-DSMT.ps1` from the new build, elevated. It stops the
+service, copies the code to Program Files, migrates the existing settings to
+ProgramData, writes the registry pointers and starts the service again. To
+keep the current single-folder layout instead, add `-Portable`.
 
 ---
 

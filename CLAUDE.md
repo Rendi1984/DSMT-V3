@@ -199,9 +199,26 @@ The server must run on **Windows PowerShell 5.1** — no `pwsh` on a lab DC.
     sessions by design (see Security model in `README.md`).
   - `sql/schema.sql` changed → restart; missing tables are created
     automatically by `Install-DsmtSqlSchema`.
-- **Relative paths are load-bearing.** `Start-DSMT.ps1` resolves the repo root
-  as its own parent directory and serves `web/`, `_ds/` and `uploads/` from
-  there. Moving `server/` or renaming `web/` breaks the server's paths.
+- **Two roots since 1.21.0, and they must not be confused.**
+  - **Code** — `Start-DSMT.ps1` resolves it as its own parent directory and
+    serves `web/` and `_ds/` from there. Moving `server/` or renaming `web/`
+    still breaks the server's paths.
+  - **State** — `config/`, `data/`, `uploads/`. Resolved by
+    `Resolve-DsmtDataRoot`: `-DataRoot`, then
+    `HKLM\SOFTWARE\Rendi Group\DSMT\DataPath`, then the code folder
+    (portable). Installed layout is `%ProgramFiles%\DSMT` +
+    `%ProgramData%\DSMT`.
+
+  **Nothing that must survive an upgrade may live under the code root** — that
+  is the whole reason for the split. An upgrade replaces the code folder, and
+  before 1.21.0 that silently took `dsmt.config.json` with it, so the console
+  came back with no SQL configured and no error. New code reads
+  `$cfg.ConfigPath` / `$cfg.DataPath`, never `Join-Path $cfg.RootPath 'data'`.
+
+  **The registry holds pointers only** — `InstallPath`, `DataPath`, `Version`.
+  It is not a settings store and must not become one: JSON under the data root
+  can be read, diffed and mailed in a bug report, and `Save-DsmtSavedSettings`
+  merges so writing one key cannot wipe another.
 - **State exactly which file(s) changed and where they go**, every time a fix
   ships — the person deploying should be able to hot-swap individual files
   instead of reasoning it out themselves.

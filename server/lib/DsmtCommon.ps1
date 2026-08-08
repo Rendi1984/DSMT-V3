@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.20.1'
+$script:DsmtVersion = '1.21.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -35,6 +35,17 @@ $script:DsmtSessionMinutesDefault = 15
 $script:DsmtSessionMinutesMin     = 1
 $script:DsmtSessionMinutesMax     = 480   # 8 hours
 
+# ---------------------------------------------------------------------------
+# SEARCH RESULT CAP bounds - same rule, one definition. The maximum is a
+# browser limit, not a directory one: every row is a DOM row, and a table of
+# tens of thousands stops being a console and becomes a hang with no error.
+# The minimum keeps the cap from being set to something that hides results
+# without explaining why.
+# ---------------------------------------------------------------------------
+$script:DsmtPageSizeDefault = 500
+$script:DsmtPageSizeMin     = 25
+$script:DsmtPageSizeMax     = 5000
+
 # Filled in by Start-DSMT.ps1 at startup.
 $script:DsmtConfig = @{
     Version       = $script:DsmtVersion
@@ -44,9 +55,12 @@ $script:DsmtConfig = @{
     AccountKind    = ''
     RootPath      = ''
     WebPath       = ''
+    DataRoot      = ''
+    ConfigPath    = ''
     DataPath      = ''
     DesignPath    = ''
     UploadsPath   = ''
+    PathMode      = 'portable'
     Domain        = ''
     Server        = ''
     Port          = 8080
@@ -55,6 +69,128 @@ $script:DsmtConfig = @{
     PageSize      = 500
     LogFile       = ''
     StartedUtc    = $null
+}
+
+# ---------------------------------------------------------------------------
+# WHERE THINGS LIVE.
+#
+# Two roots, and the distinction is the whole point:
+#
+#   RootPath  - the CODE. server\, web\, _ds\, sql\. Replaced wholesale by an
+#               upgrade. Nothing that must survive one may live here.
+#   DataRoot  - the STATE. config\, data\, uploads\. Never touched by an
+#               upgrade.
+#
+# Before 1.21.0 they were the same folder, so extracting a new build over the
+# old one - or, more likely, extracting it NEXT to the old one and starting
+# that instead - lost dsmt.config.json and the console came up with no SQL
+# server configured, quietly falling back to JSONL. That is the bug this
+# split exists to make impossible.
+#
+# The registry holds POINTERS to the two roots and nothing else. It is not a
+# settings store: settings stay in JSON under DataRoot, where they can be
+# read, diffed and mailed in a bug report. Two values answer the only
+# question a fresh process cannot answer for itself - "where was I installed,
+# and where is my state?" - and they are written once, by the installer.
+# ---------------------------------------------------------------------------
+$script:DsmtRegistryKey = 'HKLM:\SOFTWARE\Rendi Group\DSMT'
+
+function Get-DsmtRegistryPaths {
+    <#
+    .SYNOPSIS
+        Reads InstallPath and DataPath from HKLM\SOFTWARE\Rendi Group\DSMT.
+    .DESCRIPTION
+        Returns a hashtable with Found, InstallPath, DataPath and Error. An
+        absent key is NOT an error - it is the normal state of a portable
+        run straight out of an unzipped folder, which stays supported.
+
+        Reading is deliberately tolerant: any failure returns Found = $false
+        and the caller falls back to the folder layout. A registry hiccup
+        must never stop the console from starting.
+    #>
+
+    $out = @{ Found = $false; InstallPath = ''; DataPath = ''; Error = '' }
+
+    try {
+        if (-not (Test-Path -LiteralPath $script:DsmtRegistryKey)) { return $out }
+
+        $key = Get-ItemProperty -LiteralPath $script:DsmtRegistryKey -ErrorAction Stop
+
+        if ($key.PSObject.Properties['InstallPath']) { $out.InstallPath = ([string]$key.InstallPath).Trim() }
+        if ($key.PSObject.Properties['DataPath'])    { $out.DataPath    = ([string]$key.DataPath).Trim() }
+
+        # A key holding neither value is the same as no key at all. Reporting
+        # it as Found would send the caller off to resolve an empty path.
+        if ($out.InstallPath -or $out.DataPath) { $out.Found = $true }
+    } catch {
+        $out.Error = $_.Exception.Message
+    }
+
+    return $out
+}
+
+function Set-DsmtRegistryPaths {
+    <#
+    .SYNOPSIS
+        Writes the two pointer values. Called by Install-DSMT.ps1 only.
+    .OUTPUTS
+        Hashtable with Ok and Error. Needs an elevated process - HKLM is not
+        writable by a standard user, and that is reported rather than thrown.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $InstallPath,
+        [Parameter(Mandatory = $true)][string] $DataPath
+    )
+
+    try {
+        if (-not (Test-Path -LiteralPath $script:DsmtRegistryKey)) {
+            New-Item -Path $script:DsmtRegistryKey -Force -ErrorAction Stop | Out-Null
+        }
+
+        New-ItemProperty -LiteralPath $script:DsmtRegistryKey -Name 'InstallPath' -Value $InstallPath `
+                         -PropertyType String -Force -ErrorAction Stop | Out-Null
+        New-ItemProperty -LiteralPath $script:DsmtRegistryKey -Name 'DataPath' -Value $DataPath `
+                         -PropertyType String -Force -ErrorAction Stop | Out-Null
+
+        # Recorded for a human reading the key, never read back by the server -
+        # the running version comes from $script:DsmtVersion, one source only.
+        New-ItemProperty -LiteralPath $script:DsmtRegistryKey -Name 'Version' -Value $script:DsmtVersion `
+                         -PropertyType String -Force -ErrorAction Stop | Out-Null
+
+        return @{ Ok = $true; Error = '' }
+    } catch {
+        return @{ Ok = $false; Error = $_.Exception.Message }
+    }
+}
+
+function Resolve-DsmtDataRoot {
+    <#
+    .SYNOPSIS
+        Decides where state lives, in a fixed order of precedence.
+    .DESCRIPTION
+        1. An explicit -DataRoot parameter        - always wins.
+        2. HKLM\SOFTWARE\Rendi Group\DSMT\DataPath - written by the installer.
+        3. The code folder itself                 - portable mode, unchanged
+           behaviour for anyone running from an unzipped folder.
+
+        Returns a hashtable: Path, Source ('parameter' | 'registry' |
+        'portable'), Mode ('installed' | 'portable').
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $RootPath,
+        [string] $DataRoot = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($DataRoot)) {
+        return @{ Path = $DataRoot.Trim(); Source = 'parameter'; Mode = 'installed' }
+    }
+
+    $reg = Get-DsmtRegistryPaths
+    if ($reg.Found -and -not [string]::IsNullOrWhiteSpace($reg.DataPath)) {
+        return @{ Path = $reg.DataPath; Source = 'registry'; Mode = 'installed' }
+    }
+
+    return @{ Path = $RootPath; Source = 'portable'; Mode = 'portable' }
 }
 
 function Initialize-DsmtConfig {
@@ -72,7 +208,9 @@ function Initialize-DsmtConfig {
         [int]    $SessionHours = 0,
         [int]    $SessionMinutes = 0,
         [int]    $PageSize = 500,
-        [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator'
+        [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
+        [string] $DataRoot = '',
+        [string] $PathMode = ''
     )
 
     # The idle timeout is held in MINUTES, in one field. -SessionHours is kept
@@ -90,10 +228,25 @@ function Initialize-DsmtConfig {
 
     $script:DsmtConfig.SessionMinutes = $SessionMinutes
     $script:DsmtConfig.IdentityMode  = $IdentityMode
+    # Code paths hang off RootPath; state paths hang off DataRoot. In portable
+    # mode the two roots are the same folder, which is why this split is
+    # backward-compatible with every existing unzipped install.
+    #
+    # A caller that already resolved the root (Start-DSMT.ps1 must, because it
+    # reads the settings file first) passes -PathMode alongside it. Without
+    # that, re-resolving here would see a non-empty -DataRoot and call every
+    # run "installed", including a portable one where the two roots are simply
+    # the same folder.
+    $resolved = Resolve-DsmtDataRoot -RootPath $RootPath -DataRoot $DataRoot
+    if (-not [string]::IsNullOrWhiteSpace($PathMode)) { $resolved.Mode = $PathMode }
+
     $script:DsmtConfig.RootPath      = $RootPath
     $script:DsmtConfig.WebPath       = Join-Path $RootPath 'web'
-    $script:DsmtConfig.DataPath      = Join-Path $RootPath 'data'
-    $script:DsmtConfig.UploadsPath   = Join-Path $RootPath 'uploads'
+    $script:DsmtConfig.DataRoot      = $resolved.Path
+    $script:DsmtConfig.PathMode      = $resolved.Mode
+    $script:DsmtConfig.ConfigPath    = Join-Path $resolved.Path 'config'
+    $script:DsmtConfig.DataPath      = Join-Path $resolved.Path 'data'
+    $script:DsmtConfig.UploadsPath   = Join-Path $resolved.Path 'uploads'
     $script:DsmtConfig.Domain        = $Domain
     $script:DsmtConfig.Server        = $Server
     $script:DsmtConfig.Port          = $Port
@@ -110,8 +263,13 @@ function Initialize-DsmtConfig {
         }
     }
 
-    if (-not (Test-Path -LiteralPath $script:DsmtConfig.DataPath)) {
-        New-Item -ItemType Directory -Path $script:DsmtConfig.DataPath -Force | Out-Null
+    # All three state folders, not just data\. In installed mode DataRoot is a
+    # brand-new %ProgramData%\DSMT that nothing has created yet, and the first
+    # settings write must not be the thing that discovers config\ is missing.
+    foreach ($needed in @($script:DsmtConfig.DataPath, $script:DsmtConfig.ConfigPath, $script:DsmtConfig.UploadsPath)) {
+        if (-not (Test-Path -LiteralPath $needed)) {
+            New-Item -ItemType Directory -Path $needed -Force | Out-Null
+        }
     }
     $script:DsmtConfig.LogFile = Join-Path $script:DsmtConfig.DataPath ('dsmt-' + (Get-Date -Format 'yyyy-MM-dd') + '.log')
 
@@ -140,11 +298,134 @@ function Get-DsmtSessionBounds {
     }
 }
 
+function Get-DsmtPageSizeBounds {
+    <#
+    .SYNOPSIS
+        The allowed search-result-cap range, so the API and the UI enforce and
+        display exactly the numbers this file defines.
+    #>
+    return @{
+        Default = $script:DsmtPageSizeDefault
+        Min     = $script:DsmtPageSizeMin
+        Max     = $script:DsmtPageSizeMax
+    }
+}
+
+function Get-DsmtAlertSettings {
+    <#
+    .SYNOPSIS
+        Whether the scheduled AD health check runs, and how often.
+    .DESCRIPTION
+        Read from dsmt.config.json on every call rather than cached in memory:
+        the file is small, the call is rare, and a cached copy is how a
+        setting changed in one place goes on being ignored in another.
+
+        Defaults to ENABLED at 60 minutes. A health check nobody switched on
+        is a health check nobody benefits from, and it costs one AD read an
+        hour while somebody has the console open.
+    #>
+    $cfg = Get-DsmtConfig
+
+    $out = @{ Enabled = $true; IntervalMinutes = $script:DsmtAlertIntervalDefault }
+
+    $saved = $null
+    try { $saved = Get-DsmtSavedSettings -ConfigPath $cfg.ConfigPath } catch { $saved = $null }
+    if ($null -eq $saved) { return $out }
+
+    if ($saved.PSObject.Properties['HealthAlertsEnabled']) {
+        $out.Enabled = [bool]$saved.HealthAlertsEnabled
+    }
+    if ($saved.PSObject.Properties['HealthAlertsInterval']) {
+        $minutes = 0
+        if ([int]::TryParse([string]$saved.HealthAlertsInterval, [ref] $minutes)) {
+            if ($minutes -ge $script:DsmtAlertIntervalMin -and $minutes -le $script:DsmtAlertIntervalMax) {
+                $out.IntervalMinutes = $minutes
+            }
+        }
+    }
+
+    return $out
+}
+
+function Get-DsmtSettingsFile {
+    <#
+    .SYNOPSIS
+        The full path of dsmt.config.json for a given config directory.
+        One function so the filename appears exactly once in the codebase.
+    #>
+    param([Parameter(Mandatory = $true)][string] $ConfigPath)
+    return (Join-Path $ConfigPath 'dsmt.config.json')
+}
+
+function Move-DsmtLegacyState {
+    <#
+    .SYNOPSIS
+        One-time migration of config\ and data\ from the code folder to the
+        data root, for installs made before 1.21.0.
+    .DESCRIPTION
+        Without this, the very upgrade that introduces the code/state split is
+        the one that loses the SQL settings - the new build looks in
+        %ProgramData%\DSMT, finds nothing, and starts with file-only audit.
+
+        Deliberately CONSERVATIVE:
+          - does nothing when the two roots are the same folder (portable);
+          - does nothing if the destination settings file already exists, so
+            it can never overwrite newer state with older;
+          - COPIES rather than moves. The old folder is left exactly as it
+            was, so a failed upgrade can be rolled back by starting the old
+            build again. Tidying it up is the operator's call, not ours.
+    .OUTPUTS
+        Hashtable: Migrated (bool), Items (string[]), Error.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $RootPath,
+        [Parameter(Mandatory = $true)][string] $DataRoot
+    )
+
+    $out = @{ Migrated = $false; Items = @(); Error = '' }
+
+    try {
+        $rootFull = [System.IO.Path]::GetFullPath($RootPath).TrimEnd('\')
+        $dataFull = [System.IO.Path]::GetFullPath($DataRoot).TrimEnd('\')
+        if ($rootFull -eq $dataFull) { return $out }
+
+        $destSettings = Get-DsmtSettingsFile -ConfigPath (Join-Path $DataRoot 'config')
+        if (Test-Path -LiteralPath $destSettings) { return $out }
+
+        $moved = New-Object System.Collections.Generic.List[string]
+
+        foreach ($name in @('config', 'data', 'uploads')) {
+            $from = Join-Path $RootPath $name
+            if (-not (Test-Path -LiteralPath $from)) { continue }
+
+            $to = Join-Path $DataRoot $name
+            if (-not (Test-Path -LiteralPath $to)) {
+                New-Item -ItemType Directory -Path $to -Force -ErrorAction Stop | Out-Null
+            }
+
+            $items = @(Get-ChildItem -LiteralPath $from -Force -ErrorAction SilentlyContinue)
+            if ($items.Count -eq 0) { continue }
+
+            Copy-Item -LiteralPath $from -Destination $DataRoot -Recurse -Force -ErrorAction Stop
+            $moved.Add($name + '\ (' + $items.Count + ' items)')
+        }
+
+        if ($moved.Count -gt 0) {
+            $out.Migrated = $true
+            $out.Items    = @($moved)
+        }
+    } catch {
+        $out.Error = $_.Exception.Message
+    }
+
+    return $out
+}
+
 function Get-DsmtSavedSettings {
     <#
     .SYNOPSIS
-        Reads config\dsmt.config.json - the settings Install-DSMT.ps1 chose -
-        so the console can be started with no parameters at all.
+        Reads dsmt.config.json - the settings Install-DSMT.ps1 chose - so the
+        console can be started with no parameters at all.
     .DESCRIPTION
         Returns $null when the file is absent (a perfectly normal state: the
         installer was never run, or the operator passes everything on the
@@ -152,9 +433,9 @@ function Get-DsmtSavedSettings {
         because silently falling back to defaults is how a machine ends up
         pointing at the wrong domain without anyone noticing.
     #>
-    param([Parameter(Mandatory = $true)][string] $RootPath)
+    param([Parameter(Mandatory = $true)][string] $ConfigPath)
 
-    $path = Join-Path (Join-Path $RootPath 'config') 'dsmt.config.json'
+    $path = Get-DsmtSettingsFile -ConfigPath $ConfigPath
     if (-not (Test-Path -LiteralPath $path)) { return $null }
 
     try {
@@ -170,18 +451,21 @@ function Get-DsmtSavedSettings {
 function Save-DsmtSavedSettings {
     <#
     .SYNOPSIS
-        Writes config\dsmt.config.json, merging over whatever is already
-        there so a value this call does not mention is preserved.
+        Writes dsmt.config.json, merging over whatever is already there so a
+        value this call does not mention is preserved.
     .OUTPUTS
         Hashtable with Ok and Error.
     #>
     param(
-        [Parameter(Mandatory = $true)][string] $RootPath,
-        [Parameter(Mandatory = $true)][hashtable] $Values
+        [Parameter(Mandatory = $true)][string] $ConfigPath,
+        # IDictionary, not hashtable: the installer builds its values as
+        # [ordered]@{ } to keep the file readable, and an OrderedDictionary is
+        # not a Hashtable. Typing this too narrowly fails the call outright.
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary] $Values
     )
 
-    $dir  = Join-Path $RootPath 'config'
-    $path = Join-Path $dir 'dsmt.config.json'
+    $dir  = $ConfigPath
+    $path = Get-DsmtSettingsFile -ConfigPath $dir
 
     try {
         if (-not (Test-Path -LiteralPath $dir)) {
@@ -190,7 +474,7 @@ function Save-DsmtSavedSettings {
 
         $merged = [ordered]@{}
 
-        $existing = Get-DsmtSavedSettings -RootPath $RootPath
+        $existing = Get-DsmtSavedSettings -ConfigPath $dir
         if ($null -ne $existing) {
             foreach ($prop in $existing.PSObject.Properties) {
                 $merged[$prop.Name] = $prop.Value

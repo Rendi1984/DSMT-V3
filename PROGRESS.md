@@ -5,13 +5,23 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.20.1` — matches the top entry of `CHANGELOG.md` and
+`1.21.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
-installs RSAT, prepares folders, creates the SQL database, reserves the port,
-opens the firewall, optionally registers a boot task, and saves
-`config/dsmt.config.json` — after which `Start-DSMT.ps1` needs no parameters.
+installs RSAT, copies the code to `%ProgramFiles%\DSMT`, prepares state under
+`%ProgramData%\DSMT`, creates the SQL database, reserves the port, opens the
+firewall, registers the service, writes the registry pointers and saves
+`dsmt.config.json` — after which `Start-DSMT.ps1` needs no parameters.
+
+**Where each setting lives (1.21.0):** the registry key
+`HKLM\SOFTWARE\Rendi Group\DSMT` holds `InstallPath`, `DataPath` and
+`Version` — pointers only. Everything else is in
+`%ProgramData%\DSMT\config\dsmt.config.json`: domain, port, listen address,
+identity mode, service account, SQL server/database, idle timeout, search
+result cap, group filters, health-alert settings. Per-browser preferences
+(visible columns, which Settings/Tools section was last open) stay in
+`localStorage` and are deliberately not server state.
 
 Deployment guide for operators: `docs/deployment-guide.html` (open in a
 browser). It is the step-by-step install/first-connection document; keep it in
@@ -785,6 +795,45 @@ ever generates the command. That single decision shapes all of 29b, and it is
 a security question rather than a technical one - the console would be
 granting directory rights through a web form, which is the same class of
 concern already flagged for attribute writes in 28c.
+
+### Small UI items (30-31) — raised 2026-08-08, NOT to be built yet
+
+**30. Group filters: show the built-in ones, and make the list editable in
+place.** Settings -> Group filters currently *describes* `Privileged` and
+`AdminSDHolder` in prose and then says "No custom filters yet." Two problems
+with that: the two filters that actually exist are invisible on the screen
+that is supposed to list them, and a custom filter can only be created, not
+edited, without deleting and retyping it.
+
+- List all filters, built-in and custom, in one table — name, the terms it
+  matches, and where it came from.
+- The two built-ins stay **read-only and must be labelled as such.** They are
+  not settings, they are facts about Active Directory: `Privileged` is matched
+  on SID/RID precisely because a group called Domain Admins can be renamed and
+  is localised, so exposing it as an editable term list would invite someone
+  to break it in the one place it matters most.
+- Custom filters get inline edit, not just add and remove.
+- Small, self-contained, and entirely in `renderSettings()` plus the existing
+  `/api/settings/groupfilters` route — no new backend capability needed.
+
+**31. Tabs inside the profile window, with group memberships on their own
+tab.** Raised with a screenshot: the profile window is now a single long
+scroll — identity, organisation, account, distinguished name, and then group
+memberships below the fold. Splitting it into tabs (Overview / Memberships,
+and later Attributes from item 28) would show more with less crowding, and
+gives 28 the home it was always meant to have.
+
+- **This is the same placement decision as 28, so build them together or at
+  least design the tab strip once.** Adding a memberships tab now and then
+  bolting an attributes tab on later is how the window ends up with two
+  different navigation patterns.
+- Keep the action buttons (Reset password, Unlock, Disable, Move OU, Add to
+  group) **outside** the tab strip, where they are now. They apply to the
+  user, not to a tab, and moving them inside one would hide half of them
+  depending on which tab is open.
+- Watch the 640px breakpoint: a tab strip inside a slide-over is the layout
+  most likely to overflow, and the rule in `CLAUDE.md` stands — never solve a
+  narrow viewport by hiding directory data.
 
 ### Where all of this goes — the tab count is the real constraint
 

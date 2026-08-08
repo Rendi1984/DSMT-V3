@@ -50,8 +50,17 @@ var state = {
   settings: null,
   sessionMinutes: 0,
   publisher: '',
+  adAlert: null,
+  adAlertTimer: null,
   busy: 0
 };
+
+// How often the console ASKS the server about AD health. Not how often the
+// check runs - the server decides that from its own interval (default hourly)
+// and answers from cache in between, so polling more often costs one small
+// JSON response, not a directory sweep. Five minutes is short enough that a
+// problem found by another operator's poll reaches this bell quickly.
+var ALERT_POLL_MS = 5 * 60 * 1000;
 
 // Column definitions are the app's own fixed UI config - not directory data -
 // so they are legitimately defined here. (CLAUDE.md audit step 1.)
@@ -143,7 +152,12 @@ function api(path, options) {
   if (state.token) { headers['Authorization'] = 'Bearer ' + state.token; }
   if (opts.body !== undefined) { headers['Content-Type'] = 'application/json'; }
 
-  busy(true);
+  // A background poll must not flash the busy bar. Without this the bell's
+  // five-minute check makes the whole console blink as if the operator had
+  // started something, which is how a quiet feature becomes an irritating one.
+  var quiet = !!opts.quiet;
+  if (!quiet) { busy(true); }
+
   return fetch(path, {
     method: opts.method || 'GET',
     headers: headers,
@@ -165,10 +179,10 @@ function api(path, options) {
       return data;
     });
   }).then(function (data) {
-    busy(false);
+    if (!quiet) { busy(false); }
     return data;
   }, function (err) {
-    busy(false);
+    if (!quiet) { busy(false); }
     throw err;
   });
 }
@@ -194,6 +208,8 @@ function clearToken() {
 
 function signOutLocal() {
   stopIdleWatch();
+  stopAdAlertWatch();
+  state.adAlert = null;
   clearToken();
   state.user = null;
   showLogin();
@@ -380,6 +396,7 @@ function enterApp() {
   loadDomainInfo();
   setTab(state.tab, true);
   startIdleWatch(state.sessionMinutes);
+  startAdAlertWatch();
 }
 
 function paintIdentity() {
@@ -413,9 +430,70 @@ function loadDomainInfo() {
 // inventing something to show.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Scheduled AD health
+//
+// The server runs the checks at most once per interval and serves the cached
+// verdict in between, so this poll is cheap. It is only started once signed
+// in: the checks run as the signed-in operator, and there is nobody to show a
+// bell to before that.
+// ---------------------------------------------------------------------------
+
+function pollAdAlerts(force) {
+  if (!state.token) { return; }
+
+  var url = '/api/alerts' + (force ? '?force=1' : '');
+  api(url, { quiet: true }).then(function (data) {
+    if (!data || !data.ok) { return; }
+    state.adAlert = data.alert || null;
+    renderNotifications();
+  }).catch(function () {
+    // Deliberately silent. This runs on a timer in the background, and a
+    // toast every five minutes because a controller is briefly unreachable
+    // would train the operator to ignore toasts. The failure still shows in
+    // the bell, because the server records a failed check as a problem.
+  });
+}
+
+function startAdAlertWatch() {
+  stopAdAlertWatch();
+  pollAdAlerts(false);
+  state.adAlertTimer = setInterval(function () { pollAdAlerts(false); }, ALERT_POLL_MS);
+}
+
+function stopAdAlertWatch() {
+  if (state.adAlertTimer) { clearInterval(state.adAlertTimer); state.adAlertTimer = null; }
+}
+
+function ackAdAlerts() {
+  if (!state.adAlert || !state.adAlert.unread) { return; }
+  api('/api/alerts/ack', { method: 'POST', body: {}, quiet: true }).then(function (data) {
+    if (data && data.ok) {
+      state.adAlert = data.alert || state.adAlert;
+      renderNotifications();
+    }
+  }).catch(function () { /* the panel is already open; nothing to report */ });
+}
+
 function buildNotifications() {
   var list = [];
   var storage = state.storage;
+
+  // AD health first, and always first: a replication failure outranks every
+  // piece of console advice below it.
+  var alert = state.adAlert;
+  if (alert && alert.problems && alert.problems.length) {
+    var when = alert.checkedUtc ? new Date(alert.checkedUtc).toLocaleString() : 'just now';
+    asArray(alert.problems).forEach(function (line) {
+      list.push({
+        kind: alert.overall === 'bad' ? 'bad' : 'warn',
+        title: 'Active Directory health',
+        body: line + '  (checked ' + when + ')',
+        actionLabel: 'Open AD health',
+        action: function () { closeBell(); openAdHealthTool(); }
+      });
+    });
+  }
 
   if (storage && !storage.sqlEnabled) {
     list.push({
@@ -527,6 +605,10 @@ function renderNotifications() {
 
 function openBell() {
   renderNotifications();
+  // Opening the panel IS reading them. The server acknowledges the exact set
+  // of problems on screen, so a new or changed fault lights the badge again
+  // rather than staying silenced by an earlier glance.
+  ackAdAlerts();
   $('bellPanel').hidden = false;
   $('bellBtn').setAttribute('aria-expanded', 'true');
 }
@@ -1785,6 +1867,14 @@ var TOOLS = [
 
 var TOOL_KEY = 'dsmt.tools.current';
 
+/* Jump straight to the AD health tool - what a notification about AD health
+   should do when you click it. Selects the sub-tool first so loadTools()
+   renders that one rather than whichever was last open. */
+function openAdHealthTool() {
+  writeSetting(TOOL_KEY, 'adhealth');
+  setTab('tools');
+}
+
 function loadTools() {
   var current = readSetting(TOOL_KEY, TOOLS[0].key);
   var known = false;
@@ -2695,6 +2785,21 @@ function renderSettings() {
   var b = s.sessionBounds || {};
   var bounds = { min: b.Min || b.min || 1, max: b.Max || b.max || 480, def: b.Default || b.def || 15 };
 
+  // PowerShell hashtables serialise with their own capitalisation, so each of
+  // these reads both spellings rather than betting on one. The fallbacks are
+  // last resorts for an older server, not the values in use.
+  var pb = s.pageSizeBounds || {};
+  var pbounds = { min: pb.Min || pb.min || 25, max: pb.Max || pb.max || 5000, def: pb.Default || pb.def || 500 };
+
+  var ab = s.alertBounds || {};
+  var abounds = { min: ab.Min || ab.min || 5, max: ab.Max || ab.max || 1440, def: ab.Default || ab.def || 60 };
+
+  var al = s.alerts || {};
+  var alerts = {
+    enabled: (al.Enabled === undefined ? (al.enabled === undefined ? true : al.enabled) : al.Enabled),
+    intervalMinutes: al.IntervalMinutes || al.intervalMinutes || abounds.def
+  };
+
   // Where the data actually goes, stated as fields rather than buried in a
   // sentence: on a screen with two name-shaped inputs, the one thing that must
   // be unambiguous is which server and database are LIVE right now, as opposed
@@ -2751,8 +2856,77 @@ function renderSettings() {
         settingsRow('Domain controller', s.server || 'Auto-discovered') +
         settingsRow('Listening on', s.listenAddress + ':' + s.port) +
         settingsRow('Search result cap', String(s.pageSize)) +
-        settingsRow('Data folder', s.dataPath) +
-      '</dl>' });
+      '</dl>' +
+      '<p class="set-sub">Where things are</p>' +
+      '<dl class="detail-fields">' +
+        settingsRow('Program files', s.installPath || '') +
+        settingsRow('Settings file', s.configFile || '') +
+        settingsRow('Audit / log folder', s.dataPath) +
+        settingsRow('Registry pointers', s.registryKey || '') +
+      '</dl>' +
+      (s.pathMode === 'portable'
+        ? '<p class="dialog-note"><strong>Portable layout.</strong> Settings and data live inside the ' +
+          'program folder, so replacing that folder to upgrade takes them with it - which is how an ' +
+          'upgrade ends up with no database configured and no error to explain it. Run ' +
+          '<code>Install-DSMT.ps1</code> on the host to move the code to Program Files and the state to ' +
+          'ProgramData, where an upgrade cannot reach it. Existing settings are copied across, not moved.</p>'
+        : '<p class="dialog-note">The code and the state are in separate folders, so replacing the ' +
+          'program folder to upgrade cannot lose the settings. The registry key holds pointers to both ' +
+          'and nothing else - every setting itself is in the settings file above.</p>') });
+
+  sections.push({ key: 'search', label: 'Search', hint: 'Result cap', body:
+      '<h2 class="set-h">Search result cap</h2>' +
+      '<p class="dialog-note">The most objects a Users or Groups search will return. Every row is a ' +
+      'live directory read and a row of markup, so this is a limit on the browser as much as on ' +
+      'Active Directory - raising it makes large searches slower, not more complete. When a search ' +
+      'hits the cap the console says so, rather than quietly showing a partial list.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setPageSize">Maximum results (' + pbounds.min + '-' + pbounds.max + ')</label>' +
+        '<input class="input" id="setPageSize" type="number" min="' + pbounds.min + '" max="' + pbounds.max +
+        '" step="1" value="' + esc(String(s.pageSize || pbounds.def)) + '"></div>' +
+        '<div class="field"><label for="setPagePreset">Common values</label>' +
+        '<select class="input" id="setPagePreset">' +
+          '<option value="">Choose</option>' +
+          '<option value="250">250</option>' +
+          '<option value="500">500 (default)</option>' +
+          '<option value="1000">1000</option>' +
+          '<option value="2000">2000</option>' +
+          '<option value="5000">5000 (maximum)</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<p class="dialog-note">Applies to the next search - no restart needed.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyPageSize">Save result cap</button>' +
+      '</div>' +
+      '<div class="set-result" id="pageSizeResult"></div>' });
+
+  sections.push({ key: 'alerts', label: 'AD health alerts', hint: 'Bell notifications', body:
+      '<h2 class="set-h">AD health alerts</h2>' +
+      '<p class="dialog-note">Runs the Tools &gt; AD health checks on a schedule and raises anything ' +
+      'wrong on the bell at the top right - replication that is behind, a controller that stopped ' +
+      'answering, a clock drifting towards the Kerberos limit, an FSMO role held by a machine that ' +
+      'is gone.</p>' +
+      '<p class="dialog-note"><strong>What this does and does not cover.</strong> The check runs when ' +
+      'an open console asks for it and the last result is older than the interval below - so while ' +
+      'somebody has DSMT open, the directory is checked on schedule. It does <strong>not</strong> run ' +
+      'on an unattended server with nobody signed in, and it does not send mail. Real unattended ' +
+      'monitoring needs a scheduled task with its own account, which DSMT deliberately does not set ' +
+      'up for you.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setAlertsOn">Alerts</label>' +
+        '<select class="input" id="setAlertsOn">' +
+          '<option value="1"' + (alerts.enabled ? ' selected' : '') + '>On</option>' +
+          '<option value="0"' + (alerts.enabled ? '' : ' selected') + '>Off</option>' +
+        '</select></div>' +
+        '<div class="field"><label for="setAlertMins">Check at most once every (minutes)</label>' +
+        '<input class="input" id="setAlertMins" type="number" min="' + abounds.min + '" max="' + abounds.max +
+        '" step="1" value="' + esc(String(alerts.intervalMinutes || abounds.def)) + '"></div>' +
+      '</div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyAlerts">Save alert settings</button>' +
+        '<button class="btn btn-ghost" type="button" id="runAlertsNow">Check now</button>' +
+      '</div>' +
+      '<div class="set-result" id="alertsResult"></div>' });
 
   sections.push({ key: 'network', label: 'Network', hint: 'Listening port', body:
       '<h2 class="set-h">Network</h2>' +
@@ -3400,6 +3574,67 @@ function wireSettings(bounds) {
                   (res.persisted ? '' : ' Not saved: ' + res.persistError), res.persisted);
       })
       .catch(function (err) { setResult('idleResult', err.message, false); });
+  });
+
+  // ---- search result cap ----
+  $('setPagePreset').addEventListener('change', function (e) {
+    if (e.target.value) { $('setPageSize').value = e.target.value; }
+  });
+
+  $('applyPageSize').addEventListener('click', function () {
+    var size = parseInt($('setPageSize').value, 10);
+    if (isNaN(size)) {
+      setResult('pageSizeResult', 'Enter a whole number.', false);
+      return;
+    }
+    api('/api/settings/pagesize', { method: 'POST', body: { pageSize: size } })
+      .then(function (res) {
+        // state.limit is what the "result limit reached" notice quotes, so it
+        // has to follow the server or the console reports the old number
+        // against the new behaviour.
+        state.limit = res.pageSize;
+        if (state.settings) { state.settings.pageSize = res.pageSize; }
+        setResult('pageSizeResult', 'Searches now return at most ' + res.pageSize + ' objects.' +
+                  (res.persisted ? '' : ' Not saved: ' + res.persistError), res.persisted);
+        renderSettings();
+      })
+      .catch(function (err) { setResult('pageSizeResult', explainApiError(err.message), false); });
+  });
+
+  // ---- AD health alerts ----
+  $('applyAlerts').addEventListener('click', function () {
+    var on = ($('setAlertsOn').value === '1');
+    var mins = parseInt($('setAlertMins').value, 10);
+    if (isNaN(mins)) {
+      setResult('alertsResult', 'Enter a whole number of minutes.', false);
+      return;
+    }
+    api('/api/settings/alerts', { method: 'POST', body: { enabled: on, intervalMinutes: mins } })
+      .then(function (res) {
+        if (state.settings) {
+          state.settings.alerts = { enabled: res.enabled, intervalMinutes: res.intervalMinutes };
+        }
+        setResult('alertsResult', res.enabled
+          ? ('AD health is checked at most once every ' + res.intervalMinutes + ' minutes.')
+          : 'AD health alerts are off. The Tools > AD health screen still runs on demand.',
+          res.persisted);
+        if (res.enabled) { startAdAlertWatch(); } else { stopAdAlertWatch(); state.adAlert = null; renderNotifications(); }
+      })
+      .catch(function (err) { setResult('alertsResult', explainApiError(err.message), false); });
+  });
+
+  $('runAlertsNow').addEventListener('click', function () {
+    setResult('alertsResult', 'Running the checks against every domain controller. This can take a while.', true);
+    api('/api/alerts?force=1')
+      .then(function (res) {
+        state.adAlert = res.alert || null;
+        renderNotifications();
+        var n = res.alert ? res.alert.count : 0;
+        setResult('alertsResult', n
+          ? (n + ' problem' + (n === 1 ? '' : 's') + ' found - open the bell at the top right.')
+          : 'Checked: nothing wrong.', true);
+      })
+      .catch(function (err) { setResult('alertsResult', explainApiError(err.message), false); });
   });
 }
 

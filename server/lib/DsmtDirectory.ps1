@@ -530,7 +530,7 @@ function Get-DsmtGroupFilters {
 
     $cfg = Get-DsmtConfig
     $saved = $null
-    try { $saved = Get-DsmtSavedSettings -RootPath $cfg.RootPath } catch { $saved = $null }
+    try { $saved = Get-DsmtSavedSettings -ConfigPath $cfg.ConfigPath } catch { $saved = $null }
 
     if ($null -ne $saved -and $saved.PSObject.Properties['GroupFilters']) {
         foreach ($f in @($saved.GroupFilters)) {

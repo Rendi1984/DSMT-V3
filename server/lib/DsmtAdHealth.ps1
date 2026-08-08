@@ -37,12 +37,24 @@
        and never take the whole page down with it. Each controller is wrapped
        individually for exactly this reason.
 
-    3. THIS IS DIAGNOSTIC REPORTING, NOT MONITORING. It runs when an operator
-       asks. If it ever grows scheduling and alerting it has become a
-       different product, and the answer at that point is no.
+    3. THIS IS DIAGNOSTIC REPORTING WITH A NOTIFICATION ON TOP - NOT
+       MONITORING. Until 1.21.0 this rule read "if it ever grows scheduling
+       and alerting it has become a different product, and the answer at that
+       point is no." It grew both, deliberately, and the rule is rewritten
+       rather than quietly ignored: what it was guarding against is a product
+       that claims to watch a directory nobody is looking at.
+
+       So the line is drawn at honesty about coverage. The check is cached and
+       runs on demand from an open console (see "SCHEDULED CHECKING AND THE
+       BELL" below) - it does NOT run on an unattended server, and nothing in
+       the UI may imply that it does. Real monitoring means a scheduled task
+       with its own identity and AD read rights, and that remains a separate
+       decision, not something to arrive at by degrees.
 
     Cost: several remote calls per domain controller. That is why nothing here
-    runs on page load - see the explicit Run button in the Tools screen.
+    runs on page load - see the explicit Run button in the Tools screen, and
+    the interval cache that keeps the bell from turning every poll into a
+    directory-wide sweep.
 .NOTES
     Author  : IT Team
     Runtime : Windows PowerShell 5.1
@@ -459,4 +471,235 @@ function Get-DsmtAdHealth {
 
     $result.overall = $worst
     return $result
+}
+
+# ---------------------------------------------------------------------------
+# SCHEDULED CHECKING AND THE BELL
+#
+# WHAT "EVERY HOUR" HONESTLY MEANS HERE, because it is not a background timer
+# and pretending otherwise would be the worst kind of feature.
+#
+# The server is a single-threaded System.Net.HttpListener loop: it blocks on
+# GetContext() until a request arrives, so there is no thread free to fire a
+# timer, and adding one would mean either a runspace or holding an operator's
+# credentials for unattended use - and using a stored credential to read AD on
+# a schedule is exactly the design decision CLAUDE.md records as deliberately
+# NOT taken (see "Attempted and deliberately NOT pursued", item 1).
+#
+# So the check is CACHED AND DEMAND-DRIVEN. An open console asks for the alert
+# state every few minutes; when the cached result is older than the configured
+# interval, that request runs a fresh check as the operator who asked, and
+# everyone sees the answer. In practice: while anyone has DSMT open, the
+# directory is checked once an hour. While nobody does, it is not - and there
+# is no bell for nobody to look at either.
+#
+# The one thing this does NOT do is alert an unattended machine. If that is
+# wanted it needs a scheduled task with its own service identity and AD read
+# rights, which is a separate decision, not a quiet side effect of this file.
+# ---------------------------------------------------------------------------
+
+# The interval bounds live in DsmtCommon.ps1 with the other bounds - see
+# Get-DsmtAlertBounds below, which reads them.
+
+# Last result, shared by every session. Empty CheckedUtc means "never run".
+$script:DsmtAdHealthCache = @{
+    CheckedUtc   = $null
+    Overall      = 'unknown'
+    Problems     = @()
+    Signature    = ''
+    Error        = ''
+    RanBy        = ''
+    AckSignature = ''
+    AckUtc       = $null
+}
+
+function Get-DsmtAlertBounds {
+    return @{
+        Default = $script:DsmtAlertIntervalDefault
+        Min     = $script:DsmtAlertIntervalMin
+        Max     = $script:DsmtAlertIntervalMax
+    }
+}
+
+function Get-DsmtHealthProblems {
+    <#
+    .SYNOPSIS
+        Reduces a full health result to the short lines the bell shows.
+    .DESCRIPTION
+        One line per thing actually wrong, each naming the object and the
+        reason. A count on its own ("3 problems") tells an operator to go
+        looking; the point of the bell is to tell them what to look at.
+    #>
+    param([Parameter(Mandatory = $true)] $Health)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+
+    # The field names below are the ones the rows in this file actually carry -
+    # 'note', 'role', 'server'/'partner'/'reason' - not a generic name/detail
+    # pair. Reading a property that does not exist yields $null in PowerShell
+    # rather than an error, so a mismatch here would produce alert lines that
+    # are silently blank after the colon.
+    foreach ($dc in @($Health.controllers)) {
+        if ($null -eq $dc) { continue }
+        if ($dc.status -eq 'ok') { continue }
+        $why = [string]$dc.note
+        if ([string]::IsNullOrWhiteSpace($why)) { $why = 'not healthy' }
+        $lines.Add(([string]$dc.name) + ': ' + $why)
+    }
+
+    foreach ($rep in @($Health.replication)) {
+        if ($null -eq $rep) { continue }
+        if ($rep.status -eq 'ok') { continue }
+        $why = [string]$rep.note
+        if ([string]::IsNullOrWhiteSpace($why)) { $why = 'replication is behind' }
+        $lines.Add('Replication on ' + ([string]$rep.name) + ': ' + $why)
+    }
+
+    foreach ($fail in @($Health.failures)) {
+        if ($null -eq $fail) { continue }
+        $lines.Add('Replication failure: ' + ([string]$fail.server) + ' -> ' + ([string]$fail.partner) +
+                   ' (' + [string]$fail.count + ' failures) ' + ([string]$fail.reason))
+    }
+
+    foreach ($role in @($Health.fsmo)) {
+        if ($null -eq $role) { continue }
+        if ($role.status -eq 'ok') { continue }
+        $lines.Add('FSMO ' + ([string]$role.role) + ': ' + ([string]$role.note))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$Health.error)) {
+        $lines.Add('The check itself could not complete: ' + [string]$Health.error)
+    }
+
+    # Empty is a normal outcome here - a healthy directory produces no lines -
+    # so @() and not ,@(); see CLAUDE.md on one-element collections.
+    return @($lines)
+}
+
+function Get-DsmtProblemSignature {
+    <#
+    .SYNOPSIS
+        A stable fingerprint of the current problem set.
+    .DESCRIPTION
+        This is what makes "acknowledged" mean something. Acknowledging by
+        timestamp would silence a NEW fault that appeared a minute later;
+        acknowledging the exact set of problems means the bell goes quiet for
+        what was read and lights up again the moment the set changes.
+    #>
+    param([string[]] $Problems)
+
+    $joined = (@($Problems) -join "`n")
+    if ([string]::IsNullOrEmpty($joined)) { return '' }
+
+    $sha   = New-Object System.Security.Cryptography.SHA256Managed
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($joined)
+    $hash  = $sha.ComputeHash($bytes)
+    $sha.Dispose()
+
+    return ([System.BitConverter]::ToString($hash)).Replace('-', '').Substring(0, 16)
+}
+
+function Invoke-DsmtScheduledHealthCheck {
+    <#
+    .SYNOPSIS
+        Returns the cached AD health verdict, refreshing it when it is older
+        than the configured interval.
+    .OUTPUTS
+        The cache hashtable. -Force runs regardless of age (the Refresh
+        button); -CacheOnly never runs a check, for callers that only want to
+        report what is already known.
+    #>
+    param(
+        $Credential,
+        [int] $IntervalMinutes = 0,
+        [string] $Account = '',
+        [switch] $Force,
+        [switch] $CacheOnly
+    )
+
+    if ($IntervalMinutes -le 0) { $IntervalMinutes = $script:DsmtAlertIntervalDefault }
+
+    $cache = $script:DsmtAdHealthCache
+    $now   = (Get-Date).ToUniversalTime()
+
+    $stale = $true
+    if ($null -ne $cache.CheckedUtc) {
+        $age = ($now - $cache.CheckedUtc).TotalMinutes
+        if ($age -lt $IntervalMinutes) { $stale = $false }
+    }
+
+    if ($CacheOnly) { return $cache }
+    if (-not $stale -and -not $Force) { return $cache }
+
+    try {
+        $health   = Get-DsmtAdHealth -Credential $Credential
+        $problems = @(Get-DsmtHealthProblems -Health $health)
+
+        $cache.CheckedUtc = $now
+        $cache.Overall    = [string]$health.overall
+        $cache.Problems   = $problems
+        $cache.Signature  = Get-DsmtProblemSignature -Problems $problems
+        $cache.Error      = [string]$health.error
+        $cache.RanBy      = $Account
+
+        if ($problems.Count -gt 0) {
+            Write-DsmtLog -Level 'WARN' -Message ('AD health check: ' + $problems.Count + ' problem(s) - ' + ($problems -join ' | '))
+        } else {
+            Write-DsmtLog -Message 'AD health check: no problems found.'
+        }
+    } catch {
+        # A check that cannot run is itself worth a bell: silence here would
+        # read as "everything is fine" for as long as the failure lasts.
+        $cache.CheckedUtc = $now
+        $cache.Overall    = 'bad'
+        $cache.Problems   = @('The scheduled AD health check could not run: ' + $_.Exception.Message)
+        $cache.Signature  = Get-DsmtProblemSignature -Problems $cache.Problems
+        $cache.Error      = $_.Exception.Message
+        $cache.RanBy      = $Account
+        Write-DsmtLog -Level 'ERROR' -Message ('AD health check failed: ' + $_.Exception.Message)
+    }
+
+    return $script:DsmtAdHealthCache
+}
+
+function Set-DsmtHealthAcknowledged {
+    <#
+    .SYNOPSIS
+        Marks the problem set currently in the cache as seen, which is what
+        clears the bell's badge. A new or changed problem re-raises it.
+    #>
+    $script:DsmtAdHealthCache.AckSignature = $script:DsmtAdHealthCache.Signature
+    $script:DsmtAdHealthCache.AckUtc       = (Get-Date).ToUniversalTime()
+    return $script:DsmtAdHealthCache
+}
+
+function ConvertTo-DsmtAlertPayload {
+    <#
+    .SYNOPSIS
+        The shape the bell reads. Kept in one place so the console and the
+        server cannot disagree about what "unread" means.
+    #>
+    param([Parameter(Mandatory = $true)] $Cache, [int] $IntervalMinutes = 0)
+
+    if ($IntervalMinutes -le 0) { $IntervalMinutes = $script:DsmtAlertIntervalDefault }
+
+    $problems = @($Cache.Problems)
+
+    $checked = ''
+    if ($null -ne $Cache.CheckedUtc) { $checked = $Cache.CheckedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+
+    # Unread = there is something wrong AND this exact set has not been
+    # acknowledged. An empty signature (nothing wrong) is never unread.
+    $unread = $false
+    if ($problems.Count -gt 0 -and $Cache.Signature -ne $Cache.AckSignature) { $unread = $true }
+
+    return @{
+        overall         = [string]$Cache.Overall
+        problems        = $problems
+        count           = $problems.Count
+        unread          = $unread
+        checkedUtc      = $checked
+        ranBy           = [string]$Cache.RanBy
+        intervalMinutes = $IntervalMinutes
+    }
 }

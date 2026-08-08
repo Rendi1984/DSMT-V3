@@ -66,6 +66,11 @@
     .\Start-DSMT.ps1 -SqlServer SQL01 -SqlDatabase DSMT
     Creates the DSMT database on SQL01 if it is missing and stores operators,
     sessions, the directory snapshot and the audit log there.
+.PARAMETER DataRoot
+    Where config\, data\ and uploads\ live. Almost never passed by hand: the
+    installer records it in HKLM\SOFTWARE\Rendi Group\DSMT\DataPath and this
+    script reads it from there. Without either, state stays beside the code
+    (portable mode), which is how every install before 1.21.0 worked.
 .NOTES
     Author  : IT Team
     Runtime : Windows PowerShell 5.1
@@ -83,7 +88,8 @@ param(
     [string] $SqlServer = '',
     [string] $SqlDatabase = 'DSMT',
     [string] $SqlUsername = '',
-    [string] $SqlPassword = ''
+    [string] $SqlPassword = '',
+    [string] $DataRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -100,9 +106,30 @@ $repoRoot  = Split-Path -Parent $scriptDir
 . (Join-Path $scriptDir 'lib\DsmtAdHealth.ps1')
 . (Join-Path $scriptDir 'lib\DsmtHttp.ps1')
 
+# Where state lives has to be settled BEFORE the settings file is read - the
+# settings file is inside it. Order: -DataRoot, then the registry pointer the
+# installer wrote, then the code folder (portable).
+$dataRootInfo = Resolve-DsmtDataRoot -RootPath $repoRoot -DataRoot $DataRoot
+$configDir    = Join-Path $dataRootInfo.Path 'config'
+
+# An install made before 1.21.0 keeps its state beside the code. Copy it
+# across once, or this upgrade is the one that loses the SQL settings.
+if ($dataRootInfo.Mode -eq 'installed') {
+    $migration = Move-DsmtLegacyState -RootPath $repoRoot -DataRoot $dataRootInfo.Path
+    if ($migration.Migrated) {
+        Write-Host ('  [ok]   Migrated existing state to ' + $dataRootInfo.Path) -ForegroundColor Green
+        foreach ($item in @($migration.Items)) {
+            Write-Host ('         ' + $item) -ForegroundColor DarkGray
+        }
+        Write-Host ('         The originals under ' + $repoRoot + ' were copied, not moved, and can be deleted once this build is proven.') -ForegroundColor DarkGray
+    } elseif ($migration.Error) {
+        Write-Host ('  [warn] Could not migrate the previous state folder: ' + $migration.Error) -ForegroundColor Yellow
+    }
+}
+
 # Settings chosen by Install-DSMT.ps1 fill in for anything not passed on the
 # command line. An explicit parameter always wins over the saved file.
-$saved = Get-DsmtSavedSettings -RootPath $repoRoot
+$saved = Get-DsmtSavedSettings -ConfigPath $configDir
 if ($null -ne $saved) {
     foreach ($name in @('Domain', 'Server', 'Port', 'ListenAddress', 'SessionHours', 'SessionMinutes', 'PageSize', 'IdentityMode', 'SqlServer', 'SqlDatabase')) {
         if ($PSBoundParameters.ContainsKey($name)) { continue }
@@ -118,7 +145,8 @@ if ($null -ne $saved) {
 
 Initialize-DsmtConfig -RootPath $repoRoot -Domain $Domain -Server $Server -Port $Port `
                       -ListenAddress $ListenAddress -SessionHours $SessionHours -SessionMinutes $SessionMinutes `
-                      -PageSize $PageSize -IdentityMode $IdentityMode
+                      -PageSize $PageSize -IdentityMode $IdentityMode `
+                      -DataRoot $dataRootInfo.Path -PathMode $dataRootInfo.Mode
 
 # Which account the installer registered this to run as, and of what kind.
 # Recorded for display only - what the process is actually running as is
@@ -134,7 +162,7 @@ Write-Host ''
 Write-Host '  DSMT - Directory Service Management Tool' -ForegroundColor White
 Write-Host ('  Version ' + $cfg.Version) -ForegroundColor DarkGray
 if ($null -ne $saved) {
-    Write-Host ('  Settings from config\dsmt.config.json (installed ' + $saved.InstalledOn + ')') -ForegroundColor DarkGray
+    Write-Host ('  Settings from ' + (Get-DsmtSettingsFile -ConfigPath $configDir) + ' (installed ' + $saved.InstalledOn + ')') -ForegroundColor DarkGray
 }
 Write-Host ''
 
@@ -226,6 +254,13 @@ if ($cfg.IdentityMode -eq 'hybrid') {
 }
 Write-Host ('  Idle timeout: ' + $cfg.SessionMinutes + ' minutes') -ForegroundColor DarkGray
 Write-Host ('  Audit log: ' + $cfg.DataPath) -ForegroundColor DarkGray
+if ($cfg.PathMode -eq 'portable') {
+    Write-Host ('  State: ' + $cfg.DataRoot + ' - PORTABLE') -ForegroundColor Yellow
+    Write-Host '         State lives beside the code, so an upgrade that replaces this folder takes' -ForegroundColor Yellow
+    Write-Host '         config and data with it. Run Install-DSMT.ps1 to separate them.' -ForegroundColor Yellow
+} else {
+    Write-Host ('  State: ' + $cfg.DataRoot + ' (kept out of the code folder, so an upgrade cannot lose it)') -ForegroundColor DarkGray
+}
 Write-Host '  Ctrl+C to stop.' -ForegroundColor DarkGray
 Write-Host ''
 

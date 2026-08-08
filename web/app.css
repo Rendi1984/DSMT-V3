@@ -261,6 +261,22 @@ body { overflow: hidden; }
 }
 .note-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--color-neutral-600); }
 .note-advice .note-dot { background: var(--color-accent); box-shadow: 0 0 7px var(--color-accent); }
+/* A directory fault outranks console advice, and has to look like it does at a
+   glance. Nocturne has no red token and inventing a hex here would break the
+   token rule, so severity is carried by WEIGHT of the accent rather than by
+   hue: 'bad' gets the brightest accent and a wider glow, 'warn' a muted one.
+   The text says what is wrong regardless - colour is never the only signal. */
+.note-bad .note-dot {
+  background: var(--color-accent-300);
+  box-shadow: 0 0 9px var(--color-accent-300);
+  width: 6px; height: 6px;
+}
+.note-warn .note-dot {
+  background: var(--color-accent-500);
+  box-shadow: 0 0 6px var(--color-accent-600);
+}
+.note-bad .note-title { color: var(--color-accent-200); }
+
 .note-body { color: var(--color-neutral-400); line-height: 1.55; }
 .note-action { align-self: flex-start; margin-top: 2px; }
 .note-empty { font-size: 12.5px; color: var(--color-neutral-500); }
@@ -516,6 +532,15 @@ body { overflow: hidden; }
   margin: 0; font-size: 16px;
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
 }
+/* Sub-heading inside a settings card, for a second group of fields under the
+   same card - "Where things are" under System. */
+.set-sub {
+  margin: var(--space-4) 0 0;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-neutral-500);
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+}
+
 .set-form {
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3) var(--space-4);
 }

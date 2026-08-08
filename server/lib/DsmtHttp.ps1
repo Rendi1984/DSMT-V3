@@ -713,7 +713,15 @@ function Invoke-DsmtApi {
                         sessionMinutes = $cfg.SessionMinutes
                         sessionBounds  = Get-DsmtSessionBounds
                         pageSize      = $cfg.PageSize
+                        pageSizeBounds = Get-DsmtPageSizeBounds
                         dataPath      = $cfg.DataPath
+                        dataRoot      = $cfg.DataRoot
+                        configFile    = (Get-DsmtSettingsFile -ConfigPath $cfg.ConfigPath)
+                        installPath   = $cfg.RootPath
+                        pathMode      = $cfg.PathMode
+                        registryKey   = 'HKLM\SOFTWARE\Rendi Group\DSMT'
+                        alerts        = Get-DsmtAlertSettings
+                        alertBounds   = Get-DsmtAlertBounds
                         sqlEnabled    = $sql.Enabled
                         sqlServer     = $sql.Server
                         sqlDatabase   = $sql.Database
@@ -748,7 +756,7 @@ function Invoke-DsmtApi {
                 $previous = $cfg.SessionMinutes
                 $script:DsmtConfig.SessionMinutes = $minutes
 
-                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ SessionMinutes = $minutes }
+                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ SessionMinutes = $minutes }
 
                 # [string] on the left: $previous is an int, and "int + string"
                 # makes PowerShell try to parse the string AS an int, which
@@ -795,7 +803,7 @@ function Invoke-DsmtApi {
                     $clean += [ordered]@{ label = $label; terms = @($terms) }
                 }
 
-                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ GroupFilters = @($clean) }
+                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ GroupFilters = @($clean) }
                 if (-not $saved.Ok) {
                     Send-DsmtError -Response $Response -Message ('Could not save the filters: ' + $saved.Error) -StatusCode 500
                     return
@@ -827,7 +835,7 @@ function Invoke-DsmtApi {
                 }
 
                 $previous = $cfg.Port
-                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ Port = $port }
+                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ Port = $port }
 
                 Write-DsmtAudit -Action 'Change listening port' -Target ([string]$previous + ' -> ' + [string]$port) `
                                 -Operator $session.Account -Reason 'Console configuration change' `
@@ -873,7 +881,7 @@ function Invoke-DsmtApi {
                 $previous = $cfg.IdentityMode
                 $script:DsmtConfig.IdentityMode = $mode
 
-                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{ IdentityMode = $mode }
+                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ IdentityMode = $mode }
 
                 # A change to who reads the directory is a security-relevant
                 # change, so it is audited like any other.
@@ -965,7 +973,7 @@ function Invoke-DsmtApi {
                 }
 
                 # Persist it so the database survives a restart of the server.
-                $saved = Save-DsmtSavedSettings -RootPath $cfg.RootPath -Values @{
+                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{
                     SqlServer   = $server
                     SqlDatabase = $database
                 }
@@ -1585,6 +1593,131 @@ function Invoke-DsmtApi {
             '^/api/health$' {
                 if ($method -ne 'GET') { break }
                 Send-DsmtJson -Response $Response -Data (Get-DsmtHealth -Session $session)
+                return
+            }
+
+            '^/api/alerts$' {
+                if ($method -ne 'GET') { break }
+
+                # The polling endpoint behind the bell. Cheap on almost every
+                # call: it returns the cached verdict and only runs the real
+                # checks when that verdict is older than the interval. The
+                # console polls this every few minutes, so "hourly" costs one
+                # actual check per hour, not one per poll.
+                $settings = Get-DsmtAlertSettings
+                $force    = ((Get-DsmtQueryValue -Request $Request -Name 'force') -eq '1')
+
+                if (-not $settings.Enabled -and -not $force) {
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok      = $true
+                        enabled = $false
+                        alert   = (ConvertTo-DsmtAlertPayload -Cache (Invoke-DsmtScheduledHealthCheck -CacheOnly) `
+                                                             -IntervalMinutes $settings.IntervalMinutes)
+                    }
+                    return
+                }
+
+                $cache = Invoke-DsmtScheduledHealthCheck -Credential $session.Credential `
+                                                         -IntervalMinutes $settings.IntervalMinutes `
+                                                         -Account $session.Account -Force:$force
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok      = $true
+                    enabled = $true
+                    alert   = (ConvertTo-DsmtAlertPayload -Cache $cache -IntervalMinutes $settings.IntervalMinutes)
+                }
+                return
+            }
+
+            '^/api/alerts/ack$' {
+                if ($method -ne 'POST') { break }
+
+                $settings = Get-DsmtAlertSettings
+                $cache    = Set-DsmtHealthAcknowledged
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok    = $true
+                    alert = (ConvertTo-DsmtAlertPayload -Cache $cache -IntervalMinutes $settings.IntervalMinutes)
+                }
+                return
+            }
+
+            '^/api/settings/alerts$' {
+                if ($method -ne 'POST') { break }
+
+                $body    = Read-DsmtBody -Request $Request
+                $enabled = [bool](Get-DsmtBodyValue -Body $body -Name 'enabled' -Default $true)
+
+                $bounds  = Get-DsmtAlertBounds
+                $minutes = 0
+                $raw     = Get-DsmtBodyValue -Body $body -Name 'intervalMinutes' -Default $bounds.Default
+                if (-not [int]::TryParse([string]$raw, [ref] $minutes)) {
+                    Send-DsmtError -Response $Response -Message 'The check interval must be a whole number of minutes.' -StatusCode 400
+                    return
+                }
+                if ($minutes -lt $bounds.Min -or $minutes -gt $bounds.Max) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message ('The check interval must be between ' + $bounds.Min + ' and ' + $bounds.Max + ' minutes.')
+                    return
+                }
+
+                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{
+                    HealthAlertsEnabled  = $enabled
+                    HealthAlertsInterval = $minutes
+                }
+
+                Write-DsmtAudit -Action 'Change health alerts' -Target 'AD health' -Operator $session.Account `
+                                -Reason 'Console configuration change' -Result 'Success' -Category 'session' `
+                                -Detail ('Enabled=' + $enabled + ', every ' + $minutes + ' minutes')
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok              = $true
+                    enabled         = $enabled
+                    intervalMinutes = $minutes
+                    persisted       = $saved.Ok
+                    persistError    = $saved.Error
+                }
+                return
+            }
+
+            '^/api/settings/pagesize$' {
+                if ($method -ne 'POST') { break }
+
+                $body = Read-DsmtBody -Request $Request
+                $raw  = Get-DsmtBodyValue -Body $body -Name 'pageSize' -Default 0
+
+                $size = 0
+                if (-not [int]::TryParse([string]$raw, [ref] $size)) {
+                    Send-DsmtError -Response $Response -Message 'The search result cap must be a whole number.' -StatusCode 400
+                    return
+                }
+
+                # The ceiling is not arbitrary. Every row is an AD read plus a
+                # row of DOM, and past a few thousand the browser, not the
+                # directory, is what falls over. A cap that can be set to
+                # "unlimited" is a cap that will one day be set to unlimited.
+                $bounds = Get-DsmtPageSizeBounds
+                if ($size -lt $bounds.Min -or $size -gt $bounds.Max) {
+                    Send-DsmtError -Response $Response -StatusCode 400 `
+                        -Message ('The search result cap must be between ' + $bounds.Min + ' and ' + $bounds.Max + '.')
+                    return
+                }
+
+                $previous = $cfg.PageSize
+                $script:DsmtConfig.PageSize = $size
+
+                $saved = Save-DsmtSavedSettings -ConfigPath $cfg.ConfigPath -Values @{ PageSize = $size }
+
+                Write-DsmtAudit -Action 'Change search result cap' -Target 'Console' -Operator $session.Account `
+                                -Reason 'Console configuration change' -Result 'Success' -Category 'session' `
+                                -Detail ('From ' + $previous + ' to ' + $size)
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    pageSize     = $size
+                    persisted    = $saved.Ok
+                    persistError = $saved.Error
+                }
                 return
             }
 

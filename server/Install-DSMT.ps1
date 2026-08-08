@@ -189,7 +189,10 @@ param(
     [switch] $NoStart,
     [switch] $OpenBrowser,
     [switch] $NoBrowser,
-    [switch] $NoElevate
+    [switch] $NoElevate,
+    [string] $InstallPath = '',
+    [string] $DataPath = '',
+    [switch] $Portable
 )
 
 $ErrorActionPreference = 'Stop'
@@ -467,6 +470,148 @@ if ($isAdmin) {
 }
 
 # ---------------------------------------------------------------------------
+# 1a. Where the code and the state will live
+#
+# THE PROBLEM THIS SOLVES. Until 1.21.0 DSMT ran out of whatever folder it was
+# unzipped into, with config\ and data\ inside it. Upgrading meant extracting
+# a new build - over the old folder, or more often beside it - and the console
+# came back up with no SQL server configured, quietly writing JSONL instead.
+# Nothing errored. The settings were simply in the folder that got replaced.
+#
+# So the two are separated, and the separation is enforced by where Windows
+# lets you write:
+#
+#   %ProgramFiles%\DSMT   - the code. Replaced wholesale by an upgrade, and
+#                           not writable by a standard user, so nobody edits
+#                           the running server by accident.
+#   %ProgramData%\DSMT    - the state. config\, data\, uploads\. An upgrade
+#                           never touches it.
+#
+# HKLM\SOFTWARE\Rendi Group\DSMT holds two pointers to those roots and nothing
+# else - it is not a settings store. Settings stay in JSON where they can be
+# read, diffed and mailed in a bug report; the registry answers the one
+# question a freshly started process cannot answer for itself.
+#
+# -Portable keeps the old single-folder behaviour for a USB stick or a lab
+# scratch copy, and says so at the end rather than leaving it implied.
+# ---------------------------------------------------------------------------
+
+Write-Step 'Install location'
+
+$sourceRoot   = $repoRoot
+$sourceServer = $scriptDir
+
+# An existing install decides the default: re-running the installer must land
+# on the same folders it used last time, whatever this run was told.
+$regPaths = Get-DsmtRegistryPaths
+
+$installRoot = ''
+$dataRoot    = ''
+
+if ($Portable) {
+    $installRoot = $sourceRoot
+    $dataRoot    = $sourceRoot
+    Write-Info 'Portable mode: code and state both stay in this folder.'
+    Write-Warn2 'An upgrade that replaces this folder will take config\ and data\ with it.'
+} else {
+    if ($InstallPath) {
+        $installRoot = $InstallPath.Trim()
+    } elseif ($regPaths.Found -and $regPaths.InstallPath) {
+        $installRoot = $regPaths.InstallPath
+    } else {
+        $installRoot = Join-Path $env:ProgramFiles 'DSMT'
+    }
+
+    if ($DataPath) {
+        $dataRoot = $DataPath.Trim()
+    } elseif ($regPaths.Found -and $regPaths.DataPath) {
+        $dataRoot = $regPaths.DataPath
+    } else {
+        $dataRoot = Join-Path $env:ProgramData 'DSMT'
+    }
+}
+
+Write-Info ('Code  : ' + $installRoot)
+Write-Info ('State : ' + $dataRoot)
+
+# Copy the code, unless it is already where it belongs. Comparing full paths
+# rather than the strings matters: "C:\Program Files\DSMT" and
+# "C:\Program Files\DSMT\" are the same folder, and copying a folder onto
+# itself deletes it.
+$sourceFull  = [System.IO.Path]::GetFullPath($sourceRoot).TrimEnd('\')
+$installFull = [System.IO.Path]::GetFullPath($installRoot).TrimEnd('\')
+
+if ($sourceFull -eq $installFull) {
+    Write-Ok ('Already running from ' + $installRoot)
+} else {
+    # A running service holds DsmtService.exe open, so the copy fails with a
+    # sharing violation unless it is stopped first. Restarted at the end of
+    # the install, by the step that already knows how.
+    $running = Get-Service -Name 'DSMT' -ErrorAction SilentlyContinue
+    if ($null -ne $running -and $running.Status -eq 'Running') {
+        try {
+            Stop-Service -Name 'DSMT' -Force -ErrorAction Stop
+            Write-Info 'Stopped the running DSMT service so its files can be replaced.'
+        } catch {
+            Write-Warn2 ('Could not stop the DSMT service: ' + $_.Exception.Message)
+        }
+    }
+
+    try {
+        if (-not (Test-Path -LiteralPath $installRoot)) {
+            New-Item -ItemType Directory -Path $installRoot -Force -ErrorAction Stop | Out-Null
+        }
+
+        # Only the folders DSMT needs to run. Copying the whole source tree
+        # would drag config\ and data\ from a portable copy into Program
+        # Files - the exact mixing this step exists to prevent.
+        $copied = New-Object System.Collections.Generic.List[string]
+        foreach ($part in @('server', 'web', '_ds', 'sql', 'docs')) {
+            $from = Join-Path $sourceRoot $part
+            if (-not (Test-Path -LiteralPath $from)) { continue }
+
+            $to = Join-Path $installRoot $part
+            if (Test-Path -LiteralPath $to) { Remove-Item -LiteralPath $to -Recurse -Force -ErrorAction Stop }
+            Copy-Item -LiteralPath $from -Destination $installRoot -Recurse -Force -ErrorAction Stop
+            $copied.Add($part)
+        }
+        foreach ($file in @('README.md', 'CHANGELOG.md')) {
+            $from = Join-Path $sourceRoot $file
+            if (Test-Path -LiteralPath $from) {
+                Copy-Item -LiteralPath $from -Destination $installRoot -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Write-Ok ('Copied ' + ($copied -join ', ') + ' to ' + $installRoot)
+    } catch {
+        Write-Fail ('Could not copy the files to ' + $installRoot + ': ' + $_.Exception.Message) `
+                   'Run this installer elevated, or pass -InstallPath <folder> to install somewhere writable, or -Portable to run from this folder.'
+    }
+}
+
+# Everything after this point installs and configures the COPY. Rebinding the
+# two anchors here means the service path, the working directory, the docs
+# link and the config file all follow automatically instead of each one
+# needing to remember which root it wanted.
+$repoRoot  = $installRoot
+$scriptDir = Join-Path $installRoot 'server'
+
+# The pointers. Written even in portable mode - a portable install is still
+# the one on this machine, and Start-DSMT.ps1 reading a stale registry entry
+# from a previous install is worse than reading a correct one.
+if (Test-IsAdmin) {
+    $regWrite = Set-DsmtRegistryPaths -InstallPath $installRoot -DataPath $dataRoot
+    if ($regWrite.Ok) {
+        Write-Ok 'Recorded both paths in HKLM\SOFTWARE\Rendi Group\DSMT'
+    } else {
+        Write-Warn2 ('Could not write the registry pointers: ' + $regWrite.Error)
+        Write-Info  'DSMT still runs - Start-DSMT.ps1 falls back to the folder it sits in.'
+    }
+} else {
+    Write-Skip 'Not elevated - the registry pointers were not written.'
+}
+
+# ---------------------------------------------------------------------------
 # 1b. Change the run account and stop - a maintenance operation, not an install
 # ---------------------------------------------------------------------------
 
@@ -484,7 +629,7 @@ if ($ChangeServiceAccount) {
     $newAccount = $ChangeServiceAccount.Trim()
     $newKind    = Get-DsmtAccountKind -Account $newAccount
 
-    $dataPath   = Join-Path $repoRoot 'data'
+    $dataPath   = Join-Path $dataRoot 'data'
     $serviceNm  = 'DSMT'
     $taskNm     = 'DSMT Console'
 
@@ -516,7 +661,7 @@ if ($ChangeServiceAccount) {
     }
 
     $previous = ''
-    $saved = Get-DsmtSavedSettings -RootPath $repoRoot
+    $saved = Get-DsmtSavedSettings -ConfigPath (Join-Path $dataRoot 'config')
     if ($null -ne $saved -and $saved.PSObject.Properties['ServiceAccount']) {
         $previous = [string]$saved.ServiceAccount
     }
@@ -665,7 +810,7 @@ if ($ChangeServiceAccount) {
     # --- 5 of 5: saved settings ----------------------------------------------
     Write-Step 'Saved configuration'
 
-    $update = Save-DsmtSavedSettings -RootPath $repoRoot -Values @{
+    $update = Save-DsmtSavedSettings -ConfigPath (Join-Path $dataRoot 'config') -Values @{
         ServiceAccount = $newAccount
         AccountKind    = $newKind
         AccountChangedOn = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -844,10 +989,26 @@ if (-not $adModuleReady) {
 
 Write-Step 'Data directory'
 
-$dataPath   = Join-Path $repoRoot 'data'
-$configPath = Join-Path $repoRoot 'config'
+# Under the data root, never under the code root - see step 1a.
+$dataPath    = Join-Path $dataRoot 'data'
+$configPath  = Join-Path $dataRoot 'config'
+$uploadsPath = Join-Path $dataRoot 'uploads'
 
-foreach ($dir in @($dataPath, $configPath)) {
+# An install made before 1.21.0 keeps config\ and data\ beside the code. Bring
+# them across before anything reads or writes settings, or this upgrade is the
+# one that loses the SQL server, the port and the group filters. Copies, never
+# moves - the old folder stays intact so a bad upgrade can be walked back.
+if (-not $Portable) {
+    $legacy = Move-DsmtLegacyState -RootPath $sourceRoot -DataRoot $dataRoot
+    if ($legacy.Migrated) {
+        Write-Ok ('Brought forward the previous configuration from ' + $sourceRoot)
+        foreach ($item in @($legacy.Items)) { Write-Info ('  ' + $item) }
+    } elseif ($legacy.Error) {
+        Write-Warn2 ('Could not migrate the previous configuration: ' + $legacy.Error)
+    }
+}
+
+foreach ($dir in @($dataPath, $configPath, $uploadsPath)) {
     if (Test-Path -LiteralPath $dir) {
         Write-Ok ('Exists: ' + $dir)
     } else {
@@ -1080,7 +1241,8 @@ if (-not $sqlWanted) {
         # so the schema created here can never drift from the one it expects.
         try {
             . (Join-Path $scriptDir 'lib\DsmtSql.ps1')
-            Initialize-DsmtConfig -RootPath $repoRoot -Domain $Domain -Port $Port -ListenAddress $ListenAddress
+            Initialize-DsmtConfig -RootPath $repoRoot -Domain $Domain -Port $Port -ListenAddress $ListenAddress `
+                                  -DataRoot $dataRoot -PathMode $(if ($Portable) { 'portable' } else { 'installed' })
 
             $init = Initialize-DsmtSql -Server $sqlTarget -Database $SqlDatabase
             if ($init.Ok) {
@@ -1171,9 +1333,16 @@ $serviceName = 'DSMT'
 $startPath   = Join-Path $scriptDir 'Start-DSMT.ps1'
 $serviceExe  = Join-Path $scriptDir 'DsmtService.exe'
 
-# Start-DSMT.ps1 reads config\dsmt.config.json, written a step later, so
-# neither the task nor the service needs the settings on its command line.
-$startArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '"'
+# Start-DSMT.ps1 reads dsmt.config.json, written a step later, so neither the
+# task nor the service needs the settings on its command line.
+#
+# -DataRoot IS passed, rather than left to the registry pointer, because the
+# registry write can fail (it needs elevation) while everything else succeeds.
+# Falling back to portable mode there would put the state under Program Files,
+# which the service account cannot write - a service that starts and dies with
+# nothing useful in the log. Belt and braces on the one value that cannot be
+# recovered from anywhere else.
+$startArguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $startPath + '" -DataRoot "' + $dataRoot + '"'
 
 # ---------------------------------------------------------------------------
 # WHAT RUNS DSMT, and why the default is a service.
@@ -1460,6 +1629,21 @@ if ($script:StartMode -eq 'none' -and -not $NoAutoStart) {
 
 Write-Step 'Saved configuration'
 
+# Values an operator tuned in the console - the idle timeout, the search cap,
+# the group filter chips - are NOT the installer's to reset. Re-running the
+# installer to change the port used to silently put the idle timeout back to
+# 15 minutes, and now that the previous configuration is migrated forward,
+# overwriting it would defeat the migration a few steps above. So: read what
+# is there, and only fill in what is missing.
+$existing = Get-DsmtSavedSettings -ConfigPath $configPath
+
+$keepSession = 15
+$keepPage    = 500
+if ($null -ne $existing) {
+    if ($existing.PSObject.Properties['SessionMinutes'] -and $existing.SessionMinutes) { $keepSession = [int]$existing.SessionMinutes }
+    if ($existing.PSObject.Properties['PageSize'] -and $existing.PageSize)             { $keepPage    = [int]$existing.PageSize }
+}
+
 $settings = [ordered]@{
     Domain         = $Domain
     Port           = $Port
@@ -1469,22 +1653,27 @@ $settings = [ordered]@{
     AccountKind    = $runAccountKind
     SqlServer      = ''
     SqlDatabase    = $SqlDatabase
-    SessionMinutes = 15
-    PageSize       = 500
+    SessionMinutes = $keepSession
+    PageSize       = $keepPage
+    InstallPath    = $installRoot
+    DataPath       = $dataRoot
+    PathMode       = $(if ($Portable) { 'portable' } else { 'installed' })
     InstalledOn    = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     InstalledBy    = ($env:USERDOMAIN + '\' + $env:USERNAME)
     Version        = $script:DsmtVersion
 }
 if ($sqlReady) { $settings.SqlServer = $sqlTarget }
 
-$settingsFile = Join-Path $configPath 'dsmt.config.json'
-try {
-    ConvertTo-Json -InputObject $settings -Depth 3 |
-        Set-Content -LiteralPath $settingsFile -Encoding UTF8 -ErrorAction Stop
+$settingsFile = Get-DsmtSettingsFile -ConfigPath $configPath
+
+# Merged, not overwritten: a key this installer does not mention - the group
+# filter chips, the health alert settings - survives untouched.
+$write = Save-DsmtSavedSettings -ConfigPath $configPath -Values $settings
+if ($write.Ok) {
     Write-Ok ('Written to ' + $settingsFile)
     Write-Info 'Start-DSMT.ps1 reads this file, so it can now be started with no parameters.'
-} catch {
-    Write-Fail ('Could not write ' + $settingsFile + ': ' + $_.Exception.Message) `
+} else {
+    Write-Fail ('Could not write ' + $settingsFile + ': ' + $write.Error) `
                'DSMT still runs - pass the settings on the command line instead.'
 }
 
