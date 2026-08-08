@@ -1949,6 +1949,60 @@ function Invoke-DsmtApi {
                 return
             }
 
+            '^/api/dashboard$' {
+                if ($method -ne 'GET') { break }
+
+                # One directory read for every tile - see Get-DsmtDashboard
+                # for why per-tile reads were not an option.
+                Send-DsmtJson -Response $Response -Data @{
+                    ok        = $true
+                    dashboard = (Get-DsmtDashboard -Credential $session.Credential)
+                }
+                return
+            }
+
+            '^/api/sessions$' {
+                if ($method -ne 'GET') { break }
+
+                $summary = Get-DsmtSessionSummary
+                Send-DsmtJson -Response $Response -Data @{
+                    ok       = $true
+                    count    = $summary.Count
+                    sessions = @($summary.Sessions)
+                    me       = $session.Id
+                }
+                return
+            }
+
+            '^/api/sessions/(?<id>[a-f0-9]+)$' {
+                if ($method -ne 'DELETE') { break }
+
+                $target = $Matches['id']
+
+                # Ending your OWN session from this screen is a sign-out with
+                # extra steps, and it looks like a bug when the console then
+                # throws you to the login page. Say so instead.
+                if ($target -eq $session.Id) {
+                    Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                        'That is your own session. Use Log off in the menu.')
+                    return
+                }
+
+                $result = Remove-DsmtSessionById -Id $target
+                if (-not $result.Ok) {
+                    Send-DsmtError -Response $Response -Message $result.Error -StatusCode 404
+                    return
+                }
+
+                Write-DsmtAudit -Action 'Sign out another operator' -Target $result.Account `
+                                -Operator $session.Account -Reason 'Console session ended by an administrator' `
+                                -Result 'Success' -Category 'session'
+                Write-DsmtLog -Message ($session.Account + ' signed out ' + $result.Account)
+
+                Send-DsmtJson -Response $Response -Data @{ ok = $true; account = $result.Account }
+                return
+            }
+
             '^/api/reports$' {
                 if ($method -ne 'GET') { break }
 

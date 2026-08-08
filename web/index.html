@@ -75,6 +75,7 @@
     <span class="brand">DSMT</span>
 
     <nav class="tabs" id="tabs" role="tablist">
+      <button class="tab" data-tab="overview" role="tab">Overview</button>
       <button class="tab" data-tab="users"  role="tab">Users</button>
       <button class="tab" data-tab="groups" role="tab">Groups</button>
       <button class="tab tab-audit" data-tab="audit" role="tab">Audit log</button>
@@ -111,6 +112,7 @@
   <!-- Slide-out menu (also carries the tabs on small screens) -->
   <div class="menu-backdrop" id="menuBackdrop" hidden></div>
   <aside class="menu" id="menu" hidden>
+    <button class="menu-item" data-tab="overview">Overview</button>
     <button class="menu-item" data-tab="users">Users</button>
     <button class="menu-item" data-tab="groups">Groups</button>
     <button class="menu-item" data-tab="audit">Audit log</button>
@@ -124,6 +126,21 @@
     <div class="menu-meta" id="menuDomain"></div>
     <button class="menu-item menu-accent" id="menuLogoff">Log off</button>
   </aside>
+
+  <!-- ---------- Overview ---------- -->
+  <div class="audit" id="overviewView" hidden>
+    <div class="audit-head">
+      <div>
+        <span class="kicker">Overview</span>
+        <h1 class="audit-title">Where the directory stands</h1>
+      </div>
+      <div class="audit-controls">
+        <span class="audit-stamp" id="overviewStamp"></span>
+        <button class="btn btn-secondary" id="overviewRefresh" type="button">Refresh</button>
+      </div>
+    </div>
+    <div id="overviewBody"></div>
+  </div>
 
   <!-- ---------- Directory (users / groups) ---------- -->
   <div class="directory" id="directoryView">

@@ -26,7 +26,10 @@ var state = {
   version: '',
   domain: '',
   domainInfo: null,
-  tab: 'users',
+  // Overview is the landing screen. The Users grid answered no question on
+  // arrival - it is a list of everything, which is where you go when you
+  // already know what you are looking for.
+  tab: 'overview',
   query: '',
   rows: [],
   loadError: '',
@@ -49,6 +52,7 @@ var state = {
   userTotal: 0,
   reports: [],
   report: null,
+  dashboard: null,
   auditRange: 'all',
   auditFrom: null,
   auditTo: null,
@@ -739,16 +743,23 @@ function setTab(tab, force) {
   var isAudit    = (tab === 'audit');
   var isSettings = (tab === 'settings');
   var isTools    = (tab === 'tools');
-  var isFullView = (isAudit || isSettings || isTools);
+  var isOverview = (tab === 'overview');
+  var isFullView = (isAudit || isSettings || isTools || isOverview);
 
   $('directoryView').hidden = isFullView;
   $('auditView').hidden     = !isAudit;
   $('settingsView').hidden  = !isSettings;
   $('toolsView').hidden     = !isTools;
+  $('overviewView').hidden  = !isOverview;
 
   // The detail pane belongs to the directory views only.
   $('detailPane').hidden = isFullView;
   closeDetail();
+
+  if (isOverview) {
+    loadOverview();
+    return;
+  }
 
   if (isSettings) {
     loadSettings();
@@ -789,10 +800,10 @@ function loadRows() {
   var query = [];
   if (state.query) { query.push('q=' + encodeURIComponent(state.query)); }
 
-  // One filter mechanism for both tabs. Users got chips in 1.27.0 and the
-  // groups implementation was generalised rather than copied - two chip
-  // renderers drifting apart is how one tab quietly stops honouring a rule
-  // the other still does.
+  // One filter mechanism for both tabs. When Users gained chips the groups
+  // implementation was generalised rather than copied - two chip renderers
+  // drifting apart is how one tab quietly stops honouring a rule the other
+  // still does.
   var active = activeFilter();
   if (active && active !== 'all') { query.push('filter=' + encodeURIComponent(active)); }
   if (query.length) { path += '?' + query.join('&'); }
@@ -2248,6 +2259,176 @@ function loadTools() {
   for (i = 0; i < TOOLS.length; i++) {
     if (TOOLS[i].key === current) { TOOLS[i].render(); }
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Overview (proposal 25).
+
+   Three rules, all from the proposal, and all guarding the same failure - a
+   number on a dashboard is read as "now" and as "true", and both can be wrong
+   with nothing looking wrong:
+
+     1  Every tile is live, and the screen states when it was taken anyway.
+     2  A TILE THAT CANNOT BE COMPUTED SAYS SO. It never shows 0. "0 locked-out
+        accounts" and "the query failed" look identical and mean opposite
+        things, so each tile carries its own ok/error from the server.
+     3  Cost is the design constraint. The server does ONE users read and ONE
+        groups read for the whole screen; nothing here fires a call per tile,
+        and AD health - which is genuinely slow - is linked to, not computed.
+
+   Nothing auto-refreshes. A dashboard that re-reads the directory on a timer
+   is a load generator with a nice layout.
+   --------------------------------------------------------------------------- */
+
+function loadOverview() {
+  $('overviewBody').innerHTML = '<p class="muted-sm">Reading the directory...</p>';
+  $('overviewStamp').textContent = '';
+
+  api('/api/dashboard').then(function (data) {
+    state.dashboard = data.dashboard;
+    renderOverview();
+  }).catch(function (err) {
+    $('overviewBody').innerHTML = '<section class="set-card"><div class="error-box">' +
+      esc(explainApiError(err.message)) + '</div></section>';
+  });
+}
+
+function renderOverview() {
+  var d = state.dashboard;
+  if (!d) { return; }
+
+  $('overviewStamp').textContent = 'As at ' + formatAbsoluteStamp(d.asAt);
+
+  var tiles = asArray(d.tiles);
+
+  var warn = '';
+  if (d.truncated) {
+    warn = '<div class="error-box"><strong>These counts are INCOMPLETE.</strong> The directory read hit ' +
+           'the ' + esc(String(d.maxRows)) + '-row cap, so objects beyond it were never counted. Every ' +
+           'number below is a floor, not a total.</div>';
+  }
+
+  var grid = '<div class="tile-grid">' + tiles.map(function (t) {
+    if (!t.ok) {
+      // The error IS the tile. No number, not even a dash that could be read
+      // as zero.
+      return '<div class="tile tile-bad">' +
+               '<div class="tile-label">' + esc(t.label) + '</div>' +
+               '<div class="tile-error">Could not be computed</div>' +
+               '<div class="tile-hint">' + esc(t.error || '') + '</div>' +
+             '</div>';
+    }
+    return '<button class="tile" type="button" data-tile="' + esc(t.key) + '">' +
+             '<div class="tile-label">' + esc(t.label) + '</div>' +
+             '<div class="tile-value">' + esc(String(t.value)) + '</div>' +
+             '<div class="tile-hint">' + esc(t.hint || '') + '</div>' +
+           '</button>';
+  }).join('') + '</div>';
+
+  $('overviewBody').innerHTML =
+    '<section class="set-card">' +
+      warn +
+      '<p class="dialog-note">Read <strong>live from ' + esc(d.domain) + '</strong> via ' +
+      esc(d.controller || 'an unknown controller') + ' at the time above - never from the SQL ' +
+      'snapshot, and never on a timer. Press Refresh to read again.</p>' +
+      grid +
+      '<div class="set-actions">' +
+        '<button class="btn btn-ghost" type="button" id="overviewHealth">Run AD health checks</button>' +
+        '<button class="btn btn-ghost" type="button" id="overviewReports">Open reports</button>' +
+      '</div>' +
+    '</section>' +
+    '<section class="set-card" id="sessionsCard"></section>';
+
+  // Tiles that map onto a filter jump straight to it - the number is only
+  // useful if you can get to the rows behind it.
+  var TILE_TARGET = {
+    users: ['users', 'all'], disabled: ['users', 'disabled'], lockedout: ['users', 'lockedout'],
+    pwdexpiring: ['users', 'pwdexpiring'], pwdexpired: ['users', 'pwdexpired'],
+    stale: ['users', 'stale'], groups: ['groups', 'all'], privileged: ['groups', 'privileged']
+  };
+
+  var buttons = $('overviewBody').querySelectorAll('[data-tile]');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].onclick = function () {
+      var target = TILE_TARGET[this.getAttribute('data-tile')];
+      if (!target) { return; }
+      applySavedSearch({ tab: target[0], q: '', filter: target[1] });
+    };
+  }
+
+  $('overviewHealth').onclick = openAdHealthTool;
+  $('overviewReports').onclick = function () { writeSetting(TOOL_KEY, 'reports'); setTab('tools'); };
+
+  renderSessionsCard();
+}
+
+/* ---------------------------------------------------------------------------
+   Live sessions (proposal 9).
+
+   Addressed by an opaque per-session id, never by the token: the token is a
+   bearer credential, and handing it to the browser so an administrator could
+   end a session would have turned this into an impersonation tool.
+   --------------------------------------------------------------------------- */
+
+function renderSessionsCard() {
+  var card = $('sessionsCard');
+  if (!card) { return; }
+  card.innerHTML = '<h2 class="set-h">Operators signed in</h2><p class="muted-sm">Reading...</p>';
+
+  api('/api/sessions').then(function (data) {
+    var list = asArray(data.sessions);
+    var rows = list.map(function (s) {
+      var me = (s.id === data.me);
+      return '<div class="role-row">' +
+               '<div class="role-main">' +
+                 '<strong>' + esc(s.display || s.account) + '</strong>' +
+                 (me ? ' <span class="tag">you</span>' : '') +
+                 (s.isAdmin ? ' <span class="tag">DSMT admin</span>' : '') +
+                 '<div class="role-note">' + esc(s.account) + ' - signed in ' +
+                 esc(formatAbsoluteStamp(s.since)) + ', idle ' + esc(String(s.idleMins)) + ' min</div>' +
+               '</div>' +
+               (me ? '<span class="cell-disabled">-</span>'
+                   : '<button class="btn btn-ghost" type="button" data-endsession="' + esc(s.id) + '" ' +
+                     'data-endwho="' + esc(s.account) + '">Sign out</button>') +
+             '</div>';
+    }).join('');
+
+    card.innerHTML =
+      '<h2 class="set-h">Operators signed in</h2>' +
+      '<p class="dialog-note">Sessions live in the server process, so this is the whole truth and it ' +
+      'resets when DSMT restarts. Signing someone out drops the credential held for them and they must ' +
+      'sign in again - which is the point the day somebody leaves mid-shift. It needs the DSMT ' +
+      'administrator role.</p>' +
+      (list.length ? rows : '<p class="muted-sm">Nobody is signed in, which cannot be true while you ' +
+                            'are reading this - reload the page.</p>') +
+      '<div class="set-result" id="sessionResult"></div>';
+
+    var ends = card.querySelectorAll('[data-endsession]');
+    for (var i = 0; i < ends.length; i++) {
+      ends[i].onclick = function () {
+        var id = this.getAttribute('data-endsession');
+        var who = this.getAttribute('data-endwho');
+        openDialog({
+          title: 'Sign out ' + who + '?',
+          confirmLabel: 'Sign them out',
+          body: '<p>Their session ends immediately and any work in progress in their browser is lost. ' +
+                'They can sign in again straight away - this does not disable the account.</p>',
+          onConfirm: function () {
+            api('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' })
+              .then(function (res) {
+                closeDialog();
+                toast('Signed out ' + res.account + '.');
+                renderSessionsCard();
+              })
+              .catch(function (err) { dialogError(err.message); });
+          }
+        });
+      };
+    }
+  }).catch(function (err) {
+    card.innerHTML = '<h2 class="set-h">Operators signed in</h2>' +
+      '<div class="error-box">' + esc(err.message) + '</div>';
+  });
 }
 
 /* ---------------------------------------------------------------------------

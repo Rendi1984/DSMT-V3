@@ -61,6 +61,11 @@ $script:DsmtAdminOnlyRoutes = @(
     # names. That is reconnaissance, not display.
     @{ Pattern = '^/api/settings/export$';       Methods = @('GET') },
 
+    # Ending someone else's session is a console-level act with no AD
+    # equivalent - AD has no opinion about who may close a DSMT session - so
+    # it belongs squarely in what this role governs.
+    @{ Pattern = '^/api/sessions/[a-f0-9]+$'; Methods = @('DELETE') },
+
     # Creating the forest KDS root key is a one-way, forest-wide act. AD does
     # gate it (it needs Enterprise Admin), so this is belt and braces rather
     # than the only control - but it is named in the feature request and it

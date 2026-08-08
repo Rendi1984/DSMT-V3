@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.29.0** | 2026-08-08 | **Overview** is the new landing screen - live tiles that link to the rows behind them; **live sessions** with sign-out; a required-permissions document | Restart + refresh |
 | **1.28.0** | 2026-08-08 | **Reports** under Tools - eight named queries, read live and stamped with the time they were taken, on screen and in the export. Saved searches on the directory tabs | Restart + refresh |
 | **1.27.0** | 2026-08-08 | Account-state filters on Users (expiring, expired, stale, never logged on...), a column chooser on the Audit table, and two keyboard shortcuts | Restart + refresh |
 | **1.26.4** | 2026-08-08 | **Create user said Failed while leaving the account in the directory** - and the audit log said Failed too. Creation is now atomic | Restart |
@@ -80,6 +81,81 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.29.0 — 2026-08-08
+
+### Overview — the landing screen (proposal 25)
+
+The console opened straight into the Users grid, which answers no question: it
+is a list of everything, which is where you go when you already know what you
+are looking for. **Overview** is now the first tab and the landing screen.
+
+Tiles for user and group counts, disabled, locked out, passwords due, passwords
+expired, stale accounts, privileged groups and operators signed in. Each one
+**links to the rows behind it** — a number you cannot open is trivia.
+
+The proposal's three rules, which are all about the same failure (a number on a
+dashboard is read as "now" and as "true", and both can be wrong with nothing
+looking wrong):
+
+- **Every tile is live**, read at the moment you open the screen, never from
+  the SQL snapshot — and the screen states the time it was taken anyway,
+  absolutely, not as "Today 14:32".
+- **A tile that cannot be computed says so.** It shows the error, not a zero
+  and not a dash. "0 locked-out accounts" and "the query failed" look identical
+  and mean opposite things, so every tile carries its own ok/error from the
+  server rather than a bare number.
+- **Cost is the design constraint.** One users read and one groups read for the
+  entire screen; every count is derived from those in memory. Nothing fires a
+  call per tile, nothing auto-refreshes on a timer, and AD health — which is
+  genuinely slow — is linked to rather than computed.
+
+It inherits the 20,000-row cap and its INCOMPLETE banner, so a truncated read
+says every number below it is a floor rather than a total.
+
+### Live sessions, and signing someone out (proposal 9)
+
+Who is signed in right now, how long they have been idle, and a **Sign out**
+button — useful with several operators, and necessary the day someone leaves
+mid-shift.
+
+**Sessions are addressed by an opaque per-session id, never by the token.** The
+token is a bearer credential: anything holding it can act as that operator, so
+sending tokens to the browser in order to end a session would have turned this
+feature into an impersonation tool. Signing out drops the `PSCredential` held
+for that session.
+
+Ending someone else's session is gated on the **DSMT administrator role** — a
+console-level act with no AD equivalent, which is exactly what that role
+governs. Ending your own session from here is refused with a pointer to Log
+off, rather than throwing you to the login screen and looking like a bug. And
+it routes through `Remove-DsmtSession` rather than dropping the key directly,
+so the SQL session row is closed too — otherwise `dbo.Sessions` would still
+show the operator as signed in, the audit trail disagreeing with reality.
+
+### `docs/required-permissions.md` (open task 3)
+
+Every right DSMT needs, in one place: what each console action requires in AD
+with the exact `dsacls` commands, what the host needs, what SQL needs, and how
+to read a failure. Three things it calls out because they are easy to miss —
+**Delete is needed to create a user** (the rollback added in 1.26.4 uses it),
+**Move needs rights on both OUs**, and **delegate to a group, never a person**.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtDirectory.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtSession.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/index.html`, `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+| `docs/required-permissions.md` *(new)* | documentation only |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 

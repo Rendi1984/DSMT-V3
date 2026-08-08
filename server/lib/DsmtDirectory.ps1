@@ -1399,3 +1399,127 @@ function Invoke-DsmtReport {
 
     return $out
 }
+
+# ---------------------------------------------------------------------------
+# Dashboard
+#
+# THREE RULES, all from PROGRESS.md item 25, and all of them are about the
+# same failure: a number on a dashboard is read as "now" and as "true", and
+# both can be wrong without anything looking wrong.
+#
+#   1. EVERY TILE IS LIVE, or it carries the time it was taken. These are
+#      live - one read of the directory at the moment the screen is opened,
+#      never the SQL snapshot - and the screen states the time regardless.
+#
+#   2. A TILE THAT CANNOT BE COMPUTED SAYS SO. It does not show 0.
+#      "0 locked-out accounts" and "the query failed" look identical and mean
+#      opposite things, so every tile carries its own ok/error rather than a
+#      bare number.
+#
+#   3. COST IS THE DESIGN CONSTRAINT. Counting every user per tile would be
+#      one directory read per tile. There is ONE read of users and ONE of
+#      groups for the whole screen, and every count is derived from those in
+#      memory. Anything genuinely expensive (AD health) is linked to, not
+#      computed here.
+# ---------------------------------------------------------------------------
+
+function Get-DsmtDashboard {
+    <#
+    .SYNOPSIS
+        Every dashboard tile, from one users read and one groups read.
+    .OUTPUTS
+        Hashtable with AsAtUtc, Controller, Domain, Truncated and Tiles.
+        Each tile is @{ key; label; value; ok; error; hint }.
+    #>
+    param($Credential)
+
+    $cfg = Get-DsmtConfig
+
+    $out = [ordered]@{
+        asAt       = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
+        controller = ''
+        domain     = [string]$cfg.Domain
+        truncated  = $false
+        maxRows    = $script:DsmtReportMaxRows
+        tiles      = @()
+    }
+
+    try { $out.controller = Get-DsmtServer -Credential $Credential } catch { $out.controller = '' }
+
+    # Build a tile in one place so a failed tile can never accidentally be
+    # rendered as a zero: value stays $null unless ok is $true.
+    function New-Tile {
+        param([string] $Key, [string] $Label, [string] $Hint, $Value, [bool] $Ok, [string] $ErrorText)
+        return [ordered]@{
+            key = $Key; label = $Label; hint = $Hint
+            value = $Value; ok = $Ok; error = $ErrorText
+        }
+    }
+
+    $tiles = @()
+
+    # ---- users: one read, many counts -------------------------------------
+    $users     = @()
+    $usersOk   = $false
+    $usersErr  = ''
+    try {
+        $users = @(Get-DsmtUsers -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+        if (@($users).Count -ge $script:DsmtReportMaxRows) { $out.truncated = $true }
+        $usersOk = $true
+    } catch {
+        $usersErr = $_.Exception.Message
+    }
+
+    $userTiles = @(
+        @{ key = 'users';       label = 'User accounts';    hint = 'Every user object read' ; filter = 'all' }
+        @{ key = 'disabled';    label = 'Disabled';         hint = 'Accounts switched off'  ; filter = 'disabled' }
+        @{ key = 'lockedout';   label = 'Locked out';       hint = 'Locked by policy now'   ; filter = 'lockedout' }
+        @{ key = 'pwdexpiring'; label = 'Passwords due';    hint = ('Expiring within ' + [string]$script:DsmtPwdExpiringDays + ' days'); filter = 'pwdexpiring' }
+        @{ key = 'pwdexpired';  label = 'Passwords expired'; hint = 'Cannot sign in'        ; filter = 'pwdexpired' }
+        @{ key = 'stale';       label = 'Stale accounts';   hint = ('No logon in ' + [string]$script:DsmtStaleLogonDays + ' days'); filter = 'stale' }
+    )
+
+    foreach ($t in $userTiles) {
+        if (-not $usersOk) {
+            $tiles += New-Tile -Key $t.key -Label $t.label -Hint $t.hint -Value $null -Ok $false `
+                               -ErrorText ('The directory read failed: ' + $usersErr)
+            continue
+        }
+        $n = @(Select-DsmtUsersByFilter -Rows $users -Filter ([string]$t.filter)).Count
+        $tiles += New-Tile -Key $t.key -Label $t.label -Hint $t.hint -Value $n -Ok $true -ErrorText ''
+    }
+
+    # ---- groups: one read --------------------------------------------------
+    $groups = @()
+    try {
+        $groups = @(Get-DsmtGroups -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+        if (@($groups).Count -ge $script:DsmtReportMaxRows) { $out.truncated = $true }
+
+        $tiles += New-Tile -Key 'groups' -Label 'Groups' -Hint 'Every group object read' `
+                           -Value (@($groups).Count) -Ok $true -ErrorText ''
+
+        $priv = @(Select-DsmtGroupsByFilter -Rows $groups -Filter 'privileged').Count
+        $tiles += New-Tile -Key 'privileged' -Label 'Privileged groups' -Hint 'Matched on SID, not name' `
+                           -Value $priv -Ok $true -ErrorText ''
+    } catch {
+        $msg = $_.Exception.Message
+        $tiles += New-Tile -Key 'groups' -Label 'Groups' -Hint 'Every group object read' `
+                           -Value $null -Ok $false -ErrorText ('The directory read failed: ' + $msg)
+        $tiles += New-Tile -Key 'privileged' -Label 'Privileged groups' -Hint 'Matched on SID, not name' `
+                           -Value $null -Ok $false -ErrorText ('The directory read failed: ' + $msg)
+    }
+
+    # ---- console state, not directory state --------------------------------
+    # Cheap, in-process, and it answers a question nothing else on screen does.
+    try {
+        $summary = Get-DsmtSessionSummary
+        $tiles += New-Tile -Key 'sessions' -Label 'Operators signed in' -Hint 'Sessions open right now' `
+                           -Value $summary.Count -Ok $true -ErrorText ''
+    } catch {
+        $tiles += New-Tile -Key 'sessions' -Label 'Operators signed in' -Hint 'Sessions open right now' `
+                           -Value $null -Ok $false -ErrorText $_.Exception.Message
+    }
+
+    $out.tiles = @($tiles)
+    return $out
+}

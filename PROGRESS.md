@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.28.0` — matches the top entry of `CHANGELOG.md` and
+`1.29.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -179,7 +179,12 @@ data, inert buttons, and it loaded React from a CDN. Nothing referenced it.
      (no LDAPS). If it fails with a constraint error, the usual causes are
      password policy or the operator lacking Reset Password delegation.
    - Whether `-ResultSetSize` 500 is the right page size for the lab.
-3. **Write a consolidated "required permissions" document.** *(Requested
+3. ~~Write a consolidated "required permissions" document~~ - **written in
+   1.29.0** as `docs/required-permissions.md`: every console action mapped to
+   the AD right it needs with exact `dsacls` commands, the host requirements,
+   SQL, and how to read a failure. Keep it in step when a new directory write
+   is added - a console action with no row in that table is a support call
+   waiting to happen. Original note: *(Requested
    2026-07-31; deliberately not started yet — do this when asked.)*
 
    Today every permission is documented, but scattered across the deployment
@@ -306,7 +311,12 @@ Ordered by value for the effort, highest first.
    an audit log that any operator can delete is not an audit log.
 7. ~~A read-only role~~ — **superseded by 24**, which covers it properly.
 8. ~~Health check page~~ — **built in 1.11.0** as Settings -> Health.
-9. **Live session list with the ability to sign someone out.** DSMT already
+9. ~~Live session list with the ability to sign someone out~~ - **built in
+   1.29.0** on the Overview screen. Sessions are addressed by an opaque
+   per-session `Id`, NEVER by the token: the token is a bearer credential and
+   sending it to the browser would make this an impersonation tool. Sign-out
+   is gated on the DSMT administrator role and routes through
+   `Remove-DsmtSession` so the SQL session row closes too. Original note: DSMT already
    tracks sessions in `dbo.Sessions`. Useful with several operators, and
    necessary the day someone leaves mid-shift.
 10. ~~Column chooser on the Audit table~~ - **built in 1.27.0.** `colDefs()`
@@ -682,7 +692,14 @@ retrofit:**
     - Decide explicitly what happens when the mapping names a group that no
       longer exists, and when an operator matches both roles. Say it in the UI.
 
-25. **A dashboard summarising the current state**, per area.
+25. ~~A dashboard summarising the current state~~ - **built in 1.29.0** as the
+    Overview tab, and it is now the landing screen. All three rules were
+    honoured and are worth keeping: tiles are live and the screen is stamped
+    absolutely; a tile that cannot be computed shows its error and NEVER a
+    zero or a dash; and the whole screen costs ONE users read plus ONE groups
+    read, with AD health linked to rather than computed. **Do not add a tile
+    that fires its own directory call** - that is how this screen becomes the
+    slowest thing in the console. Original note:
     Candidate tiles, all from data DSMT already reads: user and group counts,
     accounts disabled or locked out, passwords expiring in the next N days,
     stale accounts, recent audit activity, and the Health verdict that already
