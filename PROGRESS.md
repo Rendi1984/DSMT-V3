@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.22.0` — matches the top entry of `CHANGELOG.md` and
+`1.23.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -46,8 +46,14 @@ own credentials. Optional SQL Server database `DSMT` stores operators,
 sessions, a directory snapshot and the audit log. No build step, no external
 requests, responsive from 360px up.
 
-The original mock-up now lives in `prototype/` and is reference only — all of
-its data is fabricated and every button is inert.
+**Transport (1.23.0):** HTTPS is configured from Settings -> HTTPS after
+installation — a certificate from `Cert:\LocalMachine\My` bound to a port via
+`http.sys`. The console never receives a private key. With HTTPS off the
+console serves plain HTTP and says so, in the startup banner and on the
+Settings screen.
+
+The original mock-up in `prototype/` was **removed in 1.20.0** — fabricated
+data, inert buttons, and it loaded React from a CDN. Nothing referenced it.
 
 ---
 
@@ -194,9 +200,16 @@ its data is fabricated and every button is inert.
    table in `README.md`. Cross-reference rather than restate, so there is one
    source per fact — the same rule the version number follows.
 
-4. **Serve it over HTTPS before anyone uses it over the network.** The
-   `netsh http add sslcert` recipe is in `README.md`; the prefix in
-   `Start-DSMT.ps1` also has to change from `http://` to `https://`.
+4. ~~Serve it over HTTPS before anyone uses it over the network.~~ —
+   **built in 1.23.0** as Settings -> HTTPS. Pick a certificate from
+   `Cert:\LocalMachine\My`, bind it to a port, restart. Configured after
+   installation, never during it, because the certificate usually does not
+   exist at install time. **Still needs confirming on the lab machine** (see
+   task 1): none of it has been executed, and `netsh http add sslcert` and the
+   certificate-store read are the two calls most likely to behave differently
+   than expected. Watch specifically that a certificate with no EKU at all is
+   accepted (it is valid for every purpose, including server auth) and that
+   the refusal-to-start path prints its banner rather than throwing.
 5. **Decide the SQL retention story.** `dbo.AuditLog` grows forever and
    nothing prunes `dbo.Sessions` or the snapshot tables. Pick a retention
    window and add a job.

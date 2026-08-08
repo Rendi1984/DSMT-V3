@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.23.0** | 2026-08-08 | **HTTPS**, configured from Settings after installation: pick a certificate from the machine store and bind it to a port. The console never receives a private key | Restart + refresh |
 | **1.22.0** | 2026-08-08 | Every setting moves into the registry, one central place; a JSON view for reading and diffing | Reinstall |
 | **1.21.0** | 2026-08-08 | Settings no longer live inside the program folder, so an upgrade cannot lose them; registry pointers; AD health runs on a schedule and raises the bell; the search result cap is editable | Reinstall |
 | **1.20.1** | 2026-08-08 | Every audit-log time range (Last 24 hours through Last 30 days) failed with a `DateTimeStyles` error; only **All time** worked | Restart |
@@ -69,6 +70,74 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.23.0 — 2026-08-08
+
+### HTTPS, configured after installation
+
+The console asks operators for their **domain password** and then holds their
+credential in memory for the session. Until now it served that over plain
+HTTP, so the password and every directory record crossed the network in clear
+text. `README.md` has carried a `netsh http add sslcert` recipe since the
+first release and nothing in the product used it.
+
+HTTPS is now a **Settings -> HTTPS** screen: pick a certificate from the
+machine's store, choose a port, save. It is deliberately *not* part of the
+installer — at install time the certificate usually does not exist yet.
+
+**The console never receives a private key.** It reads
+`Cert:\LocalMachine\My` and binds a certificate already there; where one has
+to be put in the store first, it shows the `Import-PfxCertificate` command to
+run on the server. Accepting a `.pfx` upload would have sent the key's
+password over the very plain-HTTP connection this feature exists to replace —
+the chicken-and-egg is not solvable by being careful. This also keeps the rule
+already recorded for the certificate-services proposal: DSMT must never hold a
+private key.
+
+Four decisions worth knowing before deploying it:
+
+- **A missing or broken certificate stops the server; it does not fall back to
+  HTTP.** A silent downgrade would leave operators typing domain passwords
+  into a console that looks configured and is not encrypted. The startup
+  banner names the port, the fix, and how to switch HTTPS back off.
+- **The saved setting and the live transport are shown as two separate
+  facts**, never merged into one "enabled" flag. Between saving a certificate
+  and restarting they legitimately disagree, and a screen that showed only the
+  setting would report HTTPS as on while the console still answered HTTP.
+- **DSMT will not replace an SSL binding it did not create.** Bindings carry
+  an application ID; another product on the same host can legitimately own
+  one, and silently taking its port is how an unrelated service goes down with
+  no trace of the cause.
+- **Certificates that cannot serve HTTPS are listed anyway**, disabled, each
+  with the reason (no private key, expired, no Server Authentication usage).
+  Hiding them turns "my certificate is not in the list" into a support
+  question with no answer on screen.
+
+`netsh` output is parsed in exactly one function (`Get-DsmtSslBinding`) and
+matched on hex and GUID shapes rather than English labels, so a non-English
+server still parses. There is no object API for `http.sys` bindings on
+PowerShell 5.1, which is why the rule against parsing console text is bent
+here and nowhere else.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtHttps.ps1` *(new)* | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/Start-DSMT.ps1` | `%ProgramFiles%\DSMT\server\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the five files, restart DSMT, hard refresh (Ctrl+F5).
+Restarting ends all sessions by design. The installer needs no change — it
+copies `server\lib\` recursively.
+
+**New registry values** under
+`HKLM\SOFTWARE\Rendi Group\DSMT\Settings`: `HttpsEnabled` (DWORD 0/1),
+`HttpsPort` (DWORD), `HttpsThumbprint` (string).
 
 ---
 

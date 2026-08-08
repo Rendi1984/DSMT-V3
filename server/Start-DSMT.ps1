@@ -104,6 +104,7 @@ $repoRoot  = Split-Path -Parent $scriptDir
 . (Join-Path $scriptDir 'lib\DsmtDirectory.ps1')
 . (Join-Path $scriptDir 'lib\DsmtGmsa.ps1')
 . (Join-Path $scriptDir 'lib\DsmtAdHealth.ps1')
+. (Join-Path $scriptDir 'lib\DsmtHttps.ps1')
 . (Join-Path $scriptDir 'lib\DsmtHttp.ps1')
 
 # Where state lives has to be settled BEFORE the settings file is read - the
@@ -233,7 +234,61 @@ Write-Host '  [ok]   Front end found' -ForegroundColor Green
 
 $host_ = 'localhost'
 if ($ListenAddress -eq 'any') { $host_ = '+' }
-$prefix = 'http://' + $host_ + ':' + $Port + '/'
+
+# --- HTTPS -----------------------------------------------------------------
+# Configured after installation from Settings -> HTTPS, never during install:
+# at install time the certificate usually does not exist yet.
+#
+# The check below is deliberately a REFUSAL, not a fallback. Starting on plain
+# HTTP because the certificate is missing would leave operators typing domain
+# passwords into a console that looks configured and is not encrypted - the
+# failure would be invisible, which is the worst shape for this particular
+# mistake. Better to not start and say why.
+$scheme     = 'http'
+$activePort = $Port
+
+$httpsSaved = Get-DsmtSavedSettings
+$httpsOn    = $false
+$httpsPort  = 8443
+if ($null -ne $httpsSaved) {
+    if ($httpsSaved.PSObject.Properties['HttpsEnabled']) { $httpsOn   = [bool]$httpsSaved.HttpsEnabled }
+    if ($httpsSaved.PSObject.Properties['HttpsPort'])    { $httpsPort = [int]$httpsSaved.HttpsPort }
+}
+
+if ($httpsOn) {
+    if ($httpsPort -lt 1 -or $httpsPort -gt 65535) { $httpsPort = 8443 }
+
+    $binding = Get-DsmtSslBinding -Port $httpsPort
+    if (-not $binding.Bound) {
+        Write-Host ''
+        Write-Host ('  [FAIL] HTTPS is switched on, but no certificate is bound to port ' + $httpsPort + '.') -ForegroundColor Red
+        Write-Host '         DSMT will not fall back to plain HTTP: operators type domain passwords' -ForegroundColor Red
+        Write-Host '         into this console, and a silent downgrade would put them on the wire.' -ForegroundColor Red
+        Write-Host ''
+        Write-Host '         Fix it in one of two ways:' -ForegroundColor Yellow
+        Write-Host '           - Open Settings -> HTTPS in the console and bind a certificate, or' -ForegroundColor Yellow
+        Write-Host '           - run this elevated on this host:' -ForegroundColor Yellow
+        $thumbHint = 'THUMBPRINT'
+        if ($httpsSaved.PSObject.Properties['HttpsThumbprint']) {
+            $t = [string]$httpsSaved.HttpsThumbprint
+            if (-not [string]::IsNullOrWhiteSpace($t)) { $thumbHint = $t }
+        }
+        Write-Host ('             ' + (Get-DsmtSslCommand -Port $httpsPort -Thumbprint $thumbHint)) -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host '         To go back to plain HTTP, set HttpsEnabled to 0 under' -ForegroundColor DarkGray
+        Write-Host ('           ' + (Get-DsmtSettingsKeyPath)) -ForegroundColor DarkGray
+        Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - HTTPS enabled but no certificate bound to port ' + $httpsPort)
+        exit 1
+    }
+
+    $scheme     = 'https'
+    $activePort = $httpsPort
+    $script:DsmtConfig.Scheme = 'https'
+    $script:DsmtConfig.Port   = $httpsPort
+    $cfg = Get-DsmtConfig
+}
+
+$prefix = $scheme + '://' + $host_ + ':' + $activePort + '/'
 
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add($prefix)
@@ -246,12 +301,12 @@ try {
     Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - could not listen on ' + $prefix + ': ' + $_.Exception.Message)
     if ($ListenAddress -eq 'any') {
         Write-Host '         Listening on all interfaces needs an elevated shell, or a one-time reservation:' -ForegroundColor Yellow
-        Write-Host ('         netsh http add urlacl url=http://+:' + $Port + '/ user="' + $env:USERDOMAIN + '\' + $env:USERNAME + '"') -ForegroundColor Yellow
+        Write-Host ('         netsh http add urlacl url=' + $scheme + '://+:' + $activePort + '/ user="' + $env:USERDOMAIN + '\' + $env:USERNAME + '"') -ForegroundColor Yellow
     }
     exit 1
 }
 
-$browseUrl = 'http://localhost:' + $Port + '/'
+$browseUrl = $scheme + '://localhost:' + $activePort + '/'
 Write-Host ''
 Write-Host ('  Listening on ' + $prefix) -ForegroundColor Cyan
 Write-Host ('  Open ' + $browseUrl) -ForegroundColor Cyan
@@ -262,6 +317,13 @@ if ($cfg.IdentityMode -eq 'hybrid') {
     Write-Host '                 Every operator can see everything this account can see.' -ForegroundColor Yellow
 } else {
     Write-Host '  Identity mode: operator - every read and write runs as the signed-in operator' -ForegroundColor DarkGray
+}
+if ($scheme -eq 'https') {
+    Write-Host '  Transport: HTTPS - operator passwords are encrypted on the wire' -ForegroundColor Green
+} else {
+    Write-Host '  Transport: PLAIN HTTP - operator passwords cross the network in clear text.' -ForegroundColor Yellow
+    Write-Host '             Configure a certificate in Settings -> HTTPS before anyone uses this' -ForegroundColor Yellow
+    Write-Host '             console over the network.' -ForegroundColor Yellow
 }
 Write-Host ('  Idle timeout: ' + $cfg.SessionMinutes + ' minutes') -ForegroundColor DarkGray
 Write-Host ('  Audit log: ' + $cfg.DataPath) -ForegroundColor DarkGray

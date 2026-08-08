@@ -2954,6 +2954,83 @@ function renderSettings() {
       '<div class="set-result" id="portResult"></div>' +
       '<div id="portCommands"></div>' });
 
+  // ---- HTTPS ----
+  // The live transport and the saved intent are shown as two separate facts.
+  // They disagree between saving a certificate and restarting, and a screen
+  // that merged them would say "HTTPS on" while passwords still cross the
+  // network in clear text.
+  var h = s.https || {};
+  var liveHttps = (s.scheme === 'https');
+
+  var httpsState =
+    '<div class="set-state' + (liveHttps ? ' set-state-on' : ' set-state-off') + '">' +
+      '<div class="set-state-head">' +
+        '<span class="set-state-dot"></span>' +
+        '<span>' + (liveHttps ? 'Serving HTTPS' : 'Serving plain HTTP') + '</span>' +
+      '</div>' +
+      '<dl class="detail-fields">' +
+        settingsRow('Right now', (s.scheme || 'http') + ' on port ' + esc(String(h.livePort || s.port))) +
+        settingsRow('Configured', h.enabled ? ('HTTPS on port ' + esc(String(h.port))) : 'HTTPS off') +
+        settingsRow('Certificate bound', h.bound ? esc(String(h.boundTo || '')) : 'None') +
+      '</dl>' +
+    '</div>';
+
+  if (!liveHttps) {
+    httpsState += '<p class="set-warn">Operators sign in with their <strong>domain password</strong>. ' +
+                  'Until HTTPS is on, that password and every directory record cross the network in ' +
+                  '<strong>clear text</strong>.</p>';
+  }
+
+  if (h.warning) {
+    httpsState += '<div class="error-box">' + esc(h.warning) + '</div>';
+  }
+
+  var certOptions = '<option value="">Select a certificate...</option>';
+  var certs = asArray(h.certificateList);
+  for (var ci = 0; ci < certs.length; ci++) {
+    var c = certs[ci];
+    var label = (c.subject || c.thumbprint) + ' - expires ' + c.notAfter;
+    if (!c.usable) { label += ' [unusable: ' + c.why + ']'; }
+    certOptions += '<option value="' + esc(c.thumbprint) + '"' +
+                   (c.usable ? '' : ' disabled') +
+                   (c.thumbprint === h.thumbprint ? ' selected' : '') +
+                   '>' + esc(label) + '</option>';
+  }
+
+  sections.push({ key: 'https', label: 'HTTPS',
+    hint: (liveHttps ? 'On, port ' + (h.port || '') : 'Off - passwords in clear text'), body:
+      '<h2 class="set-h">HTTPS</h2>' +
+      httpsState +
+      '<p class="dialog-note">The console reads certificates from <code>' +
+      esc(h.store || 'Cert:\\LocalMachine\\My') + '</code> on this host and binds one to a port. ' +
+      '<strong>It never receives a private key.</strong> Uploading a .pfx and its password through ' +
+      'this page would send that password over the very plain-HTTP connection HTTPS exists to ' +
+      'replace, so the certificate has to be in the store first.</p>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setHttpsCert">Certificate</label>' +
+        '<select class="input" id="setHttpsCert">' + certOptions + '</select></div>' +
+        '<div class="field"><label for="setHttpsPort">HTTPS port (1-65535)</label>' +
+        '<input class="input" id="setHttpsPort" type="number" min="1" max="65535" step="1" value="' +
+        esc(String(h.port || 8443)) + '"></div>' +
+      '</div>' +
+      (certs.length ? '' :
+        '<p class="set-warn">No certificates found in the store. Put one there first, on the DSMT ' +
+        'host, in an elevated prompt:</p><div class="secret">' + esc(h.importCommand || '') + '</div>') +
+      (h.elevated ? '' :
+        '<p class="set-warn">This process is <strong>not elevated</strong>, so it cannot bind a ' +
+        'certificate itself. It will show you the command to run instead. DSMT running as the ' +
+        'installed Windows service does not have this limitation.</p>') +
+      '<p class="dialog-note">A listener cannot change scheme or port while it is running, so this is ' +
+      'saved and applied on the next start. <strong>If the certificate is wrong, DSMT refuses to start ' +
+      'rather than falling back to plain HTTP</strong> - a silent downgrade would be invisible, which ' +
+      'is the worst outcome for this particular setting.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-primary" type="button" id="applyHttps">Enable HTTPS</button>' +
+        (h.enabled ? '<button class="btn btn-ghost" type="button" id="disableHttps">Switch HTTPS off</button>' : '') +
+      '</div>' +
+      '<div class="set-result" id="httpsResult"></div>' +
+      '<div id="httpsCommands"></div>' });
+
   sections.push({ key: 'groupfilters', label: 'Group filters', hint: 'Chips on the Groups tab', body:
       '<h2 class="set-h">Group filters</h2>' +
       '<p class="dialog-note"><strong>Privileged</strong> and <strong>AdminSDHolder</strong> are built in ' +
@@ -3560,6 +3637,70 @@ function wireSettings(bounds) {
       })
       .catch(function (err) { setResult('portResult', err.message, false); });
   });
+
+  // ---- HTTPS ----
+  if ($('applyHttps')) {
+    $('applyHttps').addEventListener('click', function () {
+      var thumb = $('setHttpsCert').value;
+      var hport = parseInt($('setHttpsPort').value, 10);
+
+      if (!thumb) {
+        setResult('httpsResult', 'Choose a certificate first.', false);
+        return;
+      }
+      if (isNaN(hport) || hport < 1 || hport > 65535) {
+        setResult('httpsResult', 'The HTTPS port must be between 1 and 65535.', false);
+        return;
+      }
+
+      api('/api/settings/https', { method: 'POST', body: { enabled: true, port: hport, thumbprint: thumb } })
+        .then(function (res) {
+          var message = 'Certificate bound to port ' + res.port + '.';
+          if (res.replaced) { message += ' It replaced the previous DSMT binding on that port.'; }
+          message += ' HTTPS starts serving the next time DSMT restarts - until then this console is ' +
+                     'still on plain HTTP. After the restart, open ' + res.url;
+          if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+          setResult('httpsResult', message, res.persisted);
+
+          var cmds = '';
+          if (res.reservation) {
+            cmds += '<label class="set-cmd-label">Reserve the HTTPS URL, elevated, on the DSMT host:</label>' +
+                    '<div class="secret">' + esc(res.reservation) + '</div>';
+          }
+          if (res.firewall) {
+            cmds += '<label class="set-cmd-label">Open the HTTPS port in the firewall:</label>' +
+                    '<div class="secret">' + esc(res.firewall) + '</div>';
+          }
+          $('httpsCommands').innerHTML = cmds;
+        })
+        .catch(function (err) { setResult('httpsResult', err.message, false); });
+    });
+  }
+
+  if ($('disableHttps')) {
+    $('disableHttps').addEventListener('click', function () {
+      openDialog({
+        title: 'Switch HTTPS off?',
+        body: '<p>DSMT will go back to serving plain HTTP on the next restart, and operator ' +
+              'domain passwords will cross the network in clear text again.</p>',
+        confirmLabel: 'Switch HTTPS off',
+        onConfirm: function () {
+          api('/api/settings/https', { method: 'POST', body: { enabled: false } })
+            .then(function (res) {
+              closeDialog();
+              var message = res.message;
+              if (!res.bindingRemoved && res.bindingError) {
+                message += ' The certificate binding was left in place: ' + res.bindingError;
+              }
+              if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
+              setResult('httpsResult', message, res.persisted);
+              $('httpsCommands').innerHTML = '';
+            })
+            .catch(function (err) { dialogError(err.message); });
+        }
+      });
+    });
+  }
 
   // ---- idle timeout ----
   $('setIdlePreset').addEventListener('change', function (e) {

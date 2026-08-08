@@ -710,6 +710,8 @@ function Invoke-DsmtApi {
                         server        = $cfg.Server
                         port          = $cfg.Port
                         listenAddress = $cfg.ListenAddress
+                        scheme        = $cfg.Scheme
+                        https         = Get-DsmtHttpsState
                         sessionMinutes = $cfg.SessionMinutes
                         sessionBounds  = Get-DsmtSessionBounds
                         pageSize      = $cfg.PageSize
@@ -863,6 +865,145 @@ function Invoke-DsmtApi {
                     firewall      = ('New-NetFirewallRule -DisplayName "DSMT console (TCP ' + $port +
                                      ')" -Direction Inbound -Protocol TCP -LocalPort ' + $port +
                                      ' -Action Allow -Profile Domain')
+                }
+                return
+            }
+
+            '^/api/settings/https/certificates$' {
+                if ($method -ne 'GET') { break }
+
+                # Wrapped at the call site as well as in the callee - a
+                # one-certificate store must not serialise as a bare object.
+                $certs = @(Get-DsmtCertificates)
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    certificates = $certs
+                    store        = 'Cert:\LocalMachine\My'
+                    importCommand = (Get-DsmtPfxImportCommand)
+                }
+                return
+            }
+
+            '^/api/settings/https$' {
+                if ($method -eq 'GET') {
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok    = $true
+                        https = (Get-DsmtHttpsState)
+                    }
+                    return
+                }
+                if ($method -ne 'POST') { break }
+
+                $body    = Read-DsmtBody -Request $Request
+                $enabled = [bool](Get-DsmtBodyValue -Body $body -Name 'enabled' -Default $false)
+
+                # ---- switching HTTPS off ----
+                if (-not $enabled) {
+                    $state   = Get-DsmtHttpsState
+                    $removed = Remove-DsmtSslBinding -Port $state.port
+                    $saved   = Save-DsmtSavedSettings -Values @{ HttpsEnabled = $false }
+
+                    Write-DsmtAudit -Action 'Disable HTTPS' -Target ('port ' + $state.port) `
+                                    -Operator $session.Account -Reason 'Console configuration change' `
+                                    -Result 'Success' -Category 'session'
+                    Write-DsmtLog -Message ($session.Account + ' switched HTTPS off (takes effect on restart)')
+
+                    Send-DsmtJson -Response $Response -Data @{
+                        ok           = $true
+                        enabled      = $false
+                        needsRestart = $true
+                        persisted    = $saved.Ok
+                        persistError = $saved.Error
+                        bindingRemoved = $removed.Ok
+                        bindingError = $removed.Error
+                        message      = 'HTTPS is switched off. DSMT goes back to plain HTTP on port ' +
+                                       [string]$cfg.Port + ' the next time it starts.'
+                    }
+                    return
+                }
+
+                # ---- switching HTTPS on ----
+                $rawPort = Get-DsmtBodyValue -Body $body -Name 'port' -Default 8443
+                $port    = 0
+                if (-not [int]::TryParse([string]$rawPort, [ref] $port)) {
+                    Send-DsmtError -Response $Response -Message 'The HTTPS port must be a whole number.' -StatusCode 400
+                    return
+                }
+                if ($port -lt 1 -or $port -gt 65535) {
+                    Send-DsmtError -Response $Response -Message 'The HTTPS port must be between 1 and 65535.' -StatusCode 400
+                    return
+                }
+
+                $thumb = ([string](Get-DsmtBodyValue -Body $body -Name 'thumbprint' -Default '')).Trim()
+                $thumb = ($thumb -replace '[^0-9a-fA-F]', '').ToUpper()
+                if ($thumb.Length -ne 40) {
+                    Send-DsmtError -Response $Response -Message 'Choose a certificate. A thumbprint is 40 hexadecimal characters.' -StatusCode 400
+                    return
+                }
+
+                # The certificate must be in the store, and usable, BEFORE
+                # anything is written. Binding an expired certificate or one
+                # with no private key succeeds in netsh and then fails in
+                # every browser, with nothing on this screen to explain it.
+                $match = $null
+                foreach ($c in @(Get-DsmtCertificates)) {
+                    if ($c.thumbprint -eq $thumb) { $match = $c }
+                }
+                if ($null -eq $match) {
+                    Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                        'No certificate with that thumbprint is in Cert:\LocalMachine\My on this host. ' +
+                        'Import it there first - the console never receives a private key.')
+                    return
+                }
+                if (-not $match.usable) {
+                    Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                        'That certificate cannot serve HTTPS. ' + $match.why)
+                    return
+                }
+
+                $bind = Set-DsmtSslBinding -Port $port -Thumbprint $thumb
+                if (-not $bind.Ok) {
+                    Write-DsmtAudit -Action 'Enable HTTPS' -Target ('port ' + [string]$port + ', ' + $thumb) `
+                                    -Operator $session.Account -Reason 'Console configuration change' `
+                                    -Result 'Failed' -Category 'session'
+                    Send-DsmtError -Response $Response -Message $bind.Error -StatusCode 400
+                    return
+                }
+
+                $saved = Save-DsmtSavedSettings -Values @{
+                    HttpsEnabled    = $true
+                    HttpsPort       = $port
+                    HttpsThumbprint = $thumb
+                }
+
+                Write-DsmtAudit -Action 'Enable HTTPS' -Target ('port ' + [string]$port + ', ' + $thumb) `
+                                -Operator $session.Account -Reason 'Console configuration change' `
+                                -Result 'Success' -Category 'session'
+                Write-DsmtLog -Message ($session.Account + ' bound certificate ' + $thumb + ' to port ' +
+                                        $port + ' and switched HTTPS on (takes effect on restart)')
+
+                $reservation = ''
+                if ($cfg.ListenAddress -eq 'any') {
+                    $reservation = 'netsh http add urlacl url=https://+:' + $port + '/ user="' +
+                                   $env:USERDOMAIN + '\' + $env:USERNAME + '"'
+                }
+
+                Send-DsmtJson -Response $Response -Data @{
+                    ok           = $true
+                    enabled      = $true
+                    port         = $port
+                    thumbprint   = $thumb
+                    subject      = $match.subject
+                    replaced     = $bind.Replaced
+                    needsRestart = $true
+                    persisted    = $saved.Ok
+                    persistError = $saved.Error
+                    url          = ('https://' + $env:COMPUTERNAME + ':' + [string]$port + '/')
+                    reservation  = $reservation
+                    firewall     = ('New-NetFirewallRule -DisplayName "DSMT console (TCP ' + $port +
+                                    ')" -Direction Inbound -Protocol TCP -LocalPort ' + $port +
+                                    ' -Action Allow -Profile Domain')
                 }
                 return
             }
