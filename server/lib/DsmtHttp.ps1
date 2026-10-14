@@ -671,6 +671,9 @@ function Invoke-DsmtApi {
             isAdmin        = $session.IsAdmin
             roleReason     = $session.RoleReason
             roleConfigured = $session.RoleConfigured
+            roles          = @($session.Roles)
+            permissions    = @($session.Permissions)
+            modules        = @($session.Modules)
         }
         return
     }
@@ -682,24 +685,48 @@ function Invoke-DsmtApi {
         return
     }
 
-    # ---- DSMT's own settings need the administrator role ------------------
-    # Checked HERE, once, against a central list - not sprinkled through the
-    # handlers. A role enforced route by route is a role that is missing from
-    # the route somebody adds next week. Hiding a button in app.js is a
-    # convenience, never the enforcement: the API is reachable directly.
+    # ---- THE PERMISSION GATE ----------------------------------------------
+    # Checked HERE, once, against the central tables in DsmtRoles.ps1 - never
+    # inside a handler. A permission enforced route by route is a permission
+    # that is missing from the route somebody adds next week, and greying a
+    # button out in app.js is a convenience, never the enforcement: the API is
+    # reachable directly.
     #
-    # This gates DSMT's OWN configuration only. Directory routes are
-    # deliberately untouched: there, AD is the authority and a DSMT role could
-    # only ever subtract. See DsmtRoles.ps1.
-    if (Test-DsmtRouteNeedsAdmin -Path $Path -Method $method) {
-        if (-not $session.IsAdmin) {
-            Write-DsmtAudit -Action 'Denied - not a DSMT administrator' -Target ($method + ' ' + $Path) `
-                            -Operator $session.Account -Reason 'Role check' `
-                            -Result 'Denied' -Category 'session'
-            Send-DsmtError -Response $Response -StatusCode 403 -Message (
-                'Changing DSMT settings needs the DSMT administrator role. ' + $session.RoleReason)
-            return
-        }
+    # WHAT THIS DOES AND DOES NOT MEAN, while IdentityMode is 'operator':
+    # directory writes still run as the signed-in operator, so AD remains the
+    # authority on what they may do ANYWHERE. This gate decides what they may
+    # do THROUGH DSMT - real, and worth having for process and for accidents,
+    # but not a substitute for AD delegation. Under a service identity the
+    # same gate becomes the only thing standing between an operator and the
+    # service account's rights, which is why it is one list and one check.
+    $needed = ''
+    if ($Path -match '^/api/actions/(?<verb>[a-z-]+)$') {
+        $needed = Get-DsmtRequiredPermission -Path $Path -Method $method -Action $Matches['verb']
+    } else {
+        $needed = Get-DsmtRequiredPermission -Path $Path -Method $method
+    }
+
+    if ($needed -eq 'UNMAPPED') {
+        # A bulk-action verb with no permission mapped to it. Refused rather
+        # than allowed: a new verb must fail loudly here instead of shipping
+        # ungated, which under a service identity would be an escalation.
+        Write-DsmtLog -Level 'ERROR' -Message ('Refused ' + $Path + ': the action has no permission ' +
+                                               'mapped in $script:DsmtActionPermissions.')
+        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+            'That action is not recognised by this version of DSMT.')
+        return
+    }
+
+    if ($needed -and -not (Test-DsmtPermission -Session $session -Permission $needed)) {
+        $label = $needed
+        foreach ($p in @(Get-DsmtPermissionCatalogue)) { if ($p.key -eq $needed) { $label = $p.label } }
+
+        Write-DsmtAudit -Action ('Denied - ' + $label) -Target ($method + ' ' + $Path) `
+                        -Operator $session.Account -Reason 'Permission check' `
+                        -Result 'Denied' -Category 'session'
+        Send-DsmtError -Response $Response -StatusCode 403 -Message (
+            'You do not have the "' + $label + '" permission in DSMT. ' + $session.RoleReason)
+        return
     }
 
     if ($Path -eq '/api/session' -and $method -eq 'DELETE') {
@@ -720,6 +747,9 @@ function Invoke-DsmtApi {
             isAdmin        = $session.IsAdmin
             roleReason     = $session.RoleReason
             roleConfigured = $session.RoleConfigured
+            roles          = @($session.Roles)
+            permissions    = @($session.Permissions)
+            modules        = @($session.Modules)
             httpsDegraded      = $cfg.HttpsDegraded
             httpsDegradedCause = $cfg.HttpsDegradedCause
             httpsDegradedFix   = $cfg.HttpsDegradedFix
@@ -757,6 +787,10 @@ function Invoke-DsmtApi {
                         isAdmin        = $session.IsAdmin
                         roleReason     = $session.RoleReason
                         roleConfigured = $session.RoleConfigured
+                        permissions    = @($session.Permissions)
+                        modules        = @($session.Modules)
+                        roleCatalogue  = @(Get-DsmtRoleCatalogue)
+                        permCatalogue  = @(Get-DsmtPermissionCatalogue)
                         roles          = Get-DsmtRoleState -Credential $session.Credential
                         sessionMinutes = $cfg.SessionMinutes
                         sessionBounds  = Get-DsmtSessionBounds
@@ -925,68 +959,97 @@ function Invoke-DsmtApi {
                 }
                 if ($method -ne 'POST') { break }
 
-                $body  = Read-DsmtBody -Request $Request
-                $names = @(Get-DsmtBodyValue -Body $body -Name 'groups' -Default @())
+                $body        = Read-DsmtBody -Request $Request
+                $assignments = @(Get-DsmtBodyValue -Body $body -Name 'assignments' -Default @())
 
-                # Every name is resolved to a SID BEFORE anything is saved, so
-                # a typo in the third group cannot leave the first two written
-                # and the mapping half-applied.
+                # Everything is resolved and validated BEFORE anything is
+                # saved, so a bad role on the third row cannot leave the first
+                # two written and the mapping half-applied.
                 $resolved = @()
-                foreach ($n in $names) {
-                    $text = ([string]$n).Trim()
+                foreach ($a in $assignments) {
+                    if ($null -eq $a) { continue }
+
+                    $text = ([string]$a.group).Trim()
+                    $role = ([string]$a.role).Trim()
                     if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+                    if ($null -eq (Get-DsmtRoleDefinition -Key $role)) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'No role called "' + $role + '". Nothing was saved.')
+                        return
+                    }
 
                     $r = Resolve-DsmtGroupSid -Identity $text -Credential $session.Credential
                     if (-not $r.Ok) {
-                        Send-DsmtError -Response $Response -Message $r.Error -StatusCode 400
+                        Send-DsmtError -Response $Response -Message ($r.Error + ' Nothing was saved.') -StatusCode 400
                         return
                     }
-                    $resolved += @{ Sid = $r.Sid; Name = $r.Name }
+                    $resolved += @{ Sid = $r.Sid; Name = $r.Name; Role = $role }
                 }
 
-                # Refusing to save a mapping that locks the author out. Every
-                # other guard here is recoverable from the console; this one
-                # would not be - it would need regedit on the DSMT host.
+                # REFUSING TO SAVE A LIST THAT LOCKS THE AUTHOR OUT.
+                #
+                # The test is not "are you in the list" - it is "does the list
+                # still leave you able to change it". An author who puts
+                # themselves in as Read only has locked themselves out just as
+                # completely as one who left themselves off, and that mistake
+                # is far easier to make now that roles exist.
                 if ($resolved.Count -gt 0) {
                     $check = Get-DsmtOperatorGroupSids -SamAccountName $session.Sam -Credential $session.Credential
                     if (-not $check.Ok) {
                         Send-DsmtError -Response $Response -StatusCode 400 -Message (
                             'Your own group membership could not be read, so DSMT cannot confirm this ' +
-                            'mapping would not lock you out. Nothing was saved. ' + $check.Error)
+                            'would not lock you out. Nothing was saved. ' + $check.Error)
                         return
                     }
 
-                    $selfIn = $false
+                    $keepsSettings = $false
                     foreach ($g in $resolved) {
-                        foreach ($s in @($check.Sids)) {
-                            if ($s -eq $g.Sid) { $selfIn = $true }
+                        $mine = $false
+                        foreach ($sid in @($check.Sids)) { if ($sid -eq $g.Sid) { $mine = $true } }
+                        if (-not $mine) { continue }
+
+                        $def = Get-DsmtRoleDefinition -Key $g.Role
+                        if ($null -eq $def) { continue }
+                        foreach ($p in @($def.permissions)) {
+                            if ($p -eq 'settings.write') { $keepsSettings = $true }
                         }
                     }
-                    if (-not $selfIn) {
+
+                    if (-not $keepsSettings) {
                         Send-DsmtError -Response $Response -StatusCode 400 -Message (
-                            'You are not a member of any of those groups, so saving this would lock you ' +
-                            'out of DSMT settings immediately and the only way back would be regedit on ' +
-                            'the DSMT host. Add a group you belong to. Nothing was saved.')
+                            'This would leave you without permission to change DSMT settings - either ' +
+                            'you are in none of these groups, or the role you gave yourself cannot edit ' +
+                            'this list. The only way back would be regedit on the DSMT host, so nothing ' +
+                            'was saved. Give a group you belong to the Administrator role.')
                         return
                     }
                 }
 
-                $saved = Save-DsmtSavedSettings -Values @{ RoleAdminGroups = $resolved }
-
-                $summary = 'none (every operator administers)'
-                if ($resolved.Count -gt 0) {
-                    $summary = (@($resolved | ForEach-Object { $_.Name }) -join ', ')
+                # RoleAdminGroups is cleared in the same write. Leaving it
+                # would mean the old admin list kept granting rights invisibly
+                # alongside the new one - Get-DsmtRoleAssignments still reads
+                # it, deliberately, so that an install which has never opened
+                # this screen keeps working.
+                $saved = Save-DsmtSavedSettings -Values @{
+                    RoleAssignments = $resolved
+                    RoleAdminGroups = @()
                 }
 
-                Write-DsmtAudit -Action 'Change DSMT administrator groups' -Target $summary `
+                $summary = 'none (every operator has full access)'
+                if ($resolved.Count -gt 0) {
+                    $summary = (@($resolved | ForEach-Object { $_.Name + '=' + $_.Role }) -join ', ')
+                }
+
+                Write-DsmtAudit -Action 'Change DSMT roles' -Target $summary `
                                 -Operator $session.Account -Reason 'Console configuration change' `
                                 -Result 'Success' -Category 'session'
-                Write-DsmtLog -Message ($session.Account + ' set the DSMT administrator groups to: ' + $summary)
+                Write-DsmtLog -Message ($session.Account + ' set the DSMT role assignments to: ' + $summary)
 
                 Send-DsmtJson -Response $Response -Data @{
                     ok           = $true
                     count        = $resolved.Count
-                    groups       = @($resolved)
+                    assignments  = @($resolved)
                     persisted    = $saved.Ok
                     persistError = $saved.Error
                     needsSignIn  = $true

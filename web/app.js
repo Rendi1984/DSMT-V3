@@ -41,6 +41,11 @@ var state = {
   // sign-in. Populated by applyRole(); the server gate is the enforcement.
   isAdmin: false,
   roleReason: '',
+  // The permission keys this operator holds, and the tabs they may reach.
+  // Empty means "the server did not say", which is treated as allow - see
+  // can() for why.
+  permissions: [],
+  modules: [],
   // True once the CSV import dialog has shown a dry-run result for exactly
   // the CSV and OU currently in the form. Reset on open and on any edit.
   csvPreviewed: false,
@@ -379,13 +384,83 @@ function showApp() {
 // ---------------------------------------------------------------------------
 
 function applyRole(data) {
-  // The DSMT administrator role, from whichever payload carried it - sign-in,
-  // session restore or the settings read. Stored once so no screen has to go
-  // and ask. The server gate is the enforcement; this only decides what is
-  // worth drawing.
+  // The permission set, from whichever payload carried it - sign-in, session
+  // restore or the settings read. Stored once so no screen has to go and ask.
+  //
+  // THE SERVER GATE IS THE ENFORCEMENT. Everything this enables in the UI is
+  // decided again in DsmtHttp.ps1 against the same tables, so a disabled
+  // button is a courtesy and never the control. Anyone can call the API
+  // directly; they get a 403 and an audit record either way.
   if (!data || data.isAdmin === undefined) { return; }
   state.isAdmin = !!data.isAdmin;
   state.roleReason = data.roleReason || '';
+  state.permissions = asArray(data.permissions);
+  state.modules = asArray(data.modules);
+}
+
+function can(permission) {
+  // No permission list at all means an older server that does not send one.
+  // Allow, rather than disabling the whole console against a server that
+  // never had roles - the gate there is what refuses anyway.
+  if (!state.permissions || !state.permissions.length) { return true; }
+  return state.permissions.indexOf(permission) !== -1;
+}
+
+function canSee(module) {
+  if (!state.modules || !state.modules.length) { return true; }
+  return state.modules.indexOf(module) !== -1;
+}
+
+// Which permission each directory verb needs. The SAME mapping as
+// $script:DsmtActionPermissions on the server; if they ever disagree, fix
+// this one - a button that appears and then 403s is worse than no button.
+var ACTION_PERMISSION = {
+  'reset-password': 'password.reset',
+  'unlock':         'account.unlock',
+  'enable':         'account.enable',
+  'disable':        'account.enable',
+  'set-enabled':    'account.enable',
+  'move-ou':        'object.move',
+  'group-add':      'group.members',
+  'group-remove':   'group.members',
+  'delete':         'users.delete',
+  'add-members':    'group.members'
+};
+
+function permissionHint(key) {
+  var label = key || 'this';
+  for (var i = 0; i < PERMISSION_LABELS.length; i++) {
+    if (PERMISSION_LABELS[i].key === key) { label = PERMISSION_LABELS[i].label; }
+  }
+  return 'Your DSMT role does not include "' + label + '". ' +
+         'Settings -> Roles says which group grants it.';
+}
+
+// Filled from the server's own catalogue when Settings is read, so the hint
+// uses the same wording as the role screen rather than a second copy.
+var PERMISSION_LABELS = [];
+
+function canAction(verb) {
+  var need = ACTION_PERMISSION[verb];
+  return need ? can(need) : true;
+}
+
+function applyModuleVisibility() {
+  // Tabs the role cannot reach are removed from both the header and the menu.
+  // If the tab currently open is one of them, move to the first that is left
+  // rather than leaving an empty pane on screen.
+  var any = false;
+  var first = '';
+
+  els('.tab[data-tab], .menu-item[data-tab]').forEach(function (b) {
+    var key = b.getAttribute('data-tab');
+    var ok = canSee(key);
+    b.hidden = !ok;
+    if (ok && !first) { first = key; }
+    if (ok) { any = true; }
+  });
+
+  if (any && !canSee(state.tab)) { setTab(first, true); }
 }
 
 function applyInsecureBar(data) {
@@ -463,6 +538,7 @@ function boot() {
 
 function enterApp() {
   showApp();
+  applyModuleVisibility();
   paintIdentity();
   loadDomainInfo();
   setTab(state.tab, true);
@@ -797,6 +873,12 @@ function setTab(tab, force) {
     : 'Search users, UPN, department or OU';
   $('createBtn').textContent = tab === 'groups' ? 'New group' : 'New user';
   $('importBtn').hidden = (tab === 'groups');
+
+  var mayCreate = (tab === 'groups') ? can('groups.create') : can('users.create');
+  $('createBtn').disabled = !mayCreate;
+  $('createBtn').title = mayCreate ? '' : permissionHint(tab === 'groups' ? 'groups.create' : 'users.create');
+  $('importBtn').disabled = !can('users.create');
+  $('importBtn').title = can('users.create') ? '' : permissionHint('users.create');
   $('colsBtn').hidden = false;
   // Chips exist on both tabs now; renderRowFilters decides whether there is
   // anything to show.
@@ -1289,6 +1371,14 @@ function updateBulkBar() {
     // Enable/Disable and Add-to-group are user-only operations.
     var userOnly = (kind === 'enable' || kind === 'disable' || kind === 'group-add');
     b.hidden = (isGroup && userOnly);
+
+    // Not permitted: DISABLED AND VISIBLE, not hidden. A button that is not
+    // there teaches nothing - the operator concludes the feature is missing
+    // and asks why. A greyed one with a reason on hover says who to ask.
+    var allowed = canAction(kind);
+    b.disabled = !allowed;
+    if (allowed) { b.removeAttribute('title'); }
+    else { b.title = permissionHint(ACTION_PERMISSION[kind]); }
   });
 
   var all = $('checkAll');
@@ -1441,8 +1531,15 @@ function renderAudit() {
       dc:       '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>',
       reason:   '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>',
       result:   '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>',
+      // Two different reasons an undo is unavailable, and they must not read
+      // the same: "this action cannot be reversed" is about the record,
+      // "you may not" is about the operator. Conflating them would send
+      // someone looking for a fault in the wrong place.
       undo:     '<td data-label="Undo">' + (plan.ok
-                  ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
+                  ? (can('audit.undo')
+                      ? '<button class="btn btn-ghost btn-undo" type="button" data-undo="' + i + '">Undo</button>'
+                      : '<button class="btn btn-ghost btn-undo" type="button" disabled title="' +
+                        esc(permissionHint('audit.undo')) + '">Undo</button>')
                   : '<span class="cell-disabled undo-no" title="' + esc(plan.reason) + '">-</span>') + '</td>'
     };
 
@@ -3322,8 +3419,10 @@ function wireProfile(d, isGroup, rowId) {
        ['move-ou', 'Move OU'], ['group-add', 'Add to group']];
 
   $('profileActions').innerHTML = actions.map(function (a) {
-    return '<button class="btn btn-secondary" type="button" data-paction="' + a[0] + '">' +
-           esc(a[1]) + '</button>';
+    var allowed = canAction(a[0]);
+    return '<button class="btn btn-secondary" type="button" data-paction="' + a[0] + '"' +
+           (allowed ? '' : ' disabled title="' + esc(permissionHint(ACTION_PERMISSION[a[0]])) + '"') +
+           '>' + esc(a[1]) + '</button>';
   }).join('');
 
   var buttons = $('profileActions').querySelectorAll('[data-paction]');
@@ -3622,6 +3721,7 @@ function renderSettings() {
   var s = state.settings;
   if (!s) { return; }
   applyRole(s);
+  if (s.permCatalogue) { PERMISSION_LABELS = asArray(s.permCatalogue); }
 
   var b = s.sessionBounds || {};
   var bounds = { min: b.Min || b.min || 1, max: b.Max || b.max || 480, def: b.Default || b.def || 15 };
@@ -3796,15 +3896,21 @@ function renderSettings() {
       '<div id="portCommands"></div>' });
 
   // ---- Roles ----
-  // Scope is DSMT's own settings and nothing else. The copy says so at the
-  // top, because a role that looks like a directory permission and is not
-  // would be relied on as one.
+  // ---- Roles ----
   var r = s.roles || {};
-  var roleGroups = asArray(r.groups);
+  var assigned = asArray(r.assignments);
+  var roleDefs = asArray(s.roleCatalogue);
+
+  function roleOptions(selected) {
+    return roleDefs.map(function (d) {
+      return '<option value="' + esc(d.key) + '"' + (d.key === selected ? ' selected' : '') + '>' +
+             esc(d.label) + '</option>';
+    }).join('');
+  }
 
   var roleRows = '';
-  for (var ri = 0; ri < roleGroups.length; ri++) {
-    var rg = roleGroups[ri];
+  for (var ri = 0; ri < assigned.length; ri++) {
+    var rg = assigned[ri];
     roleRows +=
       '<div class="role-row" data-sid="' + esc(rg.sid) + '">' +
         '<div class="role-main">' +
@@ -3814,17 +3920,27 @@ function renderSettings() {
             : '<div class="role-missing">Not found in the directory - this entry grants nobody anything.</div>') +
           '<div class="role-sid">' + esc(rg.sid) + '</div>' +
         '</div>' +
+        '<select class="input role-pick" aria-label="Role for ' + esc(rg.name || rg.sid) + '">' +
+          roleOptions(rg.role) +
+        '</select>' +
         '<button class="btn btn-ghost role-remove" type="button">Remove</button>' +
       '</div>';
   }
-  if (!roleGroups.length) {
-    roleRows = '<p class="role-note">No groups configured - every operator who can sign in can change ' +
-               'every DSMT setting.</p>';
+  if (!assigned.length) {
+    roleRows = '<p class="role-note">Nothing is configured, so <strong>every operator who can sign in ' +
+               'has full access</strong> - including changing DSMT settings.</p>';
   }
 
-  sections.push({ key: 'roles', label: 'Administrators',
-    hint: (r.configured ? roleGroups.length + ' group(s)' : 'Everyone'), body:
-      '<h2 class="set-h">DSMT administrators</h2>' +
+  // What each role means, from the server's own catalogue rather than a
+  // second copy here. A role whose description lives in two places is a role
+  // whose description will disagree with itself.
+  var roleKey = '<dl class="detail-fields">' + roleDefs.map(function (d) {
+    return '<div class="detail-row"><dt>' + esc(d.label) + '</dt><dd>' + esc(d.summary) + '</dd></div>';
+  }).join('') + '</dl>';
+
+  sections.push({ key: 'roles', label: 'Roles',
+    hint: (r.configured ? assigned.length + ' group(s)' : 'Everyone has full access'), body:
+      '<h2 class="set-h">Roles</h2>' +
       '<div class="set-state' + (s.isAdmin ? ' set-state-on' : ' set-state-off') + '">' +
         '<div class="set-state-head">' +
           '<span class="set-state-dot"></span>' +
@@ -3832,52 +3948,73 @@ function renderSettings() {
         '</div>' +
         '<p class="muted">' + esc(s.roleReason || '') + '</p>' +
       '</div>' +
+
       // The state box describes THIS SESSION, decided at sign-in. The list
-      // below is read live. When they disagree the card was contradicting
-      // itself - "no administrator groups are configured" printed directly
-      // above a configured group - which reads as a bug rather than as the
-      // sign-in caching it actually is.
+      // below is read live. When they disagree the card used to contradict
+      // itself, which reads as a bug rather than as the sign-in caching it is.
       (s.roleConfigured !== r.configured
         ? '<div class="error-box">The box above describes <strong>your current session</strong>, and it ' +
           'is out of date: your role was decided when you signed in, before this list was last changed. ' +
           '<strong>Sign out and back in</strong> to pick up the change. Everyone else picks it up at ' +
           'their next sign-in.</div>'
         : '') +
-      '<p class="dialog-note"><strong>This controls DSMT\'s own settings only</strong> - the database it ' +
-      'points at, the identity mode, the idle timeout, the listening port, HTTPS, and this list. ' +
-      'Nothing in Active Directory governs those, which is why a role here has real teeth.</p>' +
-      '<p class="dialog-note"><strong>It does not affect directory operations.</strong> Every user, ' +
-      'group and password change still runs as the signed-in operator, so Active Directory decides what ' +
-      'they may do - a DSMT role cannot grant a right AD withheld, and cannot take one away either. ' +
-      'Someone not listed here can still open ADUC and do whatever AD permits.</p>' +
-      '<p class="dialog-note">Membership is matched on <strong>SID</strong>, never on name: a group can ' +
-      'be renamed and built-in groups are localised. Nested membership counts. The role is resolved at ' +
-      '<strong>sign-in</strong>, so a change takes effect the next time someone signs in - signing in ' +
-      'itself is never blocked by this list, only changing DSMT settings is.</p>' +
+
+      (r.legacyInUse
+        ? '<p class="set-warn">This install is still running on the original administrator list from ' +
+          'before roles existed. It is being honoured, and every group on it counts as ' +
+          '<strong>Administrator</strong>. Saving here replaces it.</p>'
+        : '') +
+
+      // THE HONEST STATEMENT ABOUT WHAT THIS IS, under the current identity
+      // mode. Getting this wrong in either direction is harmful: overstating
+      // it means someone relies on a control that is not one; understating it
+      // means nobody uses a control that does work.
+      '<p class="dialog-note"><strong>What a role decides:</strong> what an operator can do ' +
+      '<em>through DSMT</em> - which actions are available, and which screens they can reach. ' +
+      'Settings changes, which nothing in Active Directory governs, are decided here and nowhere ' +
+      'else.</p>' +
+      '<p class="dialog-note"><strong>What it does not decide</strong> while the identity mode is ' +
+      '<code>' + esc(r.identityMode || 'operator') + '</code>: directory rights. Every user, group and ' +
+      'password change still runs as the signed-in operator, so Active Directory has the final say and ' +
+      'someone blocked here can still open ADUC and do whatever AD permits them. This is a control over ' +
+      'the console, not over the person - real, and worth having for process and for accidents, but not ' +
+      'a replacement for AD delegation.</p>' +
+
+      '<h3 class="set-h">What each role means</h3>' + roleKey +
+
+      '<p class="dialog-note">An operator in several groups gets the <strong>union</strong> of their ' +
+      'roles - roles add, they never subtract. A "Read only" assignment does not take away what an ' +
+      '"Operator" assignment granted, because group membership is itself additive.</p>' +
+      '<p class="dialog-note">Matched on <strong>SID</strong>, never on name: a group can be renamed ' +
+      'and built-in groups are localised. Nested membership counts. Resolved at <strong>sign-in</strong>, ' +
+      'so a change lands the next time someone signs in. <strong>Signing in is never blocked by this ' +
+      'list</strong> - an operator with no role can look and not act.</p>' +
       (r.controller
         ? '<p class="dialog-note">Membership is read from <strong>' + esc(r.controller) + '</strong>. ' +
-          'If you have just added or removed someone and DSMT still disagrees, check that controller ' +
+          'If you have just changed a group and DSMT still disagrees, check that controller ' +
           'specifically - a change made on a different DC applies here only once it has replicated.</p>'
         : '') +
+
       '<div id="roleList">' + roleRows + '</div>' +
+
       // Search box + results list, the same pair the "Add to group" dialog
       // already uses (wirePicker). Deliberately not a second kind of
       // directory picker: one way to find an object in this console.
-      // The free-text box still works on its own, so a group the search does
-      // not surface can still be typed exactly - the server resolves either
-      // to a SID before anything is stored.
       '<div class="set-form">' +
         '<div class="field"><label for="roleAdd">Find a group</label>' +
         '<input class="input" id="roleAdd" placeholder="Type at least two characters" autocomplete="off"></div>' +
         '<div class="field"><label for="roleMatches">Group</label>' +
         '<select class="input" id="roleMatches">' +
         '<option value="">Search for a group first</option></select></div>' +
+        '<div class="field"><label for="roleNew">Role</label>' +
+        '<select class="input" id="roleNew">' + roleOptions('operator') + '</select></div>' +
       '</div>' +
-      '<p class="dialog-note">DSMT refuses to save a list you are not a member of - that would lock you ' +
-      'out immediately, and the only way back would be regedit on the DSMT host.</p>' +
+      '<p class="dialog-note">DSMT refuses to save a list that would leave <strong>you</strong> unable ' +
+      'to change it - whether because you are in none of these groups, or because the role you gave ' +
+      'yourself cannot edit this screen. The only way back would be regedit on the DSMT host.</p>' +
       '<div class="set-actions">' +
         '<button class="btn btn-secondary" type="button" id="roleAddBtn">Add</button>' +
-        '<button class="btn btn-primary" type="button" id="roleSave">Save administrators</button>' +
+        '<button class="btn btn-primary" type="button" id="roleSave">Save roles</button>' +
       '</div>' +
       '<div class="set-result" id="roleResult"></div>' });
 
@@ -4637,12 +4774,27 @@ function wireSettings(bounds) {
 
       if (list.querySelector('p.role-note')) { list.innerHTML = ''; }
 
+      // The role picked for the new row, carried as its own select so the
+      // row looks and behaves exactly like a saved one.
+      var pickedRole = $('roleNew').value;
+      var roleSelect = $('roleNew').cloneNode(true);
+      roleSelect.removeAttribute('id');
+      roleSelect.className = 'input role-pick';
+      roleSelect.value = pickedRole;
+
       var row = document.createElement('div');
       row.className = 'role-row';
       row.setAttribute('data-pending', name);
       row.innerHTML = '<div class="role-main"><strong>' + esc(label) + '</strong>' +
-                      '<div class="role-note">Not saved yet - the SID is resolved when you save.</div></div>' +
-                      '<button class="btn btn-ghost role-remove" type="button">Remove</button>';
+                      '<div class="role-note">Not saved yet - the SID is resolved when you save.</div></div>';
+      row.appendChild(roleSelect);
+
+      var drop = document.createElement('button');
+      drop.className = 'btn btn-ghost role-remove';
+      drop.type = 'button';
+      drop.textContent = 'Remove';
+      row.appendChild(drop);
+
       list.appendChild(row);
 
       $('roleAdd').value = '';
@@ -4662,24 +4814,26 @@ function wireSettings(bounds) {
   if ($('roleSave')) {
     $('roleSave').addEventListener('click', function () {
       var rows = $('roleList').querySelectorAll('.role-row');
-      var names = [];
+      var assignments = [];
       for (var i = 0; i < rows.length; i++) {
         // A saved row is sent back by SID, a pending one by the typed name -
         // both are re-resolved server-side, so a group renamed since it was
         // added keeps working and gets its display name refreshed.
         var sid = rows[i].getAttribute('data-sid');
         var pending = rows[i].getAttribute('data-pending');
-        names.push(sid || pending);
+        var pick = rows[i].querySelector('.role-pick');
+        assignments.push({ group: sid || pending, role: pick ? pick.value : 'readonly' });
       }
 
-      api('/api/settings/roles', { method: 'POST', body: { groups: names } })
+      api('/api/settings/roles', { method: 'POST', body: { assignments: assignments } })
         .then(function (res) {
           var message;
           if (!res.count) {
-            message = 'Cleared. Every operator who can sign in can now change every DSMT setting.';
+            message = 'Cleared. Every operator who can sign in now has full access again, including ' +
+                      'changing DSMT settings.';
           } else {
             message = res.count + ' group(s) saved. This takes effect at each operator\'s next sign-in, ' +
-                      'because the role is resolved once when they sign in.';
+                      'because the role is resolved once when they sign in - including yours.';
           }
           if (!res.persisted) { message += ' NOT saved: ' + res.persistError; }
           setResult('roleResult', message, res.persisted);

@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.29.1` — matches the top entry of `CHANGELOG.md` and
+`1.30.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -930,7 +930,43 @@ gives 28 the home it was always meant to have.
   most likely to overflow, and the rule in `CLAUDE.md` stands — never solve a
   narrow viewport by hiding directory data.
 
-### Full RBAC (32) — raised 2026-08-08, NOT to be built yet
+### RBAC (32) — PHASE ONE BUILT IN 1.30.0; phase two still needs a decision
+
+**Phase one is in**: four role presets (Administrator / Operator / Read only /
+Auditor) mapped to AD groups, enforced at one choke point in `DsmtHttp.ps1`
+against the route and action tables in `DsmtRoles.ps1`. It governs what an
+operator can do THROUGH DSMT and nothing else.
+
+**Phase two is not**, and it is the half that changes the architecture:
+directory writes running as a gMSA instead of as the operator, so a role
+becomes a constraint on the person rather than on the console. The operator
+asked for it explicitly on 2026-10-14 and accepted the cost (the DC security
+log names the gMSA, not the human; DSMT's own audit log becomes the only
+record of who did what). **A future session must still not switch
+IdentityMode to a service identity without checking in** - see the note below
+and the original reasoning kept further down.
+
+What phase two needs, now that phase one exists:
+- A third `IdentityMode` (`service`) in `Get-DsmtAdParams` - the ONE place
+  that decides identity. `hybrid` already runs reads as the service account,
+  so the change is small; the consequences are not.
+- An audit field recording that the gMSA executed the action, so the log says
+  both who asked and what performed it. `Write-DsmtAudit` already separates
+  `Operator` from the executing identity, which is the right shape already.
+- **The gate becomes load-bearing.** Today a hole in it gives an operator what
+  AD already allowed them. Under a service identity it gives them the gMSA's
+  rights. That is the reason the gate is one list and one check, and it must
+  stay that way.
+- A decision on whether to require LDAPS for the DC connection - raised in the
+  same conversation and conflated with the role model; it is a transport
+  setting for the whole server, not something a role grants.
+
+**Terminology, since it caused confusion:** what was asked for is RBAC (users
+to roles to permissions) layered on the **trusted subsystem** pattern (a
+service identity performs the work and the application decides who may ask).
+Today DSMT uses the opposite pattern, impersonation/delegation.
+
+Original note, kept because the reasoning still applies:
 
 Asked for directly: "what about implementing RBAC". Recorded as its own item
 because **item 24 is not it**, and a future session that reads 24 and thinks

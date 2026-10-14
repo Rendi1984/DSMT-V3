@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.29.1'
+$script:DsmtVersion = '1.30.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -483,7 +483,7 @@ $script:DsmtSettingsKey = 'HKLM:\SOFTWARE\Rendi Group\DSMT\Settings'
 
 # Names whose value is a structure rather than a scalar. Stored as JSON text.
 # A new nested setting MUST be added here.
-$script:DsmtJsonSettings = @('GroupFilters', 'RoleAdminGroups')
+$script:DsmtJsonSettings = @('GroupFilters', 'RoleAdminGroups', 'RoleAssignments')
 
 # Names stored as REG_DWORD. Everything not listed is a string.
 $script:DsmtNumberSettings = @('Port', 'SessionMinutes', 'SessionHours', 'PageSize', 'HealthAlertsInterval', 'HttpsPort')

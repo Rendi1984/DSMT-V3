@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.30.0** | 2026-10-14 | **Roles**: four presets mapped to AD groups, enforced at one choke point on the server. Phase one of the permission model — it governs the console, not Active Directory | Restart + refresh |
 | **1.29.1** | 2026-10-14 | **Security:** SQL database enumeration was ungated. Overview no longer reads the directory just because you arrived, and its Refresh button was never wired. Documentation caught up with the registry move | Restart + refresh |
 | **1.29.0** | 2026-08-08 | **Overview** is the new landing screen - live tiles that link to the rows behind them; **live sessions** with sign-out; a required-permissions document | Restart + refresh |
 | **1.28.0** | 2026-08-08 | **Reports** under Tools - eight named queries, read live and stamped with the time they were taken, on screen and in the export. Saved searches on the directory tabs | Restart + refresh |
@@ -84,6 +85,104 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 `main` carries **1.29.1** (PR #6 merged 2026-10-14). The last tag is still
 `v1.4.0` — tags cannot be pushed from the dev container, so tagging a release
 is a request to the operator.
+
+---
+
+## 1.30.0 — 2026-10-14
+
+### Roles
+
+Four presets, each mapped to an AD group in **Settings → Roles**:
+
+| Role | Sees | Does |
+| --- | --- | --- |
+| **Administrator** | everything | everything, including DSMT's own settings and this list |
+| **Operator** | everything | day-to-day directory work; cannot change how DSMT is configured |
+| **Read only** | everything | nothing — every action is disabled, with the reason on hover |
+| **Auditor** | audit log and tools only | nothing; the directory tabs are not shown |
+
+Presets rather than a checkbox per permission: four roles an operator can
+reason about beat fifteen boxes nobody audits, and a role whose meaning is
+written down can be explained on screen.
+
+**This is phase one of the model discussed for proposal 32**, and it is
+deliberately the half that can be built and verified without changing how DSMT
+talks to Active Directory. Phase two — directory writes running as a gMSA, so
+a role becomes a real constraint on the *person* rather than on the console —
+is not in this release.
+
+### What a role decides, and what it does not
+
+Stated here and on the screen itself, because getting it wrong in either
+direction is harmful. Overstate it and somebody relies on a control that is not
+one; understate it and nobody uses a control that does work.
+
+- **It decides what an operator can do *through DSMT*** — which actions are
+  available and which screens they can reach. For DSMT's own settings, which
+  nothing in AD governs, it is the only thing that decides.
+- **It does not decide directory rights.** While the identity mode is
+  `operator`, every user, group and password change still runs as the
+  signed-in operator, so Active Directory has the final say and someone
+  blocked here can still open ADUC and do whatever AD permits.
+
+So **Read only** currently constrains the console, not the person. That becomes
+a real constraint under a service identity, and it is the reason that half was
+not built earlier — not an oversight.
+
+### How it is enforced
+
+**One choke point**, against central tables in `DsmtRoles.ps1`: a route table
+keyed on path and method, and an action table for the bulk-action verbs, which
+carry the operation in the path and so cannot be matched on the path alone. A
+permission enforced route by route is a permission missing from the route
+somebody adds next week — and under the service identity planned for phase two,
+a missing gate is a privilege escalation rather than a cosmetic slip.
+
+**An unmapped action verb is refused, not allowed.** A new verb added without a
+permission fails loudly at the gate and logs why, instead of shipping ungated.
+
+**Roles add, they never subtract.** An operator in several groups gets the
+union. A "Read only" assignment does not take away what an "Operator"
+assignment granted, because group membership is itself additive — and the
+screen says so, so nobody expects a deny to win.
+
+**Unpermitted actions are disabled and visible, never hidden**, with a hover
+explaining which permission is missing and where it is granted. A button that
+is simply absent teaches nothing: the operator concludes the feature is missing
+and asks why. Hiding is still a courtesy either way — the server refuses
+regardless, with a 403 and an audit record.
+
+### Not locking yourself out
+
+The existing guard was "are you in the list". That is no longer enough: an
+author who puts themselves in as **Read only** has locked themselves out as
+completely as one who left themselves off, and it is a far easier mistake to
+make now that roles exist. The test is now **"does this list still leave you
+able to change it"**, and a save that fails it changes nothing.
+
+### Upgrading
+
+An install configured before roles existed keeps working untouched: every group
+in the old `RoleAdminGroups` list counts as **Administrator**, and the Roles
+screen says so while it is still in use. Saving from the new screen replaces it.
+With nothing configured at all, every operator still has full access — an
+upgrade must not lock a team out of their own console.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtSession.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js`, `web/app.css` | `%ProgramFiles%\DSMT\web\` |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
+
+**New registry value** under `HKLM\SOFTWARE\Rendi Group\DSMT\Settings`:
+`RoleAssignments` (string, JSON). Registered in `$script:DsmtJsonSettings` — a
+structured setting that is not round-trips as the literal `@{...}`.
 
 ---
 
