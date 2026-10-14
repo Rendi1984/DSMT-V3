@@ -104,6 +104,8 @@ $repoRoot  = Split-Path -Parent $scriptDir
 . (Join-Path $scriptDir 'lib\DsmtDirectory.ps1')
 . (Join-Path $scriptDir 'lib\DsmtGmsa.ps1')
 . (Join-Path $scriptDir 'lib\DsmtAdHealth.ps1')
+. (Join-Path $scriptDir 'lib\DsmtHttps.ps1')
+. (Join-Path $scriptDir 'lib\DsmtRoles.ps1')
 . (Join-Path $scriptDir 'lib\DsmtHttp.ps1')
 
 # Where state lives has to be settled BEFORE the settings file is read - the
@@ -233,7 +235,117 @@ Write-Host '  [ok]   Front end found' -ForegroundColor Green
 
 $host_ = 'localhost'
 if ($ListenAddress -eq 'any') { $host_ = '+' }
-$prefix = 'http://' + $host_ + ':' + $Port + '/'
+
+# --- HTTPS -----------------------------------------------------------------
+# Configured after installation from Settings -> HTTPS, never during install:
+# at install time the certificate usually does not exist yet.
+#
+# WHEN THE CERTIFICATE IS BROKEN, DSMT FALLS BACK TO PLAIN HTTP AND SAYS SO
+# LOUDLY. It does not refuse to start.
+#
+# 1.23.0 did refuse, on the reasoning that a silent downgrade would put
+# operator passwords on the wire. That reasoning was wrong twice over:
+#
+#   * It is not silent. A browser opening https:// against a plain HTTP
+#     listener fails the TLS handshake and shows an error - it does not
+#     quietly send the password in clear text. The real risk is a human
+#     retyping http:// and forgetting, which is a reason to WARN LOUDLY, not
+#     a reason to take the console down.
+#   * Refusing weighed one failure (plaintext) against nothing, when the
+#     other failure is that the domain administration console is dead because
+#     a certificate expired - which is far likelier, hurts immediately, and
+#     disables the very screen (Settings -> HTTPS) where the fix lives.
+#
+# So: start, work, and make the degraded state impossible to miss - in the
+# banner, in the log, and as a permanent bar across the top of the console
+# that cannot be dismissed. HttpsDegraded is what carries it to the UI.
+$scheme     = 'http'
+$activePort = $Port
+
+$httpsSaved = Get-DsmtSavedSettings
+$httpsOn    = $false
+$httpsPort  = 8443
+if ($null -ne $httpsSaved) {
+    if ($httpsSaved.PSObject.Properties['HttpsEnabled']) { $httpsOn   = [bool]$httpsSaved.HttpsEnabled }
+    if ($httpsSaved.PSObject.Properties['HttpsPort'])    { $httpsPort = [int]$httpsSaved.HttpsPort }
+}
+
+if ($httpsOn) {
+    if ($httpsPort -lt 1 -or $httpsPort -gt 65535) { $httpsPort = 8443 }
+
+    $binding = Get-DsmtSslBinding -Port $httpsPort
+
+    if ($binding.Bound) {
+        $scheme     = 'https'
+        $activePort = $httpsPort
+        $script:DsmtConfig.Scheme = 'https'
+        $script:DsmtConfig.Port   = $httpsPort
+        $cfg = Get-DsmtConfig
+    } else {
+        # Work out WHY before printing anything. "HTTPS is broken" without the
+        # cause sends someone to rebind a certificate that expired, or to
+        # renew one that is fine and merely unbound.
+        $thumbHint = ''
+        if ($httpsSaved.PSObject.Properties['HttpsThumbprint']) {
+            $thumbHint = [string]$httpsSaved.HttpsThumbprint
+        }
+
+        $known = $null
+        if (-not [string]::IsNullOrWhiteSpace($thumbHint)) {
+            try {
+                foreach ($c in @(Get-DsmtCertificates)) {
+                    if ($c.thumbprint -eq $thumbHint.ToUpper()) { $known = $c }
+                }
+            } catch {
+                $known = $null
+            }
+        }
+
+        $cause = 'No certificate is bound to port ' + [string]$httpsPort + '.'
+        $fix   = 'Open Settings -> HTTPS, pick a certificate and save, then restart DSMT.'
+
+        if ([string]::IsNullOrWhiteSpace($thumbHint)) {
+            $cause = 'HTTPS is switched on but no certificate was ever chosen.'
+        } elseif ($null -eq $known) {
+            $cause = 'The certificate this setting names (' + $thumbHint +
+                     ') is no longer in Cert:\LocalMachine\My on this host.'
+        } elseif (-not $known.usable) {
+            $cause = 'The certificate this setting names cannot serve HTTPS: ' + $known.why
+        } else {
+            $cause = 'The certificate is in the store and usable, but it is not bound to port ' +
+                     [string]$httpsPort + '.'
+            $fix   = 'Open Settings -> HTTPS and save again to rebind it, then restart DSMT. ' +
+                     'By hand, elevated: ' + (Get-DsmtSslCommand -Port $httpsPort -Thumbprint $thumbHint)
+        }
+
+        $script:DsmtConfig.HttpsDegraded       = $true
+        $script:DsmtConfig.HttpsDegradedCause  = $cause
+        $script:DsmtConfig.HttpsDegradedFix    = $fix
+        $cfg = Get-DsmtConfig
+
+        Write-Host ''
+        Write-Host '  =====================================================================' -ForegroundColor Red
+        Write-Host '  [WARN] HTTPS IS CONFIGURED BUT NOT WORKING - SERVING PLAIN HTTP' -ForegroundColor Red
+        Write-Host '  =====================================================================' -ForegroundColor Red
+        Write-Host ('         ' + $cause) -ForegroundColor Red
+        Write-Host '' 
+        Write-Host '         The console is UP so you can fix it, but this connection is NOT' -ForegroundColor Yellow
+        Write-Host '         encrypted: operator domain passwords cross the network in clear' -ForegroundColor Yellow
+        Write-Host '         text until HTTPS works again.' -ForegroundColor Yellow
+        Write-Host ''
+        Write-Host ('         FIX: ' + $fix) -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host ('         Note the URL has changed back to the plain HTTP port ' + [string]$Port + '.') -ForegroundColor DarkGray
+        Write-Host '         A bookmark to the https:// port will not connect - that is the TLS' -ForegroundColor DarkGray
+        Write-Host '         handshake failing, which is what stops a browser being downgraded.' -ForegroundColor DarkGray
+        Write-Host '  =====================================================================' -ForegroundColor Red
+
+        Write-DsmtLog -Level 'ERROR' -Message ('HTTPS configured but not working, serving PLAIN HTTP on port ' +
+                                               [string]$Port + '. ' + $cause)
+    }
+}
+
+$prefix = $scheme + '://' + $host_ + ':' + $activePort + '/'
 
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add($prefix)
@@ -246,12 +358,12 @@ try {
     Write-DsmtLog -Level 'ERROR' -Message ('Startup aborted - could not listen on ' + $prefix + ': ' + $_.Exception.Message)
     if ($ListenAddress -eq 'any') {
         Write-Host '         Listening on all interfaces needs an elevated shell, or a one-time reservation:' -ForegroundColor Yellow
-        Write-Host ('         netsh http add urlacl url=http://+:' + $Port + '/ user="' + $env:USERDOMAIN + '\' + $env:USERNAME + '"') -ForegroundColor Yellow
+        Write-Host ('         netsh http add urlacl url=' + $scheme + '://+:' + $activePort + '/ user="' + $env:USERDOMAIN + '\' + $env:USERNAME + '"') -ForegroundColor Yellow
     }
     exit 1
 }
 
-$browseUrl = 'http://localhost:' + $Port + '/'
+$browseUrl = $scheme + '://localhost:' + $activePort + '/'
 Write-Host ''
 Write-Host ('  Listening on ' + $prefix) -ForegroundColor Cyan
 Write-Host ('  Open ' + $browseUrl) -ForegroundColor Cyan
@@ -262,6 +374,13 @@ if ($cfg.IdentityMode -eq 'hybrid') {
     Write-Host '                 Every operator can see everything this account can see.' -ForegroundColor Yellow
 } else {
     Write-Host '  Identity mode: operator - every read and write runs as the signed-in operator' -ForegroundColor DarkGray
+}
+if ($scheme -eq 'https') {
+    Write-Host '  Transport: HTTPS - operator passwords are encrypted on the wire' -ForegroundColor Green
+} else {
+    Write-Host '  Transport: PLAIN HTTP - operator passwords cross the network in clear text.' -ForegroundColor Yellow
+    Write-Host '             Configure a certificate in Settings -> HTTPS before anyone uses this' -ForegroundColor Yellow
+    Write-Host '             console over the network.' -ForegroundColor Yellow
 }
 Write-Host ('  Idle timeout: ' + $cfg.SessionMinutes + ' minutes') -ForegroundColor DarkGray
 Write-Host ('  Audit log: ' + $cfg.DataPath) -ForegroundColor DarkGray

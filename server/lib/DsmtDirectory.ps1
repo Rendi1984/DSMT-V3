@@ -219,6 +219,49 @@ function ConvertTo-DsmtUser {
         try { $expiry = [datetime]::FromFileTime([Int64]$expiryRaw) } catch { $expiry = $null }
     }
 
+    # Numbers the UI can filter and sort on, computed HERE because this is the
+    # one attribute mapping site. Every one is worked out into its own
+    # variable before the [ordered]@{} literal below: a cast that throws
+    # inside a hashtable literal loses the WHOLE object, not one field, and
+    # dates from AD are exactly the kind of value that is absent rather than
+    # empty. That failure cost this project a release - see CLAUDE.md.
+    #
+    # -1 is the sentinel for "does not apply", never 0: a password expiring in
+    # 0 days and a password that never expires are opposite facts, and any
+    # comparison that treats them alike is wrong in the direction that hides
+    # a problem.
+    $pwdNever = $false
+    try { $pwdNever = [bool]$AdUser.PasswordNeverExpires } catch { $pwdNever = $false }
+
+    $pwdExpired = $false
+    try { $pwdExpired = [bool]$AdUser.PasswordExpired } catch { $pwdExpired = $false }
+
+    $pwdDays = -1
+    if (-not $pwdNever -and $null -ne $expiry) {
+        try { $pwdDays = [int][math]::Floor(($expiry - (Get-Date)).TotalDays) } catch { $pwdDays = -1 }
+    }
+
+    # Days since the last logon. LastLogonDate comes from lastLogonTimestamp,
+    # which the DC only replicates every 9-14 days by default - so this is
+    # accurate to roughly a fortnight and must never be presented as "last
+    # seen". It is good enough for "has not been used in months", which is
+    # what a stale-account report actually asks.
+    $logonDays  = -1
+    $neverLogon = $true
+    if ($AdUser.LastLogonDate) {
+        $neverLogon = $false
+        try { $logonDays = [int][math]::Floor(((Get-Date) - [datetime]$AdUser.LastLogonDate).TotalDays) }
+        catch { $logonDays = -1 }
+    }
+
+    # Days since the account was created. Same -1 sentinel and same
+    # compute-before-the-literal rule as the two above.
+    $createdDays = -1
+    if ($AdUser.whenCreated) {
+        try { $createdDays = [int][math]::Floor(((Get-Date) - [datetime]$AdUser.whenCreated).TotalDays) }
+        catch { $createdDays = -1 }
+    }
+
     $managerName = ''
     if ($AdUser.manager) { $managerName = Get-DsmtNameFromDn -DistinguishedName ([string]$AdUser.manager) }
 
@@ -241,6 +284,13 @@ function ConvertTo-DsmtUser {
         logon    = ConvertTo-DsmtDisplayTime -Value $AdUser.LastLogonDate
         logonRaw = ''
         pwd      = ConvertTo-DsmtRelativeExpiry -Value $expiry -NeverExpires ([bool]$AdUser.PasswordNeverExpires)
+        created    = ConvertTo-DsmtDisplayTime -Value $AdUser.whenCreated
+        createdDays = $createdDays
+        pwdDays    = $pwdDays
+        pwdNever   = $pwdNever
+        pwdExpired = $pwdExpired
+        logonDays  = $logonDays
+        neverLogon = $neverLogon
         groups   = $groupCount
         manager  = $managerName
         mail     = [string]$AdUser.mail
@@ -259,7 +309,6 @@ function ConvertTo-DsmtUser {
         $map.office      = [string]$AdUser.physicalDeliveryOfficeName
         $map.company     = [string]$AdUser.company
         $map.employeeId  = [string]$AdUser.employeeID
-        $map.created     = ConvertTo-DsmtDisplayTime -Value $AdUser.whenCreated
         $map.sid         = [string]$AdUser.objectSid
         $map.pwdExpired  = [bool]$AdUser.PasswordExpired
     }
@@ -522,10 +571,23 @@ function Get-DsmtGroupFilters {
         Array of hashtables: key, label, kind, terms.
     #>
 
+    # "how" states what each built-in actually matches on, so the Settings
+    # screen can LIST them rather than describe them in prose. A filter that
+    # is invisible on the screen meant to list filters is the reason this
+    # field exists.
     $filters = @(
-        @{ key = 'all';        label = 'All';        kind = 'builtin'; terms = @() }
-        @{ key = 'privileged'; label = 'Privileged'; kind = 'builtin'; terms = @() }
-        @{ key = 'protected';  label = 'AdminSDHolder'; kind = 'builtin'; terms = @() }
+        @{ key = 'all';        label = 'All';           kind = 'builtin'; terms = @()
+           how = 'Every group. No filtering.' }
+        @{ key = 'privileged'; label = 'Privileged';    kind = 'builtin'; terms = @()
+           how = 'Matched on SID, never on name: the well-known RIDs (Domain Admins 512, Domain ' +
+                 'Controllers 516, Schema Admins 518, Enterprise Admins 519, Group Policy Creator ' +
+                 'Owners 520) and the built-in aliases in S-1-5-32-* (Administrators 544, Account ' +
+                 'Operators 548, Print Operators 550, Server Operators 549, Backup Operators 551). ' +
+                 'A name match would find nothing on a renamed or non-English domain.' }
+        @{ key = 'protected';  label = 'AdminSDHolder'; kind = 'builtin'; terms = @()
+           how = 'adminCount = 1, which marks objects protected by AdminSDHolder. Shown as a signal, ' +
+                 'not used as the Privileged test: it lingers on accounts already removed from a ' +
+                 'privileged group, so on its own it over-reports.' }
     )
 
     $cfg = Get-DsmtConfig
@@ -553,6 +615,108 @@ function Get-DsmtGroupFilters {
     # element that is itself an array. That is what made the Groups tab render
     # a single blank row: items serialised as [[ ...20 groups... ]].
     return @($filters)
+}
+
+# Thresholds for the user filters, defined ONCE. They appear in the filter
+# label, in the "how" text and in the test itself, so a literal typed into any
+# of the three would eventually disagree with the other two.
+$script:DsmtPwdExpiringDays = 14
+$script:DsmtStaleLogonDays  = 90
+
+function Get-DsmtUserFilters {
+    <#
+    .SYNOPSIS
+        The filter chips the Users screen offers.
+    .DESCRIPTION
+        All built-in: these are facts about account state, not configuration,
+        and each states what it matches on so the Settings screen and the
+        chip tooltip do not need a second copy of the explanation.
+
+        NOT ",@($filters)" - the call site wraps in @( ), and the comma
+        operator would leave the outer array in place so the whole list
+        arrives as one element that is itself an array. That is what rendered
+        the Groups tab as a single blank row, twice.
+    #>
+    $expiring = [string]$script:DsmtPwdExpiringDays
+    $stale    = [string]$script:DsmtStaleLogonDays
+
+    $filters = @(
+        @{ key = 'all'; label = 'All'; how = 'Every account returned by the search.' }
+
+        @{ key = 'pwdexpiring'; label = ('Password expiring (' + $expiring + 'd)')
+           how = ('Password expires within ' + $expiring + ' days. Excludes accounts whose password ' +
+                  'has already expired and those set never to expire - those are separate answers.') }
+
+        @{ key = 'pwdexpired'; label = 'Password expired'
+           how = 'The password has already expired. The account cannot sign in until it is reset.' }
+
+        @{ key = 'pwdnever'; label = 'Password never expires'
+           how = 'PasswordNeverExpires is set. Worth reviewing periodically; common and legitimate on ' +
+                 'service accounts, rarely right on a person.' }
+
+        @{ key = 'stale'; label = ('Stale (' + $stale + 'd)')
+           how = ('No logon recorded in ' + $stale + ' days. Read from lastLogonTimestamp, which a DC ' +
+                  'replicates only every 9-14 days by default - so this is accurate to about a ' +
+                  'fortnight and is NOT a "last seen" timestamp.') }
+
+        @{ key = 'neverlogon'; label = 'Never logged on'
+           how = 'No logon has ever been recorded. Often a newly created account, sometimes one that ' +
+                 'was created and forgotten.' }
+
+        @{ key = 'disabled'; label = 'Disabled'; how = 'The account is disabled.' }
+
+        @{ key = 'lockedout'; label = 'Locked out'
+           how = 'The account is currently locked out by the password policy.' }
+    )
+
+    return @($filters)
+}
+
+function Select-DsmtUsersByFilter {
+    <#
+    .SYNOPSIS
+        Applies one filter key to a list of mapped user rows.
+    .DESCRIPTION
+        Applied AFTER the directory search, not folded into the LDAP filter.
+        Password expiry comes from msDS-UserPasswordExpiryTimeComputed, which
+        is CONSTRUCTED - LDAP cannot filter on it - and the day counts are
+        derived in ConvertTo-DsmtUser rather than stored anywhere.
+
+        An unknown key returns everything rather than nothing, for the same
+        reason as the group filters: an empty screen reads as "there are
+        none", which is a different and much worse answer than "that filter
+        no longer exists".
+    #>
+    param([array] $Rows, [string] $Filter = 'all')
+
+    if ([string]::IsNullOrWhiteSpace($Filter) -or $Filter -eq 'all') { return @($Rows) }
+
+    $expiring = $script:DsmtPwdExpiringDays
+    $stale    = $script:DsmtStaleLogonDays
+
+    switch ($Filter) {
+        'pwdexpiring' {
+            # Already expired and never-expires are both excluded: they are
+            # their own answers, and lumping them in here would make this
+            # chip mean "something about passwords" rather than one thing.
+            return @(@($Rows) | Where-Object {
+                -not $_.pwdNever -and -not $_.pwdExpired -and $_.pwdDays -ge 0 -and $_.pwdDays -le $expiring
+            })
+        }
+        'pwdexpired' { return @(@($Rows) | Where-Object { $_.pwdExpired }) }
+        'pwdnever'   { return @(@($Rows) | Where-Object { $_.pwdNever }) }
+        'stale' {
+            # Never-logged-on is deliberately NOT stale. An account created
+            # yesterday would otherwise appear in a "no logon in 90 days"
+            # report, which is true and useless.
+            return @(@($Rows) | Where-Object { -not $_.neverLogon -and $_.logonDays -ge $stale })
+        }
+        'neverlogon' { return @(@($Rows) | Where-Object { $_.neverLogon }) }
+        'disabled'   { return @(@($Rows) | Where-Object { -not $_.enabled }) }
+        'lockedout'  { return @(@($Rows) | Where-Object { $_.locked }) }
+    }
+
+    return @($Rows)
 }
 
 function Select-DsmtGroupsByFilter {
@@ -843,9 +1007,31 @@ function Remove-DsmtGroupMember {
 function New-DsmtUser {
     <#
     .SYNOPSIS
-        Creates a real user account. Password is set and the account enabled
-        only when a password was supplied - AD refuses to enable an account
-        that has no compliant password.
+        Creates a real user account, atomically.
+    .DESCRIPTION
+        Creating a usable account is FOUR directory operations, not one:
+        create (disabled), set the password, set "must change at next logon",
+        enable. AD refuses to enable an account that has no compliant
+        password, which is why the create is disabled first and the enable
+        comes last.
+
+        THE FAILURE THIS GUARDS AGAINST, found on the lab domain 2026-08-08.
+        An operator without Reset Password rights created a user: step 1
+        succeeded, step 2 threw, and the console reported "Failed" - while the
+        account sat in the directory, disabled, with no usable password. The
+        audit record said Failed too, so the log claimed nothing happened when
+        an object had in fact been created. An audit log that misses a
+        creation is worse than no audit log, because it is trusted.
+
+        So every step after the create is wrapped, and on any failure the
+        half-made account is REMOVED. Either the operation happened or it did
+        not; there is no third state left in the directory.
+
+        If the rollback itself fails - the likeliest reason being that the
+        operator can create but not delete - the account is left in place and
+        the error SAYS SO, naming the account and what state it is in. That is
+        the one case where something remains, and it is reported rather than
+        hidden.
     #>
     param(
         $Credential,
@@ -879,20 +1065,53 @@ function New-DsmtUser {
     if ($Department) { $new.Department = $Department }
     if ($Title)      { $new.Title      = $Title }
 
+    # Step 1. If this throws, nothing was created and there is nothing to
+    # undo - let it propagate untouched.
     New-ADUser @ad @new -ErrorAction Stop
 
-    if ($Password) {
+    if (-not $Password) { return $upn }
+
+    # Steps 2-4. From here the account EXISTS, so any failure has to be
+    # cleaned up before it is reported.
+    $failedStep = ''
+    $failure    = ''
+    try {
+        $failedStep = 'set the password'
         $secure = ConvertTo-SecureString -String $Password -AsPlainText -Force
         Set-ADAccountPassword @ad -Identity $SamAccountName -Reset -NewPassword $secure -ErrorAction Stop
+
         if ($MustChange) {
+            $failedStep = 'require a password change at next logon'
             Set-ADUser @ad -Identity $SamAccountName -ChangePasswordAtLogon $true -ErrorAction Stop
         }
         if ($Enabled) {
+            $failedStep = 'enable the account'
             Enable-ADAccount @ad -Identity $SamAccountName -ErrorAction Stop
         }
+    } catch {
+        $failure = $_.Exception.Message
     }
 
-    return $upn
+    if (-not $failure) { return $upn }
+
+    # Roll the creation back. Piped to Out-Null: uncaptured output inside a
+    # function joins the return value.
+    $rollbackError = ''
+    try {
+        Remove-ADUser @ad -Identity $SamAccountName -Confirm:$false -ErrorAction Stop | Out-Null
+    } catch {
+        $rollbackError = $_.Exception.Message
+    }
+
+    if ($rollbackError) {
+        throw ('The account ' + $SamAccountName + ' was created but DSMT could not ' + $failedStep +
+               ', and could not remove the half-created account either. IT STILL EXISTS in ' + $TargetOu +
+               ', disabled and without a usable password - finish it or delete it by hand. ' +
+               'Original failure: ' + $failure + ' Rollback failure: ' + $rollbackError)
+    }
+
+    throw ('Could not ' + $failedStep + ' for ' + $SamAccountName +
+           ', so the account was removed again and nothing was left in the directory. ' + $failure)
 }
 
 function New-DsmtGroup {
@@ -936,4 +1155,371 @@ function Remove-DsmtObject {
     }
 
     Remove-ADObject @ad -Identity $obj.DistinguishedName -Recursive -Confirm:$false -ErrorAction Stop
+}
+
+function Test-DsmtUserExists {
+    <#
+    .SYNOPSIS
+        True when an account with this samAccountName already exists.
+    .DESCRIPTION
+        Used by the CSV import preview. Deliberately returns a BOOLEAN and
+        swallows only the not-found case: any other failure (no rights, no
+        controller) is re-thrown, because reporting "does not exist" when the
+        truth is "could not check" would turn a preview into a lie and the
+        import would then fail on a row the preview called safe.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $SamAccountName,
+        [Parameter(Mandatory = $true)] $Credential
+    )
+
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
+
+    # -Filter rather than -Identity: -Identity throws when the object is
+    # absent, and "absent" is the normal answer here, not an error.
+    $escaped = ConvertTo-DsmtLdapEscape -Value $SamAccountName
+    $found = @(Get-ADUser @ad -LDAPFilter ('(sAMAccountName=' + $escaped + ')') -ResultSetSize 1 -ErrorAction Stop)
+
+    return ($found.Count -gt 0)
+}
+
+function Test-DsmtOuExists {
+    <#
+    .SYNOPSIS
+        True when a distinguished name resolves to a container that can hold
+        a user. Accepts an OU or a plain container such as CN=Users.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $DistinguishedName,
+        [Parameter(Mandatory = $true)] $Credential
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DistinguishedName)) { return $false }
+
+    $ad = Get-DsmtAdParams -Credential $Credential -Intent 'read'
+
+    try {
+        $obj = Get-ADObject @ad -Identity $DistinguishedName -Properties 'objectClass' -ErrorAction Stop
+    } catch {
+        return $false
+    }
+    if ($null -eq $obj) { return $false }
+
+    $class = [string]$obj.objectClass
+    return ($class -eq 'organizationalUnit' -or $class -eq 'container' -or $class -eq 'domainDNS')
+}
+
+# ---------------------------------------------------------------------------
+# Reports
+#
+# A report is a SAVED FILTER PLUS A COLUMN SET. It is not a second query
+# engine, and it must not become one: every row below comes from the same
+# Get-DsmtUsers / Select-DsmtUsersByFilter path the Users grid uses, so a
+# fix to either is a fix to both.
+#
+# TWO RULES THAT ARE NOT NEGOTIABLE, both recorded in PROGRESS.md item 19:
+#
+#   1. EVERY REPORT IS DATED, on the page and in the export. A directory
+#      report with no "as at" stamp gets circulated for months as if it were
+#      current - the same failure the fake-data rule guards against, in a form
+#      that survives being emailed. AsAtUtc and Controller are returned with
+#      the rows, not alongside them, so they cannot be dropped by a caller
+#      that only wanted the data.
+#
+#   2. REPORTS READ LIVE. They never read the SQL snapshot. The snapshot is
+#      written after a live read and goes stale the moment the directory
+#      changes; rendering a report from it would be exactly the bug CLAUDE.md
+#      devotes a section to. If that ever changes, the report must be labelled
+#      a snapshot with its LastSyncUtc, and it must say so on the page.
+# ---------------------------------------------------------------------------
+
+$script:DsmtRecentDays = 30
+
+# Reports read the whole directory, so they must NOT inherit the grid's result
+# cap: Get-DsmtUsers treats -Limit 0 as "use PageSize" (500 by default), which
+# would silently return the first 500 accounts of a larger domain as a dated,
+# authoritative-looking, WRONG report. That is the fake-data failure wearing a
+# report's clothes.
+#
+# So reports pass an explicit, much higher cap - and when the cap is actually
+# reached the report SAYS SO rather than presenting a truncated list as
+# complete. A bounded cap still exists because an unbounded read on a large
+# domain is a hang, not a feature.
+$script:DsmtReportMaxRows = 20000
+
+function Get-DsmtReports {
+    <#
+    .SYNOPSIS
+        The reports the Tools screen offers.
+    .DESCRIPTION
+        Definitions only - key, label, what it answers, which user filter it
+        runs and which columns it shows. Held here rather than in app.js so
+        the list, the labels and the column sets have one source.
+
+        Returns @($list): the call site wraps in @( ), and the comma operator
+        would leave the outer array in place.
+    #>
+    $stale  = [string]$script:DsmtStaleLogonDays
+    $recent = [string]$script:DsmtRecentDays
+
+    $reports = @(
+        @{ key = 'stale'; label = ('Stale accounts (' + $stale + ' days)'); kind = 'users'; filter = 'stale'
+           question = ('Which accounts have not been used in ' + $stale + ' days?')
+           caveat = ('Read from lastLogonTimestamp, which a domain controller replicates only every ' +
+                     '9-14 days by default. Treat it as accurate to about a fortnight - it answers ' +
+                     '"not used in months", not "last seen".')
+           columns = @('name', 'sam', 'ou', 'status', 'logon', 'logonDays', 'manager') }
+
+        @{ key = 'pwdexpiring'; label = 'Passwords expiring soon'; kind = 'users'; filter = 'pwdexpiring'
+           question = 'Whose password is about to expire?'
+           caveat = 'Excludes passwords that have already expired and accounts set never to expire - each has its own report.'
+           columns = @('name', 'sam', 'ou', 'status', 'pwd', 'pwdDays', 'mail') }
+
+        @{ key = 'pwdexpired'; label = 'Passwords already expired'; kind = 'users'; filter = 'pwdexpired'
+           question = 'Who cannot sign in because their password has expired?'
+           caveat = ''
+           columns = @('name', 'sam', 'ou', 'status', 'pwd', 'logon') }
+
+        @{ key = 'pwdnever'; label = 'Password never expires'; kind = 'users'; filter = 'pwdnever'
+           question = 'Which accounts are exempt from password expiry?'
+           caveat = 'Common and legitimate on service accounts, rarely right on a person. This is a review list, not a fault list.'
+           columns = @('name', 'sam', 'ou', 'status', 'logon', 'dept', 'title') }
+
+        @{ key = 'neverlogon'; label = 'Never logged on'; kind = 'users'; filter = 'neverlogon'
+           question = 'Which accounts were created and never used?'
+           caveat = 'A brand new account belongs here legitimately - check the created date before acting.'
+           columns = @('name', 'sam', 'ou', 'status', 'created', 'createdDays') }
+
+        @{ key = 'disabled'; label = 'Disabled accounts'; kind = 'users'; filter = 'disabled'
+           question = 'Which accounts are disabled?'
+           caveat = ''
+           columns = @('name', 'sam', 'ou', 'status', 'logon', 'created') }
+
+        @{ key = 'recent'; label = ('Created in the last ' + $recent + ' days'); kind = 'users'; filter = 'all'
+           question = ('Which accounts were created in the last ' + $recent + ' days?')
+           caveat = ''
+           columns = @('name', 'sam', 'ou', 'status', 'created', 'createdDays', 'dept') }
+
+        @{ key = 'privileged'; label = 'Privileged group membership'; kind = 'groups'; filter = 'privileged'
+           question = 'Who holds privileged group membership?'
+           caveat = ('Groups are matched on SID, never on name - a group called Domain Admins can be ' +
+                     'renamed and is localised. Membership shown is DIRECT; a member that is itself a ' +
+                     'group is listed as that group, not expanded.')
+           columns = @('group', 'member', 'meta') }
+    )
+
+    return @($reports)
+}
+
+function Invoke-DsmtReport {
+    <#
+    .SYNOPSIS
+        Runs one report against the LIVE directory.
+    .OUTPUTS
+        Hashtable with Ok, Key, Label, Rows, Columns, AsAtUtc, Controller,
+        Domain, Caveat, Error.
+    .DESCRIPTION
+        The stamp travels WITH the rows. A caller that renders the table and
+        forgets the date is the failure this whole feature is guarded against,
+        so there is no shape of this return value that has data without a date.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Key,
+        [Parameter(Mandatory = $true)] $Credential
+    )
+
+    $out = @{
+        Ok = $false; Key = $Key; Label = ''; Rows = @(); Columns = @()
+        AsAtUtc = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
+        Controller = ''; Domain = ''; Caveat = ''; Error = ''
+        Truncated = $false; MaxRows = $script:DsmtReportMaxRows
+    }
+
+    $def = $null
+    foreach ($r in @(Get-DsmtReports)) { if ($r.key -eq $Key) { $def = $r } }
+    if ($null -eq $def) {
+        $out.Error = 'No report called "' + $Key + '".'
+        return $out
+    }
+
+    $out.Label   = [string]$def.label
+    $out.Caveat  = [string]$def.caveat
+    $out.Columns = @($def.columns)
+
+    $cfg = Get-DsmtConfig
+    $out.Domain = [string]$cfg.Domain
+    try { $out.Controller = Get-DsmtServer -Credential $Credential } catch { $out.Controller = '' }
+
+    try {
+        if ($def.kind -eq 'groups') {
+            # Privileged membership. Read the groups, keep the privileged
+            # ones, then read each one's members - a handful of groups, so the
+            # per-group read is bounded rather than a scan.
+            $groups = @(Get-DsmtGroups -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+            if (@($groups).Count -ge $script:DsmtReportMaxRows) { $out.Truncated = $true }
+            $groups = @(Select-DsmtGroupsByFilter -Rows $groups -Filter ([string]$def.filter))
+
+            $rows = @()
+            foreach ($g in $groups) {
+                $detail = $null
+                try { $detail = Get-DsmtGroup -Credential $Credential -Identity ([string]$g.sam) } catch { $detail = $null }
+                if ($null -eq $detail) { continue }
+
+                foreach ($m in @($detail.memberships)) {
+                    $rows += [ordered]@{
+                        group  = [string]$g.name
+                        member = [string]$m.name
+                        meta   = [string]$m.meta
+                    }
+                }
+            }
+            $out.Rows = @($rows)
+        } else {
+            $read = @(Get-DsmtUsers -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+
+            # Truncation is detected on the UNFILTERED read - that is where the
+            # cap bites. Checking after filtering would miss it entirely: a
+            # filter that keeps 12 of a truncated 20000 looks perfectly normal.
+            if (@($read).Count -ge $script:DsmtReportMaxRows) { $out.Truncated = $true }
+
+            $rows = @(Select-DsmtUsersByFilter -Rows $read -Filter ([string]$def.filter))
+
+            # The one report whose test is not a chip: created within N days.
+            if ($Key -eq 'recent') {
+                $window = $script:DsmtRecentDays
+                $rows = @(@($rows) | Where-Object { $_.createdDays -ge 0 -and $_.createdDays -le $window })
+            }
+            $out.Rows = @($rows)
+        }
+
+        $out.Ok = $true
+    } catch {
+        $out.Error = $_.Exception.Message
+    }
+
+    return $out
+}
+
+# ---------------------------------------------------------------------------
+# Dashboard
+#
+# THREE RULES, all from PROGRESS.md item 25, and all of them are about the
+# same failure: a number on a dashboard is read as "now" and as "true", and
+# both can be wrong without anything looking wrong.
+#
+#   1. EVERY TILE IS LIVE, or it carries the time it was taken. These are
+#      live - one read of the directory at the moment the screen is opened,
+#      never the SQL snapshot - and the screen states the time regardless.
+#
+#   2. A TILE THAT CANNOT BE COMPUTED SAYS SO. It does not show 0.
+#      "0 locked-out accounts" and "the query failed" look identical and mean
+#      opposite things, so every tile carries its own ok/error rather than a
+#      bare number.
+#
+#   3. COST IS THE DESIGN CONSTRAINT. Counting every user per tile would be
+#      one directory read per tile. There is ONE read of users and ONE of
+#      groups for the whole screen, and every count is derived from those in
+#      memory. Anything genuinely expensive (AD health) is linked to, not
+#      computed here.
+# ---------------------------------------------------------------------------
+
+function Get-DsmtDashboard {
+    <#
+    .SYNOPSIS
+        Every dashboard tile, from one users read and one groups read.
+    .OUTPUTS
+        Hashtable with AsAtUtc, Controller, Domain, Truncated and Tiles.
+        Each tile is @{ key; label; value; ok; error; hint }.
+    #>
+    param($Credential)
+
+    $cfg = Get-DsmtConfig
+
+    $out = [ordered]@{
+        asAt       = (Get-Date).ToUniversalTime().ToString('s') + 'Z'
+        controller = ''
+        domain     = [string]$cfg.Domain
+        truncated  = $false
+        maxRows    = $script:DsmtReportMaxRows
+        tiles      = @()
+    }
+
+    try { $out.controller = Get-DsmtServer -Credential $Credential } catch { $out.controller = '' }
+
+    # Build a tile in one place so a failed tile can never accidentally be
+    # rendered as a zero: value stays $null unless ok is $true.
+    function New-Tile {
+        param([string] $Key, [string] $Label, [string] $Hint, $Value, [bool] $Ok, [string] $ErrorText)
+        return [ordered]@{
+            key = $Key; label = $Label; hint = $Hint
+            value = $Value; ok = $Ok; error = $ErrorText
+        }
+    }
+
+    $tiles = @()
+
+    # ---- users: one read, many counts -------------------------------------
+    $users     = @()
+    $usersOk   = $false
+    $usersErr  = ''
+    try {
+        $users = @(Get-DsmtUsers -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+        if (@($users).Count -ge $script:DsmtReportMaxRows) { $out.truncated = $true }
+        $usersOk = $true
+    } catch {
+        $usersErr = $_.Exception.Message
+    }
+
+    $userTiles = @(
+        @{ key = 'users';       label = 'User accounts';    hint = 'Every user object read' ; filter = 'all' }
+        @{ key = 'disabled';    label = 'Disabled';         hint = 'Accounts switched off'  ; filter = 'disabled' }
+        @{ key = 'lockedout';   label = 'Locked out';       hint = 'Locked by policy now'   ; filter = 'lockedout' }
+        @{ key = 'pwdexpiring'; label = 'Passwords due';    hint = ('Expiring within ' + [string]$script:DsmtPwdExpiringDays + ' days'); filter = 'pwdexpiring' }
+        @{ key = 'pwdexpired';  label = 'Passwords expired'; hint = 'Cannot sign in'        ; filter = 'pwdexpired' }
+        @{ key = 'stale';       label = 'Stale accounts';   hint = ('No logon in ' + [string]$script:DsmtStaleLogonDays + ' days'); filter = 'stale' }
+    )
+
+    foreach ($t in $userTiles) {
+        if (-not $usersOk) {
+            $tiles += New-Tile -Key $t.key -Label $t.label -Hint $t.hint -Value $null -Ok $false `
+                               -ErrorText ('The directory read failed: ' + $usersErr)
+            continue
+        }
+        $n = @(Select-DsmtUsersByFilter -Rows $users -Filter ([string]$t.filter)).Count
+        $tiles += New-Tile -Key $t.key -Label $t.label -Hint $t.hint -Value $n -Ok $true -ErrorText ''
+    }
+
+    # ---- groups: one read --------------------------------------------------
+    $groups = @()
+    try {
+        $groups = @(Get-DsmtGroups -Credential $Credential -Query '' -Limit $script:DsmtReportMaxRows)
+        if (@($groups).Count -ge $script:DsmtReportMaxRows) { $out.truncated = $true }
+
+        $tiles += New-Tile -Key 'groups' -Label 'Groups' -Hint 'Every group object read' `
+                           -Value (@($groups).Count) -Ok $true -ErrorText ''
+
+        $priv = @(Select-DsmtGroupsByFilter -Rows $groups -Filter 'privileged').Count
+        $tiles += New-Tile -Key 'privileged' -Label 'Privileged groups' -Hint 'Matched on SID, not name' `
+                           -Value $priv -Ok $true -ErrorText ''
+    } catch {
+        $msg = $_.Exception.Message
+        $tiles += New-Tile -Key 'groups' -Label 'Groups' -Hint 'Every group object read' `
+                           -Value $null -Ok $false -ErrorText ('The directory read failed: ' + $msg)
+        $tiles += New-Tile -Key 'privileged' -Label 'Privileged groups' -Hint 'Matched on SID, not name' `
+                           -Value $null -Ok $false -ErrorText ('The directory read failed: ' + $msg)
+    }
+
+    # ---- console state, not directory state --------------------------------
+    # Cheap, in-process, and it answers a question nothing else on screen does.
+    try {
+        $summary = Get-DsmtSessionSummary
+        $tiles += New-Tile -Key 'sessions' -Label 'Operators signed in' -Hint 'Sessions open right now' `
+                           -Value $summary.Count -Ok $true -ErrorText ''
+    } catch {
+        $tiles += New-Tile -Key 'sessions' -Label 'Operators signed in' -Hint 'Sessions open right now' `
+                           -Value $null -Ok $false -ErrorText $_.Exception.Message
+    }
+
+    $out.tiles = @($tiles)
+    return $out
 }

@@ -9,6 +9,14 @@
 </head>
 <body>
 
+<!-- HTTPS is configured but not working, so this connection is not encrypted.
+     Deliberately the FIRST element in the body and in normal document flow -
+     not fixed, not an overlay, not positioned. The 1.7.5 incident was every
+     overlay in this console silently rendering nowhere; a warning that can
+     disappear the same way is worse than no warning at all. It has no dismiss
+     control on purpose. -->
+<div id="insecureBar" class="insecure-bar" hidden></div>
+
 <!-- ===================== Sign in ===================== -->
 <section id="loginView" class="login" hidden>
   <div class="login-hero">
@@ -67,6 +75,7 @@
     <span class="brand">DSMT</span>
 
     <nav class="tabs" id="tabs" role="tablist">
+      <button class="tab" data-tab="overview" role="tab">Overview</button>
       <button class="tab" data-tab="users"  role="tab">Users</button>
       <button class="tab" data-tab="groups" role="tab">Groups</button>
       <button class="tab tab-audit" data-tab="audit" role="tab">Audit log</button>
@@ -103,6 +112,7 @@
   <!-- Slide-out menu (also carries the tabs on small screens) -->
   <div class="menu-backdrop" id="menuBackdrop" hidden></div>
   <aside class="menu" id="menu" hidden>
+    <button class="menu-item" data-tab="overview">Overview</button>
     <button class="menu-item" data-tab="users">Users</button>
     <button class="menu-item" data-tab="groups">Groups</button>
     <button class="menu-item" data-tab="audit">Audit log</button>
@@ -117,12 +127,29 @@
     <button class="menu-item menu-accent" id="menuLogoff">Log off</button>
   </aside>
 
+  <!-- ---------- Overview ---------- -->
+  <div class="audit" id="overviewView" hidden>
+    <div class="audit-head">
+      <div>
+        <span class="kicker">Overview</span>
+        <h1 class="audit-title">Where the directory stands</h1>
+      </div>
+      <div class="audit-controls">
+        <span class="audit-stamp" id="overviewStamp"></span>
+        <button class="btn btn-secondary" id="overviewRefresh" type="button">Refresh</button>
+      </div>
+    </div>
+    <div id="overviewBody"></div>
+  </div>
+
   <!-- ---------- Directory (users / groups) ---------- -->
   <div class="directory" id="directoryView">
     <section class="list-pane">
       <div class="toolbar">
         <input class="input search" id="search" type="search" placeholder="Search" autocomplete="off">
         <div class="toolbar-actions">
+          <button class="btn btn-ghost"     id="saveSearchBtn" type="button"
+                  title="Save the current tab, search text and filter">Save search</button>
           <button class="btn btn-ghost"     id="colsBtn"   type="button">Columns</button>
           <button class="btn btn-secondary" id="importBtn" type="button">Import CSV</button>
           <button class="btn btn-secondary" id="exportBtn" type="button">Export</button>
@@ -132,10 +159,14 @@
 
       <div class="col-picker" id="colPicker" hidden></div>
 
-      <!-- Group filters. Hidden on the Users tab; the chips themselves come
-           from the server, so a custom filter added in Settings appears here
-           without a code change. -->
+      <!-- Filter chips for BOTH directory tabs - account state on Users,
+           group kind on Groups. They come from the server, so a custom filter
+           added in Settings appears here without a code change. -->
       <div class="chips" id="groupFilters" hidden></div>
+
+      <!-- Saved searches for the current tab. Per-browser (localStorage), so
+           these are a personal shortcut, not shared configuration. -->
+      <div class="chips saved-bar" id="savedSearches" hidden></div>
 
       <div class="bulk-bar" id="bulkBar" hidden>
         <span class="bulk-count" id="bulkCount"></span>
@@ -215,9 +246,13 @@
         <span class="audit-stamp" id="auditStamp"></span>
         <button class="btn btn-secondary" id="auditRefresh" type="button" title="Reload the audit log">Refresh</button>
         <input class="input" id="auditSearch" type="search" placeholder="Search target, operator or reason" autocomplete="off">
+        <!-- Its own button: the directory toolbar's Columns control lives
+             inside #directoryView, which is hidden on this tab. -->
+        <button class="btn btn-ghost" id="auditColsBtn" type="button">Columns</button>
         <button class="btn btn-secondary" id="auditExport" type="button">Export</button>
       </div>
     </div>
+    <div class="col-picker" id="auditColPicker" hidden></div>
     <div class="chips" id="auditRanges"></div>
 
     <div class="range-custom" id="auditCustom" hidden>
@@ -236,12 +271,9 @@
     <div class="chips" id="auditFilters"></div>
     <div class="table-wrap">
       <table class="table dsmt-table" id="auditTable">
-        <thead>
-          <tr>
-            <th>Time</th><th>Action</th><th>Target</th><th>Operator</th>
-            <th>Controller</th><th>Reason</th><th>Result</th><th>Undo</th>
-          </tr>
-        </thead>
+        <!-- Built by renderAudit() from the same column list as the body,
+             so a hidden column cannot leave values under the wrong heading. -->
+        <thead id="auditHead"></thead>
         <tbody id="auditBody"></tbody>
       </table>
       <p class="result-line" id="auditLine"></p>

@@ -682,6 +682,26 @@ body { overflow: hidden; }
 .gf-row:last-child { border-bottom: none; margin-bottom: 0; }
 @media (max-width: 640px) { .gf-row { grid-template-columns: 1fr; } }
 
+/* One configured administrator group. Its own class rather than .gf-row:
+   that one carries only grid-template-columns and relies on .set-form for
+   display:grid, so reusing it alone would silently lay out as a block. */
+.role-row {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-neutral-800);
+}
+.role-row:last-child { border-bottom: none; margin-bottom: 0; }
+.role-main { flex: 1 1 auto; min-width: 0; }
+/* Font stack comes from the shared .secret rule below; only size and colour
+   differ here. */
+.role-sid { font-size: 11.5px; color: var(--color-neutral-500); word-break: break-all; }
+.role-note { font-size: 12.5px; color: var(--color-neutral-400); }
+.role-missing { font-size: 12.5px; color: var(--color-accent-200); }
+@media (max-width: 640px) {
+  .role-row { flex-wrap: wrap; }
+}
+
 .set-good { margin: 0; font-size: 13px; color: var(--color-neutral-300); }
 .set-warn { margin: 0; font-size: 13px; color: var(--color-accent-200); }
 .set-cmd-label { font-size: 12px; color: var(--color-neutral-400); }
@@ -741,7 +761,118 @@ body { overflow: hidden; }
 }
 .name-link:hover { color: var(--color-accent-200); border-bottom-color: var(--color-accent-500); }
 
+/* "This connection is not encrypted."
+
+   The most conservative rule in this file, on purpose. It is a plain block in
+   normal document flow - no position, no inset, no fixed, no grid, no
+   transform. Every one of those is a way for an element to end up somewhere
+   invisible on a browser that drops the property, which is precisely what
+   1.7.5 was, and a security warning that silently renders nowhere is worse
+   than having none: it makes the console look safe.
+
+   It also has no dismiss control. This state is not an annoyance to be
+   acknowledged, it is a fact about the connection, and it ends when HTTPS
+   works again. */
+.insecure-bar {
+  display: block;
+  background: var(--color-accent-900);
+  border-bottom: 2px solid var(--color-accent-500);
+  color: var(--color-accent-100);
+  padding: var(--space-3) var(--space-4);
+  font-size: 13px; line-height: 1.6;
+}
+.insecure-bar[hidden] { display: none; }
+.insecure-cause, .insecure-fix { display: block; color: var(--color-accent-200); }
+
+/* Saved searches. A chip plus its own delete control, so removing one does
+   not need a mode or a dialog. Flex and physical properties only - the rules
+   at the top of this file apply to anything that has to be visible. */
+.saved-bar { align-items: center; }
+.saved-label {
+  font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-neutral-500); margin-right: var(--space-1);
+}
+.saved-chip { display: inline-flex; align-items: center; gap: 2px; }
+.saved-drop {
+  background: none; border: none; cursor: pointer; line-height: 1;
+  color: var(--color-neutral-500); font-size: 15px; padding: 0 4px;
+}
+.saved-drop:hover { color: var(--color-accent-200); }
+.saved-drop:focus-visible { outline: 2px solid var(--color-accent-500); outline-offset: 1px; }
+
+/* Overview tiles. Auto-fit grid so it reflows from a phone to an ultrawide
+   without a breakpoint per size; minmax with a fixed floor rather than min(),
+   which the rules at the top of this file rule out for load-bearing layout. */
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+.tile {
+  display: block; width: 100%; text-align: left;
+  background: none; cursor: pointer;
+  border: 1px solid var(--color-neutral-800);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  color: inherit; font-family: inherit;
+}
+.tile:hover { border-color: var(--color-accent-700); background: var(--tint-accent-10); }
+.tile:focus-visible { outline: 2px solid var(--color-accent-500); outline-offset: 2px; }
+.tile-label {
+  font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-neutral-400);
+}
+.tile-value {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 30px; line-height: 1.2; color: var(--color-text);
+  margin: var(--space-2) 0 var(--space-1);
+}
+.tile-hint { font-size: 12px; color: var(--color-neutral-500); line-height: 1.45; }
+
+/* A tile that could not be computed. Deliberately NOT a number and not a
+   dash - a dash reads as zero, and "0 locked out" versus "the query failed"
+   are opposite answers. */
+.tile-bad { cursor: default; border-color: var(--color-accent-700); }
+.tile-bad:hover { background: none; }
+.tile-error {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 15px; color: var(--color-accent-200);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
 .profile-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
+
+/* Tab strip inside the profile window. Physical properties only and no
+   :has() - this strip sits inside a dialog, and the 1.7.5 incident was
+   exactly an overlay whose layout silently became something else on a
+   browser that dropped a modern property.
+
+   It scrolls sideways rather than wrapping or shrinking: at 640px inside a
+   slide-over this is the element most likely to overflow, and hiding a tab
+   would hide directory data, which the rules at the top of this file
+   forbid. */
+.profile-tabs {
+  display: flex; gap: var(--space-1);
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border-bottom: 1px solid var(--color-neutral-800);
+  margin-bottom: var(--space-4);
+}
+.profile-tab {
+  background: none; border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-neutral-400);
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 13.5px; white-space: nowrap;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+.profile-tab:hover { color: var(--color-neutral-200); }
+.profile-tab.is-on {
+  color: var(--color-accent-200);
+  border-bottom-color: var(--color-accent-500);
+}
+.profile-tab:focus-visible { outline: 2px solid var(--color-accent-500); outline-offset: -2px; }
 
 .profile-grid {
   display: grid; grid-template-columns: 1fr; gap: var(--space-6) var(--space-6);
@@ -801,8 +932,14 @@ body { overflow: hidden; }
 .result-list li { display: flex; gap: 8px; align-items: baseline; }
 .result-ok   { color: var(--color-neutral-300); }
 .result-bad  { color: var(--color-accent-200); }
-.secret {
+/* The one monospace stack in the console. There is no --font-mono token in
+   Nocturne, so anything needing monospace joins THIS selector - which carries
+   the font and nothing else, so joining it cannot drag along a border or a
+   background the way joining .secret would. */
+.secret, .role-sid {
   font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+}
+.secret {
   font-size: 13px; letter-spacing: 0.04em; word-break: break-all;
   padding: var(--space-3); border-radius: var(--radius-sm);
   border: 1px solid var(--color-accent-700); background: var(--color-accent-900);
