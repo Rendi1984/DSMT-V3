@@ -1282,9 +1282,12 @@ would have caught. Specifically not yet exercised:
 **Still awaiting a decision from the operator**: whether `prototype/` stays,
 and the IIS question. Both are in the sections below.
 
-**Still needs doing by hand in the GitHub UI** (the proxy blocks both): the
-`v1.13.3` tag or a later one, and deleting the stray branches
-`DSMT-1.13.0`, `v1.13.1` and `claude/new-session-6q2ky9`.
+**Still needs doing by hand in the GitHub UI** (the proxy blocks both): a tag
+for the current release, and tidying the stray branches. The repository now
+carries a per-release branch for every version handed over (`1.25.0` through
+`1.29.1`) — those are the download links and should be kept — plus older
+strays worth deleting: `DSMT-1.13.0`, `v1.13.1`, `release/1.4.0`,
+`chore/remove-cmd-wrappers`, `feature/*` and `fix/installer-sql-instance`.
 
 ---
 
@@ -1448,13 +1451,14 @@ Re-run these; they predate this work and are unaffected by it.
   stacked cards). Check all four widths when adding UI, and never solve a
   narrow viewport by hiding directory data.
 - **Zero external requests** is a hard rule — no CDN, no webfont, no bundler.
-  `prototype/support.js` still pulls React from unpkg, which is one of the
-  reasons the prototype is not shippable.
+  (`prototype/` broke it by loading React from a CDN and was removed in
+  1.20.0. Nothing in the tree reaches the network now; keep it that way.)
 - **Branching**: `main` is the default branch and holds everything through
-  1.2.1. Work on a short-lived feature branch off `main` and merge back via
-  pull request; documentation-only fixes may go straight to `main`. The
-  original `claude/new-session-6q2ky9` branch was merged into `main` and
-  deleted — do not go looking for history there.
+  **1.29.1** — PR #6 (1.23.0 through 1.29.1, 18 commits) was merged on
+  2026-10-14 as a merge commit rather than a squash, so the per-release
+  reasoning in those commit messages is still readable. Work on a short-lived
+  feature branch off `main` and merge back via pull request;
+  documentation-only fixes may go straight to `main`.
 - **FIRST CONFIRMED RUN: 2026-08-08.** The console was deployed and reached on
 the lab domain at 1.26.0 - signed in, Settings rendered, SQL connected
 (`app.lab.local / DSMT`). So the "it has never been executed" caveat that ran

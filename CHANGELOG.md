@@ -81,7 +81,9 @@ where what changed is written down.
 **Deploy key**: *Restart* = restart `Start-DSMT.ps1`; *refresh* = hard refresh
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
-`main` carries **1.20.0**. The last tag is `v1.4.0`.
+`main` carries **1.29.1** (PR #6 merged 2026-10-14). The last tag is still
+`v1.4.0` — tags cannot be pushed from the dev container, so tagging a release
+is a request to the operator.
 
 ---
 
