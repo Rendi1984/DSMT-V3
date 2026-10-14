@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.29.0` — matches the top entry of `CHANGELOG.md` and
+`1.29.1` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -1039,6 +1039,26 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 1] A value read in one place and set in none.** Found 2026-10-14.
+  `state.isAdmin` was consulted to decide what the session list drew, and
+  nothing ever assigned it - so the decision ran on `undefined` and the role
+  had no effect in the browser at all. The data was on the wire the whole
+  time; only the assignment was missing.
+  **The pattern: a client-side flag fed from a server payload is only real
+  once something stores it, and the failure is silent in the safe direction -
+  the UI simply behaves as if the flag were false, which looks like a
+  deliberate design rather than a bug.** When adding a field to an API
+  response for the UI to use, grep that the client actually assigns it, not
+  just that it reads it.
+- **[Shape 3] An expensive read attached to arriving somewhere.** 1.29.0 made
+  Overview the landing screen; each visit cost one full users read and one
+  full groups read, so every sign-in paid for it before anyone asked.
+  Corrected in 1.29.1 with an explicit button. The rule had ALREADY been
+  written down for the Reports tool and the AD health page and was still
+  broken by the next screen.
+  **The pattern: "nothing auto-runs" has to be checked against every new
+  screen, especially a landing screen, because the cost is invisible on a lab
+  domain and only appears at scale.**
 - **[Shape 3] A read cap inherited from a screen that wanted one.** Found by
   review before 1.28.0 shipped. `Get-DsmtUsers -Limit 0` means "use PageSize"
   (500), which is right for a grid and catastrophic for a report: the report

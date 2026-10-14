@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.29.1** | 2026-10-14 | **Security:** SQL database enumeration was ungated. Overview no longer reads the directory just because you arrived, and its Refresh button was never wired. Documentation caught up with the registry move | Restart + refresh |
 | **1.29.0** | 2026-08-08 | **Overview** is the new landing screen - live tiles that link to the rows behind them; **live sessions** with sign-out; a required-permissions document | Restart + refresh |
 | **1.28.0** | 2026-08-08 | **Reports** under Tools - eight named queries, read live and stamped with the time they were taken, on screen and in the export. Saved searches on the directory tabs | Restart + refresh |
 | **1.27.0** | 2026-08-08 | Account-state filters on Users (expiring, expired, stale, never logged on...), a column chooser on the Audit table, and two keyboard shortcuts | Restart + refresh |
@@ -81,6 +82,87 @@ where what changed is written down.
 in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 
 `main` carries **1.20.0**. The last tag is `v1.4.0`.
+
+---
+
+## 1.29.1 — 2026-10-14
+
+Found by a review of the whole project after two months away. Nothing here is
+a new feature; all of it is something that was already wrong.
+
+### Security: enumerating SQL databases was not gated
+
+`POST /api/settings/sql/databases` takes **an arbitrary server name and
+credentials from the request body** and lists the databases on it — and it was
+reachable by any operator who could sign in, turning the console into a SQL
+instance prober.
+
+It was inconsistent as well as unsafe: `GET /api/settings/export` is gated with
+a comment saying it is gated *because* it reveals the SQL instance and database
+names — while this route queried whatever instance it was pointed at. Now in
+`$script:DsmtAdminOnlyRoutes` with the rest.
+
+### Overview no longer reads the directory because you arrived
+
+Making Overview the landing screen in 1.29.0 meant **two full directory scans
+on every sign-in** — every user and every group — before the operator had asked
+for anything. Invisible on a lab domain; the slowest thing in the console on a
+real one.
+
+The rule was already written down for the Reports tool and the AD health page
+before this screen ignored it: *a screen that fires an expensive read because
+somebody arrived is how a useful tool becomes the thing people blame.* Overview
+now opens with an explicit **Read the directory** button that says what it
+costs, and a result already in hand survives switching tabs and coming back.
+
+**Its Refresh button had never been wired at all** — it was in the markup from
+the first version and had no handler, so it sat there doing nothing.
+
+### The administrator role never reached the browser
+
+`state.isAdmin` was read in one place and **set in none**. The role was on the
+wire — `GET /api/session` and `/api/settings` both carried it — but nothing
+stored it, so any UI decision based on it was decided on `undefined`. The
+sign-in response did not carry it at all, so even a correct client would not
+have known its own role until the second call.
+
+Added `applyRole()`, fed from all three payloads. The **Sign out** button on
+the session list is now hidden from operators who cannot use it, with a line
+saying why, instead of being offered and then refused with a 403. The server
+gate is unchanged and is still the enforcement.
+
+### Documentation caught up with the registry move
+
+Settings moved from `config\dsmt.config.json` into the registry in **1.22.0**.
+The documentation never followed:
+
+- **`docs/deployment-guide.html`** — the operator-facing install guide — named
+  that file in **seven** places as the live settings store, and did not contain
+  the word "registry" once.
+- **`README.md`** named it in four, including "writes `config\dsmt.config.json`
+  so the console can then be started with no parameters".
+
+Both now describe `HKLM\SOFTWARE\Rendi Group\DSMT\Settings`, with the
+one-time import of an existing file kept as a migration note. `README.md` also
+gained the features it had never heard of — Overview, Administrators, Reports,
+saved searches, account-state filters — and a pointer to
+`docs/required-permissions.md`.
+
+**`CLAUDE.md`** warned about `prototype/support.js` loading React from a CDN.
+`prototype/` was removed in **1.20.0**; the rule it illustrates is kept, the
+dead file is not.
+
+**Files changed and where they go:**
+
+| File | Goes to |
+| --- | --- |
+| `server/lib/DsmtRoles.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtHttp.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `server/lib/DsmtCommon.ps1` | `%ProgramFiles%\DSMT\server\lib\` |
+| `web/app.js` | `%ProgramFiles%\DSMT\web\` |
+| `README.md`, `CLAUDE.md`, `docs/deployment-guide.html` | documentation only |
+
+**To deploy:** copy the files, restart DSMT, hard refresh (Ctrl+F5).
 
 ---
 

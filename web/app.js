@@ -37,6 +37,10 @@ var state = {
   detail: null,
   checked: {},
   visibleCols: null,
+  // Whether this operator may change DSMT's own settings, as decided at
+  // sign-in. Populated by applyRole(); the server gate is the enforcement.
+  isAdmin: false,
+  roleReason: '',
   // True once the CSV import dialog has shown a dry-run result for exactly
   // the CSV and OU currently in the form. Reset on open and on any edit.
   csvPreviewed: false,
@@ -374,6 +378,16 @@ function showApp() {
 // Version - one value, from the API, painted everywhere it is shown
 // ---------------------------------------------------------------------------
 
+function applyRole(data) {
+  // The DSMT administrator role, from whichever payload carried it - sign-in,
+  // session restore or the settings read. Stored once so no screen has to go
+  // and ask. The server gate is the enforcement; this only decides what is
+  // worth drawing.
+  if (!data || data.isAdmin === undefined) { return; }
+  state.isAdmin = !!data.isAdmin;
+  state.roleReason = data.roleReason || '';
+}
+
 function applyInsecureBar(data) {
   // Painted from /api/meta and from /api/session, so it is up before anyone
   // types a password and stays up afterwards. Reading both is deliberate:
@@ -438,6 +452,7 @@ function boot() {
     if (!data || !data.ok) { signOutLocal(); return; }
     applyVersion(data.version, data.publisher);
     applyInsecureBar(data);
+    applyRole(data);
     if (data.sessionMinutes) { state.sessionMinutes = data.sessionMinutes; }
     state.user = data.user;
     enterApp();
@@ -2281,6 +2296,45 @@ function loadTools() {
    --------------------------------------------------------------------------- */
 
 function loadOverview() {
+  // DOES NOT READ THE DIRECTORY ON ITS OWN, and that is the whole point.
+  //
+  // Every tile on this screen comes from one full read of the users and one
+  // of the groups. As the landing screen, auto-running that meant TWO FULL
+  // DIRECTORY SCANS ON EVERY SIGN-IN, before the operator had asked for
+  // anything - invisible on a lab domain, and the slowest thing in the
+  // console on a real one.
+  //
+  // It is the same rule the Reports tool and the AD health page already
+  // follow, and it was written down for both of them before this screen
+  // ignored it: a screen that fires an expensive read because somebody
+  // arrived is how a useful tool becomes the thing people blame.
+  //
+  // A result already in hand is kept and re-shown with its original stamp,
+  // so switching tabs and coming back does not re-read either.
+  if (state.dashboard) { renderOverview(); return; }
+  renderOverviewIdle();
+}
+
+function renderOverviewIdle() {
+  $('overviewStamp').textContent = '';
+  $('overviewBody').innerHTML =
+    '<section class="set-card">' +
+      '<h2 class="set-h">Nothing has been read yet</h2>' +
+      '<p class="dialog-note">These counts come from <strong>one full read of every user and every ' +
+      'group</strong> in ' + esc(state.domainInfo ? state.domainInfo.domain : 'the directory') + '. ' +
+      'That is deliberately not done just because you arrived here - on a large domain it is the most ' +
+      'expensive thing the console does, and nothing should pay for it before asking.</p>' +
+      '<p class="dialog-note">Every tile is read live at the moment you press this, and the result is ' +
+      'stamped with that time.</p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-primary" type="button" id="overviewRun">Read the directory</button>' +
+      '</div>' +
+    '</section>';
+
+  $('overviewRun').onclick = runOverview;
+}
+
+function runOverview() {
   $('overviewBody').innerHTML = '<p class="muted-sm">Reading the directory...</p>';
   $('overviewStamp').textContent = '';
 
@@ -2289,7 +2343,11 @@ function loadOverview() {
     renderOverview();
   }).catch(function (err) {
     $('overviewBody').innerHTML = '<section class="set-card"><div class="error-box">' +
-      esc(explainApiError(err.message)) + '</div></section>';
+      esc(explainApiError(err.message)) + '</div>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="overviewRun">Try again</button>' +
+      '</div></section>';
+    $('overviewRun').onclick = runOverview;
   });
 }
 
@@ -2377,6 +2435,13 @@ function renderSessionsCard() {
 
   api('/api/sessions').then(function (data) {
     var list = asArray(data.sessions);
+
+    // Hiding the button is a CONVENIENCE, not the enforcement - the server
+    // gate in $script:DsmtAdminOnlyRoutes is what actually refuses this, and
+    // it stays whatever the UI draws. But offering a button that is certain
+    // to come back 403 is not honesty, it is noise.
+    var canEnd = !!state.isAdmin;
+
     var rows = list.map(function (s) {
       var me = (s.id === data.me);
       return '<div class="role-row">' +
@@ -2387,7 +2452,8 @@ function renderSessionsCard() {
                  '<div class="role-note">' + esc(s.account) + ' - signed in ' +
                  esc(formatAbsoluteStamp(s.since)) + ', idle ' + esc(String(s.idleMins)) + ' min</div>' +
                '</div>' +
-               (me ? '<span class="cell-disabled">-</span>'
+               (me || !canEnd
+                   ? '<span class="cell-disabled">-</span>'
                    : '<button class="btn btn-ghost" type="button" data-endsession="' + esc(s.id) + '" ' +
                      'data-endwho="' + esc(s.account) + '">Sign out</button>') +
              '</div>';
@@ -2397,8 +2463,10 @@ function renderSessionsCard() {
       '<h2 class="set-h">Operators signed in</h2>' +
       '<p class="dialog-note">Sessions live in the server process, so this is the whole truth and it ' +
       'resets when DSMT restarts. Signing someone out drops the credential held for them and they must ' +
-      'sign in again - which is the point the day somebody leaves mid-shift. It needs the DSMT ' +
-      'administrator role.</p>' +
+      'sign in again - which is the point the day somebody leaves mid-shift.</p>' +
+      (canEnd ? ''
+              : '<p class="set-warn">Ending another operator\'s session needs the DSMT administrator ' +
+                'role, so the buttons are not shown. Settings -> Administrators says who holds it.</p>') +
       (list.length ? rows : '<p class="muted-sm">Nobody is signed in, which cannot be true while you ' +
                             'are reading this - reload the page.</p>') +
       '<div class="set-result" id="sessionResult"></div>';
@@ -3553,6 +3621,7 @@ function loadSettings() {
 function renderSettings() {
   var s = state.settings;
   if (!s) { return; }
+  applyRole(s);
 
   var b = s.sessionBounds || {};
   var bounds = { min: b.Min || b.min || 1, max: b.Max || b.max || 480, def: b.Default || b.def || 15 };
@@ -4914,6 +4983,7 @@ function wireEvents() {
       saveToken(data.token);
       applyVersion(data.version, data.publisher);
       applyInsecureBar(data);
+      applyRole(data);
       state.user = data.user;
       $('loginPass').value = '';
       enterApp();
@@ -5046,6 +5116,11 @@ function wireEvents() {
     state.auditTo   = toValue   ? new Date(toValue).toISOString()   : null;
     loadAudit();
   });
+
+  // Refresh on the Overview screen. It was in the markup from the start and
+  // never wired, so it sat there doing nothing - a button that looks like it
+  // works and does not is worse than no button.
+  $('overviewRefresh').addEventListener('click', runOverview);
 
   $('auditRefresh').addEventListener('click', function () { loadAudit(); });
   $('auditExport').addEventListener('click', exportAudit);

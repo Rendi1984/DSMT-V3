@@ -665,6 +665,12 @@ function Invoke-DsmtApi {
             version   = $cfg.Version
             publisher = $cfg.Publisher
             user      = @{ sam = $session.Sam; display = $session.Display; account = $session.Account; upn = $session.Upn }
+            # The role travels with the sign-in response as well as with
+            # GET /api/session. A client that only learns its role on the
+            # second call spends the first screen not knowing it.
+            isAdmin        = $session.IsAdmin
+            roleReason     = $session.RoleReason
+            roleConfigured = $session.RoleConfigured
         }
         return
     }

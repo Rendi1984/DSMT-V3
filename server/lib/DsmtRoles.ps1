@@ -61,6 +61,14 @@ $script:DsmtAdminOnlyRoutes = @(
     # names. That is reconnaissance, not display.
     @{ Pattern = '^/api/settings/export$';       Methods = @('GET') },
 
+    # Listing the databases on a SQL instance takes an ARBITRARY server name
+    # and credentials from the request body, so an ungated version turns the
+    # console into a SQL instance prober for anyone who can sign in. It was
+    # ungated until 1.29.1 - which was inconsistent as well as unsafe, since
+    # the export above is gated precisely for revealing the SQL instance NAME
+    # while this one queries whatever instance it is pointed at.
+    @{ Pattern = '^/api/settings/sql/databases$'; Methods = @('POST') },
+
     # Ending someone else's session is a console-level act with no AD
     # equivalent - AD has no opinion about who may close a DSMT session - so
     # it belongs squarely in what this role governs.

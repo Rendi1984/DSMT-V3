@@ -58,8 +58,9 @@ operator, the controller and a mandatory reason string.
   **Do not add any external reference** — DSMT runs on isolated networks where
   it would simply fail. If Inter is wanted, vendor the woff2 files into the
   design-system folder and add an `@font-face`.
-  Note that `prototype/support.js` still loads React/Babel from `unpkg.com`;
-  that is one more reason the prototype is not shippable.
+  (A `prototype/` folder once broke this rule by loading React from a CDN. It
+  was removed in 1.20.0 and is not coming back — there is nothing in the tree
+  that reaches the network any more, and that is the state to preserve.)
 - **Responsive is a requirement, not a nice-to-have.** The console must work
   from a 360px phone to an ultrawide monitor. The breakpoints in `app.css` are
   1180px (detail pane becomes a slide-over), 820px (header tabs move into the

@@ -516,14 +516,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Install-DSMT.ps
   <tr><td data-label="#">8</td><td data-label="What the script does">Runs <code>netsh http add urlacl</code> so the console can listen without elevation</td><td data-label="Manual step"><a href="#s6">6.2</a></td></tr>
   <tr><td data-label="#">9</td><td data-label="What the script does">Opens a firewall rule for the port (Domain profile)</td><td data-label="Manual step"><a href="#s6">6.3</a></td></tr>
   <tr><td data-label="#">10</td><td data-label="What the script does">With <code>-InstallScheduledTask</code>: registers a task that starts DSMT at boot</td><td data-label="Manual step"><a href="#s11">11</a></td></tr>
-  <tr><td data-label="#">11</td><td data-label="What the script does">Saves <code>config\dsmt.config.json</code> with all the settings</td><td data-label="Manual step">-</td></tr>
+  <tr><td data-label="#">11</td><td data-label="What the script does">Writes every setting into the registry under <code>HKLM\SOFTWARE\Rendi Group\DSMT\Settings</code></td><td data-label="Manual step">-</td></tr>
   <tr><td data-label="#">12</td><td data-label="What the script does">Prints a summary and a numbered list of anything still outstanding</td><td data-label="Manual step">-</td></tr>
 </table>
 
 <h4>The saved settings file</h4>
 <p>
   After installation, <code>Start-DSMT.ps1</code> reads
-  <code>config\dsmt.config.json</code> and uses the stored values. That means
+  <code>HKLM\SOFTWARE\Rendi Group\DSMT\Settings</code> and uses the stored values. That means
   <strong>the console can be started with no parameters at all</strong>:
 </p>
 <pre><code>.\server\Start-DSMT.ps1</code></pre>
@@ -1033,7 +1033,7 @@ Test-ADServiceAccount   -Identity gmsa-dsmt</code></pre>
   <tr><td data-label="#">2</td><td data-label="What it updates"><strong>The URL reservation</strong></td><td data-label="Why it matters"><strong>The reservation names an account.</strong> Miss it and the new account cannot listen - and the failure looks like an unrelated bug weeks later</td></tr>
   <tr><td data-label="#">3</td><td data-label="What it updates"><code>data\</code> permissions</td><td data-label="Why it matters">Otherwise no logs and no file audit</td></tr>
   <tr><td data-label="#">4</td><td data-label="What it updates">SQL login</td><td data-label="Why it matters">Printed as a script to run - the installer may not hold rights on the instance</td></tr>
-  <tr><td data-label="#">5</td><td data-label="What it updates"><code>config\dsmt.config.json</code></td><td data-label="Why it matters">So the record matches reality</td></tr>
+  <tr><td data-label="#">5</td><td data-label="What it updates">The stored settings in the registry</td><td data-label="Why it matters">So the record matches reality</td></tr>
 </table>
 
 <p>
@@ -1239,7 +1239,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\server\Start-DSMT.ps1<
 
 <p>
   After the installer has run, none of those parameters are needed:
-  <code>Start-DSMT.ps1</code> reads <code>config\dsmt.config.json</code> and
+  <code>Start-DSMT.ps1</code> reads the stored settings from the registry and
   starts with no arguments at all. Pass a parameter only to override what was
   saved there.
 </p>
@@ -1393,7 +1393,7 @@ jdoe</code></pre>
   If DSMT was started without SQL, the bell shows a notification saying so.
   the <strong>Settings</strong> tab lets you enter a SQL Server instance and
   create the DSMT database and its tables without restarting the server. The
-  setting is saved to <code>config\dsmt.config.json</code>, so it survives a
+  setting is saved to the registry, so it survives a
   restart, and the change is written to the audit log.
 </p>
 <p>
@@ -1728,7 +1728,7 @@ Register-ScheduledTask -TaskName "DSMT Console" -Action $action -Trigger $trigge
 <h3>B. Start-DSMT.ps1 parameters</h3>
 <p>
   After running the installer these are all saved in
-  <code>config\dsmt.config.json</code> and none of them need to be passed. An
+  <code>HKLM\SOFTWARE\Rendi Group\DSMT\Settings</code> and none of them need to be passed. An
   explicit parameter overrides the file.
 </p>
 <table class="cols">
@@ -1786,7 +1786,7 @@ asmith,Anna Smith,Anna,Smith,Finance,Analyst,,OU=Finance,DC=lab,DC=local</code><
 <h3>E. Related files</h3>
 <table>
   <tr><td><code>server\Install-DSMT.ps1</code></td><td><strong>The automated installer</strong></td></tr>
-  <tr><td><code>config\dsmt.config.json</code></td><td>The settings saved at install time</td></tr>
+  <tr><td><code>HKLM\SOFTWARE\Rendi Group\DSMT\Settings</code></td><td>Every setting, saved at install time. Not a file &mdash; settings moved into the registry in 1.22.0</td></tr>
   <tr><td><code>README.md</code></td><td>Technical overview of the project</td></tr>
   <tr><td><code>CLAUDE.md</code></td><td>Working rules for the project</td></tr>
   <tr><td><code>PROGRESS.md</code></td><td>Current state, open tasks and notes for next time</td></tr>

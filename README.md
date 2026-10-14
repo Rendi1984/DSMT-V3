@@ -65,9 +65,10 @@ It installs the RSAT ActiveDirectory module (`Install-WindowsFeature` on
 Server, `Add-WindowsCapability` on client Windows), creates `data\` and
 `config\` and grants the run account write access, finds or prepares SQL and
 creates the database and its tables, reserves the HTTP URL, opens the firewall
-port, optionally registers a boot-time scheduled task, and writes
-`config\dsmt.config.json` so the console can then be started with no
-parameters. Each step prints `[ok]` / `[skip]` / `[FAIL]`, and the summary
+port, optionally registers a boot-time scheduled task, and writes every
+setting into the registry under
+`HKLM\SOFTWARE\Rendi Group\DSMT\Settings`, so the console can then be
+started with no parameters. Each step prints `[ok]` / `[skip]` / `[FAIL]`, and the summary
 lists anything still outstanding with the fix for it.
 
 ### Which account DSMT runs as
@@ -146,8 +147,8 @@ written to `data\dsmt-*.log`** — check there first.
 
 ## Running it
 
-After the installer has run, no parameters are needed — settings come from
-`config\dsmt.config.json`, and an explicit parameter overrides the file:
+After the installer has run, no parameters are needed — settings come from the
+registry, and an explicit parameter overrides what is stored:
 
 ```powershell
 .\server\Start-DSMT.ps1
@@ -165,7 +166,13 @@ To run it without installing first, or to override the saved settings:
 ```
 
 After the installer has run, `Start-DSMT.ps1` needs no parameters at all — it
-reads `config\dsmt.config.json`.
+reads them from `HKLM\SOFTWARE\Rendi Group\DSMT\Settings`.
+
+**Settings moved out of a file and into the registry in 1.22.0.** An existing
+`config\dsmt.config.json` is imported once on first start and renamed
+`.migrated`; it is not read again. Writing settings needs an elevated process,
+so a hand-started non-elevated `Start-DSMT.ps1` can read them and not save
+them — it says so rather than failing silently.
 
 Then open `http://localhost:8080/` and sign in with a domain account.
 
@@ -199,14 +206,32 @@ just fail later in a way that looks like a code bug.
 | `web/index.html`, `web/app.css`, `web/app.js` | The front end |
 | `_ds/nocturne-.../` | The Nocturne design system (tokens + component CSS) |
 | `sql/schema.sql` | The database schema as a standalone script |
-| `config/dsmt.config.json` | Settings the installer saved; read at startup |
+| `HKLM\SOFTWARE\Rendi Group\DSMT` | Pointers to the two roots, plus every setting under `\Settings`. Not a file — see "Running it" |
+| `docs/required-permissions.md` | Every AD / host / SQL right DSMT needs, with the `dsacls` commands |
 | `docs/deployment-guide.html` | Step-by-step install and first-connection guide |
 
 ---
 
 ## Features
 
+Overview — the landing screen
+
+- Tiles for user and group counts, disabled, locked out, passwords due,
+  passwords expired, stale accounts, privileged groups and operators signed in
+- Each tile opens the rows behind it
+- **It does not read anything until you press the button.** Every tile comes
+  from one full read of the users and one of the groups, so it is not done
+  just because somebody arrived — and the result is stamped with the moment it
+  was taken
+- A tile that cannot be computed shows the error, never a zero: "0 locked out"
+  and "the query failed" look identical and mean opposite things
+
 Users and groups
+
+- Filter chips for account state: password expiring, expired, never expires,
+  stale, never logged on, disabled, locked out
+- Saved searches — tab, search text and filter, restored in one click (stored
+  in your browser)
 
 - Live search across the directory (AD ambiguous name resolution, plus UPN,
   department and title), not a filter over a preloaded page
@@ -218,10 +243,34 @@ Users and groups
 - Bulk CSV import with a per-row result list
 - CSV export of the current result set, and of a group's members
 
+Tools
+
+- **Reports** — eight named queries (stale accounts, password state,
+  privileged group membership, recently created, and more), read live and
+  **stamped with the time they were taken, on screen and in the CSV**. A
+  directory report with no "as at" gets forwarded for months as if it were
+  still true
+- **gMSA** — the five-step service-account wizard
+- **AD health** — replication, FSMO holders, clocks, per-controller reach
+
+Who may change DSMT's own settings
+
+- **Settings → Administrators** maps AD groups to the right to change DSMT's
+  configuration — the database it points at, the identity mode, HTTPS, the
+  idle timeout, and that list itself. Nothing in AD governs those, which is
+  why a role here has real teeth
+- Matched on **SID**, never on name; nested membership counts; resolved at
+  sign-in
+- **It does not affect directory operations.** Those still run as the
+  signed-in operator, so AD decides — a DSMT role cannot grant a right AD
+  withheld, and cannot take one away either
+- Live session list, with sign-out for administrators
+
 Audit
 
 - Every write attempt, successful or not, with operator, controller, reason
   and result (Success / Partial / Failed / Denied)
+- Configurable columns, like the directory grids
 - Time-range filter: last 24 hours, last 48 hours, last 7 or 30 days, all
   time, or a custom range. Applied inside the SQL query, so the count is the
   true number in that window
