@@ -1,2 +1,6 @@
 data/
 config/dsmt.config.json
+
+# Build artifacts handed over to the operator. Rebuilt from git archive
+# each time (see .claude/skills/handing-over-a-build), never committed.
+DSMT.v*.zip
