@@ -115,16 +115,63 @@ dsacls "$ou" /I:S /G "${who}:WP;member;group"
 
 ### The account DSMT runs as
 
-It needs **far less than the operators do**, because it does not perform
-directory work on their behalf:
+**What it needs depends entirely on the identity mode**, so decide the mode
+first. In every mode it needs to write to `%ProgramData%\DSMT` and, if
+configured, connect to SQL Server.
 
-- Read the directory (only in `hybrid` identity mode, where reads run as the
-  service account — writes always run as the operator).
-- Write to `%ProgramData%\DSMT`.
-- Connect to SQL Server, if configured.
+| Mode | Reads run as | Writes run as | What the service account needs in AD |
+| --- | --- | --- | --- |
+| `operator` (default) | the operator | the operator | **Nothing.** It never touches the directory on anyone's behalf |
+| `hybrid` | the service account | the operator | Read the directory |
+| `service` | the service account | **the service account** | **Everything in section 1** — every right the operators would otherwise have needed |
 
-`LocalSystem` is the default and reaches AD and SQL as the computer account
-`LAB\HOSTNAME$`.
+`LocalSystem` is the default, and on the network it presents as the computer
+account `LAB\HOSTNAME$`. That is a real, authenticatable identity, which is
+exactly what makes it confusing: it signs in successfully and then holds none
+of the rights anyone meant to grant. A SQL login failure naming an account
+that ends in `$` is this, every time. **`hybrid` and `service` both refuse to
+be selected while DSMT runs as the machine account**, because pointing
+directory writes at the computer is never what anyone means.
+
+### Service mode — what to grant, and what you give up
+
+Grant the service account the rights in **section 1**. The `dsacls` commands
+there are unchanged; substitute the service account for the operator group:
+
+```
+dsacls "OU=Staff,DC=lab,DC=local" /I:S /G "LAB\svc-dsmt:CA;Reset Password;user"
+```
+
+Two consequences, both deliberate, neither reversible after the fact:
+
+**1. Active Directory stops naming the person.** The domain controller's own
+security log records the service account as the author of every change.
+DSMT's audit log remains the only record tying a change to a human, and every
+entry carries both — `Operator` is who asked, `ExecutedAs` is the account that
+performed it. The **Executed as** column in the audit log (off by default,
+enable it under *Columns*) shows it, and it is in the CSV export. If DSMT's
+audit log is lost, the attribution is lost with it, so an install in service
+mode should be using SQL rather than the JSONL fallback.
+
+**2. Active Directory stops being the backstop.** In `operator` and `hybrid`
+mode, an operator who should not be able to do something is refused by the DC
+even if DSMT lets them ask — they genuinely lack the right. In `service` mode
+the service account holds every right, so **the role model in Settings → Roles
+is the only thing deciding what an operator can do.** A gap there is a real
+privilege escalation rather than a button that returns 403.
+
+If that trade is not wanted, `hybrid` gives most of the operational benefit —
+consistent reads for operators with no read rights of their own — while
+keeping writes, and therefore attribution and the AD backstop, on the person.
+
+### Password never expires
+
+A dedicated service account is normally set `PasswordNeverExpires` so the
+service does not stop at a password expiry nobody is watching for. That is a
+standing credential that does not rotate, so keep it out of every interactive
+group, deny it interactive logon, and prefer a **gMSA**, which has no password
+to expire or to leak and rotates itself. Settings → Identity builds the
+command for either.
 
 ---
 

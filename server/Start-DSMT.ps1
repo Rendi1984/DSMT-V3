@@ -84,7 +84,7 @@ param(
     [int]    $SessionHours = 0,
     [int]    $SessionMinutes = 0,
     [int]    $PageSize = 500,
-    [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
+    [ValidateSet('operator', 'hybrid', 'service')][string] $IdentityMode = 'operator',
     [string] $SqlServer = '',
     [string] $SqlDatabase = 'DSMT',
     [string] $SqlUsername = '',
@@ -368,7 +368,18 @@ Write-Host ''
 Write-Host ('  Listening on ' + $prefix) -ForegroundColor Cyan
 Write-Host ('  Open ' + $browseUrl) -ForegroundColor Cyan
 Write-Host ('  Managing ' + $cfg.Domain + ' - operators sign in with their own domain account') -ForegroundColor DarkGray
-if ($cfg.IdentityMode -eq 'hybrid') {
+if ($cfg.IdentityMode -eq 'service') {
+    $svcWho = Get-DsmtExecutingIdentity
+    Write-Host ('  Identity mode: SERVICE - every read AND WRITE runs as ' + $svcWho + '.') -ForegroundColor Yellow
+    Write-Host '                 Active Directory records that account as the author of every change,' -ForegroundColor Yellow
+    Write-Host "                 not the operator. DSMT's audit log is the only record that names the" -ForegroundColor Yellow
+    Write-Host '                 person, and it carries both (Operator and ExecutedAs).' -ForegroundColor Yellow
+    Write-Host '                 The role model is now the ONLY limit on what an operator can do.' -ForegroundColor Yellow
+    if (Test-DsmtMachineIdentity -Account $svcWho) {
+        Write-Host '  WARNING: that is the MACHINE account, not a service account. Directory writes' -ForegroundColor Red
+        Write-Host '           will run as the computer. Move DSMT onto a domain account or a gMSA.' -ForegroundColor Red
+    }
+} elseif ($cfg.IdentityMode -eq 'hybrid') {
     Write-Host ('  Identity mode: hybrid - directory reads run as ' + $env:USERDOMAIN + '\' + $env:USERNAME + ',') -ForegroundColor Yellow
     Write-Host '                 writes run as the signed-in operator.' -ForegroundColor Yellow
     Write-Host '                 Every operator can see everything this account can see.' -ForegroundColor Yellow

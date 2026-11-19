@@ -327,8 +327,20 @@ CREATE TABLE dbo.AuditLog (
     Result      NVARCHAR(32) NOT NULL,
     Category    NVARCHAR(32) NOT NULL,
     Detail      NVARCHAR(MAX) NULL,
+    ExecutedAs  NVARCHAR(256) NULL,
     AppVersion  NVARCHAR(32) NULL
 );
+'@
+
+    # Install-DsmtSqlSchema creates MISSING TABLES. It does not alter an
+    # existing one, so a column added to the CREATE above would never appear
+    # on an install that already has the table - and the INSERT would then
+    # fail for every audit record, losing it to SQL (the JSONL copy survives,
+    # which is exactly why it exists). A new column therefore needs its own
+    # guarded ALTER, here, for ever.
+    $statements += @'
+IF COL_LENGTH(N'dbo.AuditLog', N'ExecutedAs') IS NULL
+    ALTER TABLE dbo.AuditLog ADD ExecutedAs NVARCHAR(256) NULL;
 '@
 
     $statements += @'
@@ -460,7 +472,8 @@ function Write-DsmtSqlAudit {
         [Parameter(Mandatory = $true)][string] $Result,
         [string] $Category = 'user',
         [string] $Controller = '',
-        [string] $Detail = ''
+        [string] $Detail = '',
+        [string] $ExecutedAs = ''
     )
 
     if (-not $script:DsmtSql.Enabled) { return $false }
@@ -469,10 +482,10 @@ function Write-DsmtSqlAudit {
         $cfg = Get-DsmtConfig
         Invoke-DsmtSqlCommand -Mode 'NonQuery' -Parameters @{
             t = $TimeUtc; a = $Action; g = $Target; o = $Operator; c = $Controller
-            r = $Reason; res = $Result; cat = $Category; d = $Detail; v = $cfg.Version
+            r = $Reason; res = $Result; cat = $Category; d = $Detail; x = $ExecutedAs; v = $cfg.Version
         } -Sql @'
-INSERT INTO dbo.AuditLog (TimeUtc, Action, Target, Operator, Controller, Reason, Result, Category, Detail, AppVersion)
-VALUES (@t, @a, @g, @o, @c, @r, @res, @cat, @d, @v);
+INSERT INTO dbo.AuditLog (TimeUtc, Action, Target, Operator, Controller, Reason, Result, Category, Detail, ExecutedAs, AppVersion)
+VALUES (@t, @a, @g, @o, @c, @r, @res, @cat, @d, @x, @v);
 '@ | Out-Null
         return $true
     } catch {

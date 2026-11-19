@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.30.1` — matches the top entry of `CHANGELOG.md` and
+`1.31.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -1161,6 +1161,27 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 3] A schema installer that creates tables but never columns.** Found
+  2026-11-19 adding `ExecutedAs` to `dbo.AuditLog`. `Install-DsmtSqlSchema` is
+  built entirely of `IF OBJECT_ID(...) IS NULL CREATE TABLE`, so a column added
+  to a `CREATE TABLE` body reaches **only installs that do not have the table
+  yet**. On every existing install the column would silently not exist, and the
+  INSERT naming it would fail for every audit record from then on - lost to SQL,
+  surviving only in the JSONL copy, which is exactly why that copy exists.
+  **The pattern: an idempotent creator is not a migrator, and the gap is
+  invisible on a fresh install - which is the only kind this container can
+  reason about.** Every new column ships with its own guarded
+  `IF COL_LENGTH(...) IS NULL ALTER TABLE ... ADD` in `Install-DsmtSqlSchema`,
+  for ever. The same applies to a new index or constraint.
+- **[Shape 3] Two screens that are two halves of one decision.** Settings had
+  `Identity` (which rights DSMT uses against AD) and `Service account` (which
+  Windows account DSMT runs as) as siblings, and the Identity pane already
+  displayed three of the other pane's fields. They are not siblings: the mode
+  depends on the account, and `hybrid`/`service` are meaningless while DSMT
+  runs as LocalSystem. Merged in 1.31.0 into one screen ordered by the
+  dependency, with the dependent options disabled and the reason on the option.
+  **The pattern: when option B is invalid until setting A is done, putting them
+  on separate screens makes the user discover the dependency by failing.**
 - **[Shape 3] A default more permissive than the configured state, selected by
   a value that means two different things.** Found 2026-11-19, reviewing 1.30.0
   before merge. `Resolve-DsmtOperatorRole` asked "are roles configured?" by

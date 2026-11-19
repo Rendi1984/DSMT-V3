@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.30.1'
+$script:DsmtVersion = '1.31.0'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -223,7 +223,7 @@ function Initialize-DsmtConfig {
         [int]    $SessionHours = 0,
         [int]    $SessionMinutes = 0,
         [int]    $PageSize = 500,
-        [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
+        [ValidateSet('operator', 'hybrid', 'service')][string] $IdentityMode = 'operator',
         [string] $DataRoot = '',
         [string] $PathMode = ''
     )
@@ -559,6 +559,51 @@ function Get-DsmtSavedSettings {
 
     if ($out.Count -eq 0) { return $null }
     return [pscustomobject]$out
+}
+
+function Get-DsmtExecutingIdentity {
+    <#
+    .SYNOPSIS
+        The Windows account this process is actually running under, as
+        DOMAIN\name.
+    .DESCRIPTION
+        This is what a domain controller sees when DSMT calls AD without a
+        credential, and what SQL Server sees on a Windows-authentication
+        connection. It is NOT the signed-in operator.
+    #>
+    $domain = [string]$env:USERDOMAIN
+    $user   = [string]$env:USERNAME
+    if ([string]::IsNullOrWhiteSpace($user)) { return '' }
+    if ([string]::IsNullOrWhiteSpace($domain)) { return $user }
+    return ($domain + '\' + $user)
+}
+
+function Test-DsmtMachineIdentity {
+    <#
+    .SYNOPSIS
+        True when the account given is this computer's own machine account.
+    .DESCRIPTION
+        A service running as LocalSystem presents on the network as
+        DOMAIN\COMPUTERNAME$. That is a real, authenticatable identity, which
+        is exactly why it is confusing: it signs in successfully and then
+        holds none of the rights anyone intended to grant, so the failure
+        surfaces far from its cause. A SQL login failure for LAB\IIS$ is the
+        shape this takes in practice.
+    #>
+    param([string]$Account = '')
+
+    if ([string]::IsNullOrWhiteSpace($Account)) { return $false }
+
+    $name = $Account
+    if ($name.Contains('\')) { $name = $name.Substring($name.IndexOf('\') + 1) }
+
+    if ($name -eq ($env:COMPUTERNAME + '$')) { return $true }
+    # LocalSystem is spelled several ways depending on who is asking.
+    $wellKnown = @('SYSTEM', 'LOCALSYSTEM', 'NT AUTHORITY\SYSTEM')
+    if ($wellKnown -contains $Account.ToUpper()) { return $true }
+    if ($wellKnown -contains $name.ToUpper()) { return $true }
+
+    return $false
 }
 
 function Get-DsmtSettingValueState {

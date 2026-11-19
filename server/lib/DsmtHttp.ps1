@@ -1202,9 +1202,25 @@ function Invoke-DsmtApi {
                 $body = Read-DsmtBody -Request $Request
                 $mode = ([string](Get-DsmtBodyValue -Body $body -Name 'mode')).Trim().ToLower()
 
-                if ($mode -ne 'operator' -and $mode -ne 'hybrid') {
-                    Send-DsmtError -Response $Response -Message 'Identity mode must be "operator" or "hybrid".' -StatusCode 400
+                if ($mode -ne 'operator' -and $mode -ne 'hybrid' -and $mode -ne 'service') {
+                    Send-DsmtError -Response $Response -Message 'Identity mode must be "operator", "hybrid" or "service".' -StatusCode 400
                     return
+                }
+
+                # Selecting 'service' while DSMT runs as LocalSystem would
+                # point every directory write at the MACHINE account, which is
+                # never what anyone means by a service account and fails in a
+                # way that reads as a DSMT fault. Refuse it with the fix.
+                if ($mode -eq 'service' -or $mode -eq 'hybrid') {
+                    $who = Get-DsmtExecutingIdentity
+                    if (Test-DsmtMachineIdentity -Account $who) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'DSMT is running as ' + $who + ', which is the machine account, so this mode ' +
+                            'would run directory operations as the computer rather than as a service ' +
+                            'account. Move DSMT onto a domain account or a gMSA first - Settings, ' +
+                            'Identity, "DSMT runs as" builds the command.')
+                        return
+                    }
                 }
 
                 $previous = $cfg.IdentityMode
