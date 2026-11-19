@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.30.1` — matches the top entry of `CHANGELOG.md` and
+`1.31.0` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -155,6 +155,34 @@ a version bump.
       `isAdmin` means "holds settings.write" and one role holds both.
    g. `Test-DsmtRouteNeedsAdmin` and `Get-DsmtRoleGroups` are now dead code (no
       callers outside their module). Harmless, so left alone.
+
+0b. **Outstanding from the 1.31.0 pre-merge review (2026-11-19).** The two
+   reviewer agents returned 21 findings on the service-identity diff; most
+   were fixed in 1.31.0 itself. These were not:
+
+   a. **`DsmtAdHealth.ps1` and `DsmtGmsa.ps1` bypass `Get-DsmtAdParams`.**
+      They pass `-Credential $Credential` to AD cmdlets directly
+      (`DsmtAdHealth.ps1:207,325,398`, `DsmtGmsa.ps1:279`), so `Get-DsmtAdParams`
+      is the single decision point for `DsmtDirectory.ps1` only. In `service`
+      mode those two tools still run as the signed-in operator - who, per that
+      mode's own promise ("operators need none of their own" rights), may have
+      none, and gets access-denied from exactly the two tools the role
+      catalogue grants them. It fails closed, so it is a contradiction rather
+      than a hole. Fixing it means routing both modules through
+      `Get-DsmtAdParams`, which is mechanical but touches every call site and
+      cannot be tested here.
+   b. **A failed settings save leaves the live process and the store
+      disagreeing about the identity mode.** `$script:DsmtConfig.IdentityMode`
+      is assigned before `Save-DsmtSavedSettings`, and a failure is reported
+      only as `persisted = $false` in the response body. A non-elevated
+      hand-started server cannot write HKLM, so it would switch every
+      directory write to the service account while the stored mode stays what
+      it was, and silently revert on the next restart. Pre-existing shape; the
+      stakes changed, because the two states now differ in **who performs
+      writes** rather than in a display string.
+   c. The audit log's free-text search covers `ExecutedAs` only when the
+      column exists; on a least-privilege SQL login it silently does not.
+      Correct, but worth knowing before concluding an account "did nothing".
 
 1. **[FIXED IN 1.7.5 - NEEDS CONFIRMING ON THE LAB MACHINE] No overlay in the
    console was visible.** Reported 2026-07-31 from the first real install.
@@ -1161,6 +1189,27 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 3] A schema installer that creates tables but never columns.** Found
+  2026-11-19 adding `ExecutedAs` to `dbo.AuditLog`. `Install-DsmtSqlSchema` is
+  built entirely of `IF OBJECT_ID(...) IS NULL CREATE TABLE`, so a column added
+  to a `CREATE TABLE` body reaches **only installs that do not have the table
+  yet**. On every existing install the column would silently not exist, and the
+  INSERT naming it would fail for every audit record from then on - lost to SQL,
+  surviving only in the JSONL copy, which is exactly why that copy exists.
+  **The pattern: an idempotent creator is not a migrator, and the gap is
+  invisible on a fresh install - which is the only kind this container can
+  reason about.** Every new column ships with its own guarded
+  `IF COL_LENGTH(...) IS NULL ALTER TABLE ... ADD` in `Install-DsmtSqlSchema`,
+  for ever. The same applies to a new index or constraint.
+- **[Shape 3] Two screens that are two halves of one decision.** Settings had
+  `Identity` (which rights DSMT uses against AD) and `Service account` (which
+  Windows account DSMT runs as) as siblings, and the Identity pane already
+  displayed three of the other pane's fields. They are not siblings: the mode
+  depends on the account, and `hybrid`/`service` are meaningless while DSMT
+  runs as LocalSystem. Merged in 1.31.0 into one screen ordered by the
+  dependency, with the dependent options disabled and the reason on the option.
+  **The pattern: when option B is invalid until setting A is done, putting them
+  on separate screens makes the user discover the dependency by failing.**
 - **[Shape 3] A default more permissive than the configured state, selected by
   a value that means two different things.** Found 2026-11-19, reviewing 1.30.0
   before merge. `Resolve-DsmtOperatorRole` asked "are roles configured?" by

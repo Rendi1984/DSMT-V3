@@ -120,6 +120,12 @@ CREATE TABLE dbo.AuditLog (
     Result     NVARCHAR(32) NOT NULL,       -- Success | Partial | Failed | Denied
     Category   NVARCHAR(32) NOT NULL,       -- user | group | session
     Detail     NVARCHAR(MAX) NULL,
+    -- The account that PERFORMED the change at the directory, which is not
+    -- always Operator above. Under IdentityMode 'service' every write runs as
+    -- the service account and the DC's own security log names that account,
+    -- so this is what ties the two logs together. Added in 1.31.0;
+    -- Install-DsmtSqlSchema adds it to an existing table with a guarded ALTER.
+    ExecutedAs NVARCHAR(256) NULL,
     AppVersion NVARCHAR(32) NULL
 );
 GO
@@ -140,6 +146,16 @@ GO
    CREATE USER [LAB\svc-dsmt] FOR LOGIN [LAB\svc-dsmt];
    ALTER ROLE db_datareader ADD MEMBER [LAB\svc-dsmt];
    ALTER ROLE db_datawriter ADD MEMBER [LAB\svc-dsmt];
+
+   db_datareader + db_datawriter is enough to RUN, but not to add a column
+   that a later version introduces. DSMT upgrades a table it already has with
+   a guarded ALTER, and a login without that right simply keeps the old
+   shape - the console says so at startup and carries on, rather than losing
+   the audit log. To let it self-upgrade instead, add:
+
+   GRANT ALTER ON SCHEMA::dbo TO [LAB\svc-dsmt];
+
+   Or re-run with a login that has it once, after each upgrade.
 
    Creating the database on first start additionally needs dbcreator on the
    instance; grant it once, or pre-create the database and skip it.

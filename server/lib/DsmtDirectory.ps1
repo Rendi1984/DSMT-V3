@@ -125,6 +125,27 @@ function Get-DsmtAdParams {
             that is what makes the DC's own security log name the human who
             did it. Nothing can forge that attribution afterwards.
 
+          service
+            Reads AND writes both run as the service account. One domain
+            account is granted the rights, operators need none of their own,
+            and the console decides who may ask for what.
+
+            READ THIS BEFORE SELECTING IT. Two consequences, neither
+            reversible after the fact:
+
+            1. The DC's security log names the SERVICE ACCOUNT for every
+               change, not the person. DSMT's own audit log is then the only
+               record that ties a change to a human, which is why every audit
+               record carries ExecutedAs alongside Operator - so the two logs
+               can still be correlated. If DSMT's audit log is lost, the
+               attribution is lost with it.
+            2. Active Directory stops being the backstop. In operator and
+               hybrid mode a hole in DSMT's permission gate is still refused
+               by the DC, because the operator genuinely lacks the right.
+               Here the service account holds every right, so a missing gate
+               is a real privilege escalation rather than a button that
+               returns 403.
+
         "Runs as the service account" simply means not passing -Credential at
         all: the process is already running under that account. That is why
         this works with a gMSA or a machine account, where no password exists
@@ -145,7 +166,15 @@ function Get-DsmtAdParams {
     $cfg = Get-DsmtConfig
     $params = @{ Server = (Get-DsmtServer -Credential $Credential) }
 
-    $useServiceIdentity = ($cfg.IdentityMode -eq 'hybrid' -and $Intent -eq 'read')
+    # 'service' drops the operator's credential for BOTH intents; 'hybrid'
+    # only for reads. Written as an explicit comparison per mode rather than
+    # a negation, so that adding a mode cannot silently promote a call.
+    $useServiceIdentity = $false
+    if ($cfg.IdentityMode -eq 'service') {
+        $useServiceIdentity = $true
+    } elseif ($cfg.IdentityMode -eq 'hybrid' -and $Intent -eq 'read') {
+        $useServiceIdentity = $true
+    }
     if (-not $useServiceIdentity) {
         $params.Credential = $Credential
     }

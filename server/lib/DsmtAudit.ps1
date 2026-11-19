@@ -45,6 +45,12 @@ function Write-DsmtAudit {
     $cfg = Get-DsmtConfig
     $now = Get-Date
 
+    # Computed before the literal: a hashtable literal is all-or-nothing, and
+    # losing the whole audit record to a failure in one field is not a trade
+    # worth making.
+    $executedAs = ''
+    try { $executedAs = [string](Get-DsmtActingIdentity -Operator $Operator -Intent 'write') } catch { $executedAs = '' }
+
     $record = [ordered]@{
         time       = $now.ToString('yyyy-MM-ddTHH:mm:ssK')
         action     = $Action
@@ -55,6 +61,13 @@ function Write-DsmtAudit {
         result     = $Result
         category   = $Category
         detail     = $Detail
+        # WHO ACTUALLY PERFORMED IT at the directory, which is not always the
+        # operator above. Under IdentityMode 'service' (and for reads under
+        # 'hybrid') the DC's own security log names this account and not the
+        # person, so without this field the two logs cannot be correlated and
+        # DSMT's record would be the only claim about who did what, with
+        # nothing to check it against.
+        executedAs = $executedAs
         version    = $cfg.Version
     }
 
@@ -62,7 +75,7 @@ function Write-DsmtAudit {
     # written either way so an audit record is never lost to a SQL outage.
     Write-DsmtSqlAudit -TimeUtc $now.ToUniversalTime() -Action $Action -Target $Target `
                        -Operator $Operator -Reason $Reason -Result $Result -Category $Category `
-                       -Controller $Controller -Detail $Detail | Out-Null
+                       -Controller $Controller -Detail $Detail -ExecutedAs $executedAs | Out-Null
 
     $line = ConvertTo-Json -InputObject $record -Depth 4 -Compress
     $path = Get-DsmtAuditPath -When $now

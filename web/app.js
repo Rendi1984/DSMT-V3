@@ -132,6 +132,16 @@ var AUDIT_COLS = [
   { key: 'dc',       label: 'Controller', on: true },
   { key: 'reason',   label: 'Reason',     on: true },
   { key: 'result',   label: 'Result',     on: true },
+  // Both off by default - they matter when something went wrong or when the
+  // directory work runs as a service account, not on every row.
+  //   detail     - why a Failed record failed. It was being written and kept
+  //                all along, reachable only by exporting the CSV.
+  //   executedAs - WHICH ACCOUNT performed it at the directory. Under
+  //                IdentityMode 'service' the DC's security log names that
+  //                account and not the person, so this is what ties DSMT's
+  //                record to the DC's.
+  { key: 'executedAs', label: 'Executed as', on: false },
+  { key: 'detail',   label: 'Detail',     on: false },
   { key: 'undo',     label: 'Undo',       on: true }
 ];
 
@@ -707,6 +717,18 @@ function buildNotifications() {
                 '<p class="dialog-note">Restart DSMT afterwards for the change to take effect.</p>'
         });
       }
+    });
+  }
+
+  if (identity && identity.mode === 'service') {
+    list.push({
+      kind: 'warn',
+      title: 'Service identity mode is on',
+      body: 'Every directory read AND write runs as ' + (identity.serviceUser || 'the service account') +
+            '. Active Directory records that account as the author of every change, not the operator, ' +
+            'and these roles are the only limit on what an operator can do. The audit log records both.',
+      actionLabel: 'Open settings',
+      action: function () { closeBell(); actionSettings(); }
     });
   }
 
@@ -1562,6 +1584,15 @@ function renderAudit() {
       dc:       '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>',
       reason:   '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>',
       result:   '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>',
+      // An empty executedAs means a record written before the field existed,
+      // not "nobody". Say so rather than showing a blank cell that reads as
+      // missing data. (No version number here on purpose - there is exactly
+      // one of those in this project and it is not in this file.)
+      executedAs: '<td data-label="Executed as" class="cell-muted">' +
+                  (r.executedAs ? esc(r.executedAs)
+                                : '<span class="cell-disabled" title="This record predates the field.">-</span>') +
+                  '</td>',
+      detail:   '<td data-label="Detail" class="cell-muted cell-wrap">' + esc(r.detail || '') + '</td>',
       // Two different reasons an undo is unavailable, and they must not read
       // the same: "this action cannot be reversed" is about the record,
       // "you may not" is about the operator. Conflating them would send
@@ -1784,9 +1815,10 @@ function exportAudit() {
   if (!state.auditRows.length) { toast('There is nothing to export.', 'bad'); return; }
   downloadCsv(
     'dsmt-audit-' + stampName() + '.csv',
-    ['Time', 'Action', 'Target', 'Operator', 'Controller', 'Reason', 'Result', 'Detail'],
+    ['Time', 'Action', 'Target', 'Operator', 'Controller', 'Reason', 'Result', 'Executed as', 'Detail'],
     state.auditRows.map(function (r) {
-      return [r.time, r.action, r.target, r.operator, r.dc, r.reason, r.result, r.detail];
+      return [r.time, r.action, r.target, r.operator, r.dc, r.reason, r.result,
+              r.executedAs || '', r.detail];
     })
   );
   toast('Exported ' + state.auditRows.length + ' audit entries.');
@@ -2827,7 +2859,7 @@ function exportReport(res) {
      2  Permitted group   - DSMT creates it, as the operator.
      3  Computers in it   - DSMT manages them, as the operator.
      4  Install on host   - CANNOT run here: needs local administrator.
-     5  Point DSMT at it  - Settings -> Service account.
+     5  Point DSMT at it  - Settings -> Identity.
 
    Steps 4 and 5 produce commands rather than pretending. The alternative -
    a button that fails with an access error - teaches nothing.
@@ -3085,7 +3117,7 @@ function paintGmsa() {
     '<p class="dialog-note"><code>Test-ADServiceAccount</code> returning <strong>True</strong> is the ' +
     'only proof that any of this worked. If it returns False, the usual cause is that the host has ' +
     'not rebooted since it was added to the group.</p>' +
-    '<p class="dialog-note">Then point DSMT at it: <strong>Settings -> Service account</strong>, ' +
+    '<p class="dialog-note">Then point DSMT at it: <strong>Settings -> Identity</strong>, ' +
     'which builds the command that moves the service, the URL reservation, the data-folder ' +
     'permissions and the SQL login together.</p>';
 
@@ -4004,12 +4036,25 @@ function renderSettings() {
       '<em>through DSMT</em> - which actions are available, and which screens they can reach. ' +
       'Settings changes, which nothing in Active Directory governs, are decided here and nowhere ' +
       'else.</p>' +
-      '<p class="dialog-note"><strong>What it does not decide</strong> while the identity mode is ' +
-      '<code>' + esc(r.identityMode || 'operator') + '</code>: directory rights. Every user, group and ' +
-      'password change still runs as the signed-in operator, so Active Directory has the final say and ' +
-      'someone blocked here can still open ADUC and do whatever AD permits them. This is a control over ' +
-      'the console, not over the person - real, and worth having for process and for accidents, but not ' +
-      'a replacement for AD delegation.</p>' +
+      // This paragraph states whether Active Directory is still a backstop,
+      // which is the security-relevant sentence on this screen - and the
+      // answer is the opposite in service mode. It was written when only
+      // operator and hybrid existed and asserted the operator case flatly;
+      // left alone it would have told the reader that AD has the final say on
+      // the one configuration where it does not.
+      ((r.identityMode === 'service')
+        ? '<p class="dialog-note"><strong>In this configuration these roles are the whole of the ' +
+          'control.</strong> The identity mode is <code>service</code>, so every user, group and ' +
+          'password change runs as the service account, which holds the rights. Active Directory ' +
+          'will not refuse an operator on its own account - what they may do here is decided here ' +
+          'and nowhere else, and the audit log records both who asked and which account performed ' +
+          'it. A role is no longer only a control over the console.</p>'
+        : '<p class="dialog-note"><strong>What it does not decide</strong> while the identity mode is ' +
+          '<code>' + esc(r.identityMode || 'operator') + '</code>: directory rights. Every user, group and ' +
+          'password change still runs as the signed-in operator, so Active Directory has the final say and ' +
+          'someone blocked here can still open ADUC and do whatever AD permits them. This is a control over ' +
+          'the console, not over the person - real, and worth having for process and for accidents, but not ' +
+          'a replacement for AD delegation.</p>') +
 
       '<h3 class="set-h">What each role means</h3>' + roleKey +
 
@@ -4190,35 +4235,26 @@ function renderSettings() {
       '</div>' +
       '<div class="set-result" id="sqlResult"></div>' });
 
-  sections.push({ key: 'identity', label: 'Identity', hint: 'Who reads the directory', body:
+  sections.push({ key: 'identity', label: 'Identity', hint: 'Who runs DSMT and who reads the directory', body:
       '<h2 class="set-h">Identity</h2>' +
+      '<p class="dialog-note">Two questions, in this order: <strong>which Windows account DSMT runs ' +
+      'as</strong>, and <strong>whose rights it uses when it talks to Active Directory</strong>. The ' +
+      'second depends on the first, which is why they are on one screen.</p>' +
+
+      '<h3 class="set-sub">1. DSMT runs as</h3>' +
       '<dl class="detail-fields">' +
-        settingsRow('DSMT runs as', s.serviceUser) +
+        settingsRow('Currently running as', s.serviceUser) +
         settingsRow('Registered account', s.serviceAccount) +
         settingsRow('Account type', accountKindLabel(s.accountKind)) +
       '</dl>' +
-      '<p class="dialog-note">Which account performs directory operations. ' +
-      '<strong>Writes always run as the signed-in operator</strong> in either mode, so the domain ' +
-      'controller records who made each change.</p>' +
-      '<div class="set-form">' +
-        '<div class="field"><label for="setIdentity">Identity mode</label>' +
-        '<select class="input" id="setIdentity">' +
-          '<option value="operator"' + (s.identityMode === 'operator' ? ' selected' : '') + '>' +
-            'Operator - reads and writes both run as the signed-in operator</option>' +
-          '<option value="hybrid"' + (s.identityMode === 'hybrid' ? ' selected' : '') + '>' +
-            'Hybrid - reads run as the service account</option>' +
-        '</select></div>' +
-      '</div>' +
-      '<p class="dialog-note" id="identityWarning"></p>' +
-      '<div class="set-actions">' +
-        '<button class="btn btn-secondary" type="button" id="applyIdentity">Apply identity mode</button>' +
-      '</div>' +
-      '<div class="set-result" id="identityResult"></div>' });
-
-  sections.push({ key: 'account', label: 'Service account', hint: 'Move to gMSA or a user', body:
-      '<h2 class="set-h">Service account</h2>' +
       '<p class="dialog-note">Move DSMT onto a dedicated account, a group managed service account ' +
       '(gMSA) or the machine account. Pick the target below and DSMT builds the exact command.</p>' +
+      (s.accountKind === 'machine'
+        ? '<p class="dialog-note"><strong>This is the machine account.</strong> On the network it ' +
+          'presents as the computer, not as a service account - which is why a SQL login for it ' +
+          'fails with a name ending in <code>$</code>. Move DSMT onto a domain account or a gMSA ' +
+          'below before using any mode other than Operator.</p>'
+        : '') +
       '<div class="set-form">' +
         '<div class="field"><label for="setAcctKind">Account type</label>' +
         '<select class="input" id="setAcctKind">' +
@@ -4235,11 +4271,44 @@ function renderSettings() {
       '<div class="set-actions">' +
         '<button class="btn btn-secondary" type="button" id="copyAcctCmd">Copy command</button>' +
       '</div>' +
-      '<p class="dialog-note"><strong>Why this is not a button that just does it:</strong> changing ' +
-      'the account rewrites the Windows service or scheduled task, the HTTP URL reservation, the ' +
-      'data folder permissions and the SQL login. Those need administrator rights on the host, which ' +
-      'this process deliberately does not have. The command does all five as one operation and ' +
-      'verifies the account before touching anything.</p>' });
+      '<p class="dialog-note"><strong>Why this is a command and not a button.</strong> Changing the ' +
+      'account rewrites the Windows service or scheduled task, the HTTP URL reservation, the data ' +
+      'folder permissions and the SQL login - and then restarts DSMT, which is this process. It ' +
+      'cannot report the outcome of its own death, and if the new account is wrong there is no ' +
+      'console left to fix it from. The command does all five as one operation and verifies the ' +
+      'account before touching anything. A password typed here would also cross an HTTP connection ' +
+      'and sit in this server\'s memory; PowerShell prompts for it locally instead.</p>' +
+
+      '<h3 class="set-sub">2. Who performs directory operations</h3>' +
+      '<div class="set-form">' +
+        '<div class="field"><label for="setIdentity">Identity mode</label>' +
+        '<select class="input" id="setIdentity">' +
+          '<option value="operator"' + (s.identityMode === 'operator' ? ' selected' : '') + '>' +
+            'Operator - reads and writes both run as the signed-in operator</option>' +
+          '<option value="hybrid"' + (s.identityMode === 'hybrid' ? ' selected' : '') +
+            (s.accountKind === 'machine' ? ' disabled' : '') + '>' +
+            'Hybrid - reads run as the service account, writes as the operator' +
+            (s.accountKind === 'machine' ? ' (needs a service account)' : '') + '</option>' +
+          '<option value="service"' + (s.identityMode === 'service' ? ' selected' : '') +
+            (s.accountKind === 'machine' ? ' disabled' : '') + '>' +
+            'Service - reads and writes both run as the service account' +
+            (s.accountKind === 'machine' ? ' (needs a service account)' : '') + '</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<p class="dialog-note"><strong>Service mode changes who Active Directory holds responsible.</strong> ' +
+      'The service account performs every change, so the domain controller\'s own security log names ' +
+      'that account and not the person. DSMT\'s audit log stays the record of who asked - every entry ' +
+      'carries both, and the <em>Executed as</em> column in the audit log shows the account that ' +
+      'actually performed it.</p>' +
+      '<p class="dialog-note">It also removes a backstop. In Operator and Hybrid mode an operator ' +
+      'who should not be able to do something is refused by Active Directory even if DSMT lets them ' +
+      'ask. In Service mode the service account holds every right, so <strong>the roles under ' +
+      'Settings -&gt; Roles are the only thing deciding what an operator can do.</strong></p>' +
+      '<p class="dialog-note" id="identityWarning"></p>' +
+      '<div class="set-actions">' +
+        '<button class="btn btn-secondary" type="button" id="applyIdentity">Apply identity mode</button>' +
+      '</div>' +
+      '<div class="set-result" id="identityResult"></div>' });
 
   sections.push({ key: 'sessions', label: 'Sessions', hint: 'Idle timeout', body:
       '<h2 class="set-h">Sessions</h2>' +
@@ -4678,12 +4747,18 @@ function wireSettings(bounds) {
   var identity = $('setIdentity');
   var warning = $('identityWarning');
   function describeIdentity() {
+    var svc = esc(state.settings.serviceUser || 'the service account');
     if (identity.value === 'hybrid') {
-      warning.innerHTML = '<strong>Every operator will be able to see everything ' +
-        esc(state.settings.serviceUser || 'the service account') + ' can see</strong>, whether or ' +
-        'not they have read rights of their own in the directory.';
+      warning.innerHTML = '<strong>Every operator will be able to see everything ' + svc +
+        ' can see</strong>, whether or not they have read rights of their own in the directory. ' +
+        'Writes still run as the operator, so the domain controller keeps naming the person.';
+    } else if (identity.value === 'service') {
+      warning.innerHTML = '<strong>Every operator will be able to do everything ' + svc +
+        ' can do</strong>, limited only by the role you gave them in DSMT. Active Directory will ' +
+        'record ' + svc + ' as the author of every change; DSMT\'s audit log is then the only ' +
+        'place that ties a change to a person, and it records both.';
     } else {
-      warning.textContent = 'Each operator sees only what the directory lets them see.';
+      warning.textContent = 'Each operator sees and changes only what the directory lets them.';
     }
   }
   identity.addEventListener('change', describeIdentity);

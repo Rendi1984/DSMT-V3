@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.31.0** | 2026-11-19 | **Service identity**: one domain account holds the directory rights and performs every operation, with the roles deciding who may ask and the audit log naming both. Identity and Service account merged into one screen | Restart + refresh |
 | **1.30.1** | 2026-11-19 | **Security:** roles that could not be read granted full Administrator to everyone. Acknowledging an alert was ungated. The detail pane never disabled anything, and the browser treated "no permissions" as "all permissions" | Restart + refresh |
 | **1.30.0** | 2026-10-14 | **Roles**: four presets mapped to AD groups, enforced at one choke point on the server. Phase one of the permission model — it governs the console, not Active Directory | Restart + refresh |
 | **1.29.1** | 2026-10-14 | **Security:** SQL database enumeration was ungated. Overview no longer reads the directory just because you arrived, and its Refresh button was never wired. Documentation caught up with the registry move | Restart + refresh |
@@ -88,6 +89,153 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 is a request to the operator.
 
 ---
+
+## 1.31.0 — 2026-11-19
+
+### Service identity
+
+A third `IdentityMode`, alongside `operator` and `hybrid`:
+
+| Mode | Reads run as | Writes run as |
+| --- | --- | --- |
+| `operator` (default) | the operator | the operator |
+| `hybrid` | the service account | the operator |
+| **`service`** | **the service account** | **the service account** |
+
+One domain account is granted the directory rights, operators need none of
+their own, and **the role model decides who may ask for what**. This is the
+half that was deferred as "phase two" when the roles shipped in 1.30.0.
+
+### What you give up, stated plainly
+
+Both of these are the point of the mode, not side effects, and neither can be
+recovered after the fact:
+
+**Active Directory stops naming the person.** The domain controller's own
+security log records the service account as the author of every change. DSMT's
+audit log becomes the only record that ties a change to a human — so every
+audit record now carries **`ExecutedAs`** beside `Operator`: who asked, and
+which account actually performed it. Without both, the two logs cannot be
+correlated at all. An install running in service mode should be using SQL
+rather than the JSONL fallback, because losing the audit log now loses the
+attribution with it.
+
+**Active Directory stops being the backstop.** In `operator` and `hybrid` mode
+a hole in DSMT's permission gate is still refused by the DC, because the
+operator genuinely lacks the right. In `service` mode the service account
+holds every right, so a missing gate is a **real privilege escalation** rather
+than a button that returns 403. The fail-open fixed in 1.30.1 would have meant
+full control of the directory for anyone who could sign in.
+
+`hybrid` remains the middle option: consistent reads for operators with no
+read rights of their own, while writes — and therefore attribution and the AD
+backstop — stay on the person.
+
+### Two things service mode refuses, and why
+
+**It refuses the machine account.** `service` cannot be selected while DSMT
+runs as LocalSystem. On the network that presents as the computer account
+`LAB\HOSTNAME$`, which is a real identity that authenticates successfully and
+then holds none of the rights anyone meant to grant - so the failure surfaces
+far from its cause. A SQL login failure naming an account that ends in `$` is
+this, every time. NETWORK SERVICE and LOCAL SERVICE are refused for the same
+reason: they authenticate to the domain as the computer too.
+
+**It refuses an install with no roles configured.** With no role assignments,
+every operator deliberately holds the full admin set - the documented open
+default. That was safe only because Active Directory still refused an operator
+on their own rights. In service mode it refuses nothing, so the two together
+would mean **anyone who can authenticate to the domain can reset any password
+and delete any user**. At least one group must be mapped to a role first.
+
+Both are enforced in two places, not one. The HTTP route refuses them, and
+startup checks again and **forces the mode back to `operator`** with a red
+banner and an ERROR in the log - because the mode can also arrive from the
+command line or straight from the registry, and the audience for this console
+all hold local admin on the host. A refusal only one path enforces is not a
+refusal. Forcing back rather than refusing to start is the same call made for
+a broken certificate in 1.26.0: a dead administration console is the worse
+failure, and `operator` is always safe to run in.
+
+### It records who actually acted, not who the process is
+
+`ExecutedAs` is computed by `Get-DsmtActingIdentity`, which mirrors
+`Get-DsmtAdParams` exactly: the service account in `service` mode and for
+`hybrid` reads, the operator otherwise. Recording the process identity
+unconditionally would have claimed the service account performed every write
+in `operator` mode - contradicting the DC log that the field exists to be
+correlated with, which is worse than recording nothing.
+
+The identity itself comes from `WindowsIdentity::GetCurrent().Name`, not
+`$env:USERNAME`. The environment block is inherited from whoever started the
+process and is writable by them, so it is neither guaranteed to describe the
+current token nor safe to make a security decision on.
+
+### The new column cannot take SQL down with it
+
+`sql/schema.sql` documents the DSMT principal as `db_datareader` +
+`db_datawriter`, and every statement in `Install-DsmtSqlSchema` was guarded by
+`IF OBJECT_ID ... IS NULL` - so on an existing database no DDL right has ever
+been needed. The `ALTER` that adds `ExecutedAs` is the first statement that
+actually executes there, and on a least-privilege login it throws, which would
+abort SQL initialisation entirely and move the whole audit log to the JSONL
+fallback with only a startup line as evidence.
+
+So the column is **detected, never assumed**: the `ALTER` is wrapped so it
+cannot abort initialisation, `HasExecutedAs` records what the table really
+has, and the INSERT, the SELECT and the audit search are each built to match.
+A login without `ALTER` keeps working, without the column, and is told so.
+`sql/schema.sql` now carries the column and the `GRANT ALTER` that avoids this.
+
+### The installer asks which account to run as
+
+Running it with no parameters defaulted to LocalSystem silently. That is a
+real choice with consequences that surface far from the installer, so it now
+asks, in `DOMAIN\username` form, and prompts for the password - blank still
+means LocalSystem, and the prompt says what that implies. The name is
+validated when it is typed rather than at the fourth thing built on it:
+`Test-DsmtAccountFormat` rejects a bare name with no domain, because which
+domain it means is then settled by whatever resolves it first.
+
+### Still outstanding
+
+`DsmtAdHealth.ps1` and `DsmtGmsa.ps1` call AD cmdlets with the operator's
+credential directly instead of going through `Get-DsmtAdParams`, so in
+`service` mode those two tools still run as the operator - who, per this
+mode's own promise, may have no directory rights. It fails closed, with an
+access-denied rather than an escalation, but it contradicts the mode. Recorded
+in `PROGRESS.md`.
+
+
+### Identity and Service account are now one screen
+
+They answered two halves of one question and the Identity pane already
+displayed the other pane's three fields. **Settings → Identity** now reads in
+dependency order: *1. DSMT runs as* (the account, and the command to change
+it) then *2. Who performs directory operations* (the mode) — with the modes
+that need a service account disabled, and the reason on the option itself,
+rather than leaving the operator to discover the dependency by failing.
+
+Changing the service account is still a command rather than a button. It
+rewrites the service, the URL reservation, the data folder ACL and the SQL
+login, then restarts DSMT — which is the process being asked. It cannot report
+the outcome of its own death, and if the new account is wrong there is no
+console left to fix it from.
+
+### The audit log shows two columns it was already keeping
+
+**Executed as** and **Detail**, both off by default, both under *Columns*.
+`Detail` holds why a `Failed` record failed and had been written, searched and
+exported all along while never appearing on screen — so the reason a SQL
+configuration attempt failed was reachable only by exporting the CSV.
+
+### A note for whoever adds the next column
+
+`Install-DsmtSqlSchema` creates **missing tables**. It has never altered an
+existing one, so `ExecutedAs` added to the `CREATE TABLE` alone would never
+appear on an install that already had `dbo.AuditLog` — and every audit INSERT
+would then fail, losing the record to SQL. It ships with its own guarded
+`ALTER`, and every future column needs one too.
 
 ## 1.30.1 — 2026-11-19
 

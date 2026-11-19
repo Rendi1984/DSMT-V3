@@ -617,7 +617,7 @@ function Invoke-DsmtApi {
             httpsDegradedFix   = $cfg.HttpsDegradedFix
             identity  = @{
                 mode        = $cfg.IdentityMode
-                serviceUser = ($env:USERDOMAIN + '\' + $env:USERNAME)
+                serviceUser = (Get-DsmtExecutingIdentity)
                 accountKind = $cfg.AccountKind
             }
             # The browser needs this to run its own idle countdown, so the
@@ -770,7 +770,7 @@ function Invoke-DsmtApi {
                         version       = $cfg.Version
                         publisher     = $cfg.Publisher
                         identityMode   = $cfg.IdentityMode
-                        serviceUser    = ($env:USERDOMAIN + '\' + $env:USERNAME)
+                        serviceUser    = (Get-DsmtExecutingIdentity)
                         serviceAccount = $cfg.ServiceAccount
                         accountKind    = $cfg.AccountKind
                         domain        = $cfg.Domain
@@ -1202,9 +1202,48 @@ function Invoke-DsmtApi {
                 $body = Read-DsmtBody -Request $Request
                 $mode = ([string](Get-DsmtBodyValue -Body $body -Name 'mode')).Trim().ToLower()
 
-                if ($mode -ne 'operator' -and $mode -ne 'hybrid') {
-                    Send-DsmtError -Response $Response -Message 'Identity mode must be "operator" or "hybrid".' -StatusCode 400
+                if ($mode -ne 'operator' -and $mode -ne 'hybrid' -and $mode -ne 'service') {
+                    Send-DsmtError -Response $Response -Message 'Identity mode must be "operator", "hybrid" or "service".' -StatusCode 400
                     return
+                }
+
+                # Selecting 'service' while DSMT runs as LocalSystem would
+                # point every directory write at the MACHINE account, which is
+                # never what anyone means by a service account and fails in a
+                # way that reads as a DSMT fault. Refuse it with the fix.
+                # Only 'service' is refused on a machine account. 'hybrid' has
+                # always been allowed there and works - a machine account can
+                # read the directory - so refusing it would stop an existing
+                # hybrid install from re-saving its own current mode.
+                if ($mode -eq 'service') {
+                    $who = Get-DsmtExecutingIdentity
+                    if (Test-DsmtMachineIdentity -Account $who) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'DSMT is running as ' + $who + ', which is the machine account, so this mode ' +
+                            'would run every directory WRITE as the computer rather than as a service ' +
+                            'account. Move DSMT onto a domain account or a gMSA first - Settings, ' +
+                            'Identity, "DSMT runs as" builds the command.')
+                        return
+                    }
+
+                    # THE OPEN DEFAULT AND THIS MODE CANNOT BOTH BE ON.
+                    # With no roles configured, Resolve-DsmtOperatorRole gives
+                    # every operator the full admin set on purpose - which was
+                    # safe only because Active Directory still refused them on
+                    # their own rights. In service mode AD refuses nothing, so
+                    # the combination means anyone who can authenticate to the
+                    # domain can reset any password and delete any user.
+                    $assignments = @(Get-DsmtRoleAssignments)
+                    if ($assignments.Count -eq 0) {
+                        Send-DsmtError -Response $Response -StatusCode 400 -Message (
+                            'No roles are configured, so every operator currently has full access to ' +
+                            'DSMT. That is the deliberate default, and it is safe only while Active ' +
+                            'Directory still refuses an operator on their own rights. In service mode ' +
+                            'it does not: anyone who can sign in to the domain would be able to do ' +
+                            'anything the service account can do. Map at least one group to a role ' +
+                            'under Settings, Roles first.')
+                        return
+                    }
                 }
 
                 $previous = $cfg.IdentityMode
