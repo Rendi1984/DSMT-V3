@@ -16,7 +16,7 @@
 # audit records, log lines) reads this one variable. Never paste the literal
 # anywhere else; see CLAUDE.md "Versioning policy".
 # ---------------------------------------------------------------------------
-$script:DsmtVersion = '1.29.1'
+$script:DsmtVersion = '1.30.1'
 
 # ---------------------------------------------------------------------------
 # PUBLISHER - same rule as the version: defined once, read everywhere.
@@ -483,7 +483,7 @@ $script:DsmtSettingsKey = 'HKLM:\SOFTWARE\Rendi Group\DSMT\Settings'
 
 # Names whose value is a structure rather than a scalar. Stored as JSON text.
 # A new nested setting MUST be added here.
-$script:DsmtJsonSettings = @('GroupFilters', 'RoleAdminGroups')
+$script:DsmtJsonSettings = @('GroupFilters', 'RoleAdminGroups', 'RoleAssignments')
 
 # Names stored as REG_DWORD. Everything not listed is a string.
 $script:DsmtNumberSettings = @('Port', 'SessionMinutes', 'SessionHours', 'PageSize', 'HealthAlertsInterval', 'HttpsPort')
@@ -559,6 +559,60 @@ function Get-DsmtSavedSettings {
 
     if ($out.Count -eq 0) { return $null }
     return [pscustomobject]$out
+}
+
+function Get-DsmtSettingValueState {
+    <#
+    .SYNOPSIS
+        Reports whether a named setting is PRESENT in the registry, separately
+        from whether it could be parsed.
+
+    .DESCRIPTION
+        Get-DsmtSavedSettings deliberately answers $null for three different
+        situations - the key does not exist, the key could not be read, and the
+        key held nothing - and it omits a structured value that is not valid
+        JSON. That is right for a caller filling in defaults, and WRONG for any
+        caller whose default is more permissive than its configured state,
+        because "could not be read" then looks exactly like "never configured".
+
+        That is not hypothetical: it is how a single unreadable registry key
+        could hand every signed-in operator the full Administrator role. Any
+        caller that fails OPEN on an empty answer must ask this function first.
+
+        Ok      - the settings key was readable (or does not exist at all)
+        Present - the value exists and is not blank, WHETHER OR NOT it parses
+        Error   - why it could not be read
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Name
+    )
+
+    $out = @{ Ok = $true; Present = $false; Error = '' }
+
+    if (-not (Test-Path -LiteralPath $script:DsmtSettingsKey)) { return $out }
+
+    $key = $null
+    try {
+        $key = Get-ItemProperty -LiteralPath $script:DsmtSettingsKey -ErrorAction Stop
+    } catch {
+        $out.Ok = $false
+        $out.Error = $_.Exception.Message
+        return $out
+    }
+
+    foreach ($n in @($Name)) {
+        $prop = $key.PSObject.Properties[$n]
+        if ($null -eq $prop) { continue }
+        $text = ''
+        try { $text = [string]$prop.Value } catch { $text = '' }
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            $out.Present = $true
+            break
+        }
+    }
+
+    return $out
 }
 
 function Save-DsmtSavedSettings {

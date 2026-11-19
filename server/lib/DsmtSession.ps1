@@ -111,11 +111,14 @@ function New-DsmtSession {
     } catch {
         Write-DsmtLog -Level 'WARN' -Message ('Could not resolve the DSMT role for ' + $bare + ': ' + $_.Exception.Message)
         $role = @{
-            IsAdmin    = $false
-            Configured = $true
-            Reason     = 'Your DSMT role could not be determined, so changing DSMT settings is denied ' +
-                         'for this session.'
-            Error      = $_.Exception.Message
+            IsAdmin     = $false
+            Configured  = $true
+            Roles       = @()
+            Permissions = @()
+            Modules     = @()
+            Reason      = 'Your DSMT role could not be determined, so no permissions were granted for ' +
+                          'this session.'
+            Error       = $_.Exception.Message
         }
     }
 
@@ -137,6 +140,12 @@ function New-DsmtSession {
         IsAdmin     = [bool]$role.IsAdmin
         RoleReason  = [string]$role.Reason
         RoleConfigured = [bool]$role.Configured
+        # Resolved once, here. Every gate reads these rather than going back
+        # to the directory - see Resolve-DsmtOperatorRole for why, and for
+        # what it costs (a role change lands at the next sign-in).
+        Roles       = @($role.Roles)
+        Permissions = @($role.Permissions)
+        Modules     = @($role.Modules)
         CreatedUtc  = $now.ToUniversalTime()
         LastSeenUtc = $now.ToUniversalTime()
     }

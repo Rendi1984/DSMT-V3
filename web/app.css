@@ -693,6 +693,10 @@ body { overflow: hidden; }
 }
 .role-row:last-child { border-bottom: none; margin-bottom: 0; }
 .role-main { flex: 1 1 auto; min-width: 0; }
+/* The role picker sits between the group and its Remove button. Fixed width
+   so a long role name does not squeeze the group name next to it. */
+.role-pick { flex: 0 0 auto; width: 160px; }
+@media (max-width: 640px) { .role-pick { width: 100%; } }
 /* Font stack comes from the shared .secret rule below; only size and colour
    differ here. */
 .role-sid { font-size: 11.5px; color: var(--color-neutral-500); word-break: break-all; }
