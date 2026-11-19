@@ -49,7 +49,7 @@ function Write-DsmtAudit {
     # losing the whole audit record to a failure in one field is not a trade
     # worth making.
     $executedAs = ''
-    try { $executedAs = [string](Get-DsmtExecutingIdentity) } catch { $executedAs = '' }
+    try { $executedAs = [string](Get-DsmtActingIdentity -Operator $Operator -Intent 'write') } catch { $executedAs = '' }
 
     $record = [ordered]@{
         time       = $now.ToString('yyyy-MM-ddTHH:mm:ssK')

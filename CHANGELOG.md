@@ -131,15 +131,81 @@ full control of the directory for anyone who could sign in.
 read rights of their own, while writes — and therefore attribution and the AD
 backstop — stay on the person.
 
-### It refuses the machine account
+### Two things service mode refuses, and why
 
-`service` and `hybrid` cannot be selected while DSMT runs as LocalSystem. On
-the network that presents as the computer account `LAB\HOSTNAME$`, which is a
-real identity that authenticates successfully and then holds none of the
-rights anyone meant to grant — so the failure surfaces far from its cause. A
-SQL login failure naming an account that ends in `$` is this, every time. The
-refusal names the fix instead, and the startup banner says so in red if the
-mode was set some other way.
+**It refuses the machine account.** `service` cannot be selected while DSMT
+runs as LocalSystem. On the network that presents as the computer account
+`LAB\HOSTNAME$`, which is a real identity that authenticates successfully and
+then holds none of the rights anyone meant to grant - so the failure surfaces
+far from its cause. A SQL login failure naming an account that ends in `$` is
+this, every time. NETWORK SERVICE and LOCAL SERVICE are refused for the same
+reason: they authenticate to the domain as the computer too.
+
+**It refuses an install with no roles configured.** With no role assignments,
+every operator deliberately holds the full admin set - the documented open
+default. That was safe only because Active Directory still refused an operator
+on their own rights. In service mode it refuses nothing, so the two together
+would mean **anyone who can authenticate to the domain can reset any password
+and delete any user**. At least one group must be mapped to a role first.
+
+Both are enforced in two places, not one. The HTTP route refuses them, and
+startup checks again and **forces the mode back to `operator`** with a red
+banner and an ERROR in the log - because the mode can also arrive from the
+command line or straight from the registry, and the audience for this console
+all hold local admin on the host. A refusal only one path enforces is not a
+refusal. Forcing back rather than refusing to start is the same call made for
+a broken certificate in 1.26.0: a dead administration console is the worse
+failure, and `operator` is always safe to run in.
+
+### It records who actually acted, not who the process is
+
+`ExecutedAs` is computed by `Get-DsmtActingIdentity`, which mirrors
+`Get-DsmtAdParams` exactly: the service account in `service` mode and for
+`hybrid` reads, the operator otherwise. Recording the process identity
+unconditionally would have claimed the service account performed every write
+in `operator` mode - contradicting the DC log that the field exists to be
+correlated with, which is worse than recording nothing.
+
+The identity itself comes from `WindowsIdentity::GetCurrent().Name`, not
+`$env:USERNAME`. The environment block is inherited from whoever started the
+process and is writable by them, so it is neither guaranteed to describe the
+current token nor safe to make a security decision on.
+
+### The new column cannot take SQL down with it
+
+`sql/schema.sql` documents the DSMT principal as `db_datareader` +
+`db_datawriter`, and every statement in `Install-DsmtSqlSchema` was guarded by
+`IF OBJECT_ID ... IS NULL` - so on an existing database no DDL right has ever
+been needed. The `ALTER` that adds `ExecutedAs` is the first statement that
+actually executes there, and on a least-privilege login it throws, which would
+abort SQL initialisation entirely and move the whole audit log to the JSONL
+fallback with only a startup line as evidence.
+
+So the column is **detected, never assumed**: the `ALTER` is wrapped so it
+cannot abort initialisation, `HasExecutedAs` records what the table really
+has, and the INSERT, the SELECT and the audit search are each built to match.
+A login without `ALTER` keeps working, without the column, and is told so.
+`sql/schema.sql` now carries the column and the `GRANT ALTER` that avoids this.
+
+### The installer asks which account to run as
+
+Running it with no parameters defaulted to LocalSystem silently. That is a
+real choice with consequences that surface far from the installer, so it now
+asks, in `DOMAIN\username` form, and prompts for the password - blank still
+means LocalSystem, and the prompt says what that implies. The name is
+validated when it is typed rather than at the fourth thing built on it:
+`Test-DsmtAccountFormat` rejects a bare name with no domain, because which
+domain it means is then settled by whatever resolves it first.
+
+### Still outstanding
+
+`DsmtAdHealth.ps1` and `DsmtGmsa.ps1` call AD cmdlets with the operator's
+credential directly instead of going through `Get-DsmtAdParams`, so in
+`service` mode those two tools still run as the operator - who, per this
+mode's own promise, may have no directory rights. It fails closed, with an
+access-denied rather than an escalation, but it contradicts the mode. Recorded
+in `PROGRESS.md`.
+
 
 ### Identity and Service account are now one screen
 

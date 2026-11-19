@@ -571,11 +571,50 @@ function Get-DsmtExecutingIdentity {
         credential, and what SQL Server sees on a Windows-authentication
         connection. It is NOT the signed-in operator.
     #>
+    # The TOKEN, not the environment block. $env:USERNAME is inherited from
+    # whoever created the process and is writable by them, so it is neither
+    # guaranteed to describe the current identity nor safe to make a security
+    # decision on. WindowsIdentity is the account the DC and SQL actually see.
+    try {
+        $name = [string][System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        if (-not [string]::IsNullOrWhiteSpace($name)) { return $name }
+    } catch {
+        # Fall through to the environment block rather than return nothing:
+        # a best-effort name beats an empty audit field.
+    }
+
     $domain = [string]$env:USERDOMAIN
     $user   = [string]$env:USERNAME
     if ([string]::IsNullOrWhiteSpace($user)) { return '' }
     if ([string]::IsNullOrWhiteSpace($domain)) { return $user }
     return ($domain + '\' + $user)
+}
+
+function Get-DsmtActingIdentity {
+    <#
+    .SYNOPSIS
+        The account a directory operation actually runs as, for the audit
+        record. Mirrors Get-DsmtAdParams exactly.
+    .DESCRIPTION
+        This must agree with Get-DsmtAdParams or the audit log asserts
+        something the domain controller's log contradicts - which is worse
+        than recording nothing, because the whole point of the field is that
+        the two can be correlated. Recording the process identity
+        unconditionally would claim the service account performed every write
+        in 'operator' mode, where the operator's own credential was used.
+    #>
+    param(
+        [string]$Operator = '',
+        [ValidateSet('read', 'write')][string]$Intent = 'write'
+    )
+
+    $cfg = Get-DsmtConfig
+
+    if ($cfg.IdentityMode -eq 'service') { return (Get-DsmtExecutingIdentity) }
+    if ($cfg.IdentityMode -eq 'hybrid' -and $Intent -eq 'read') { return (Get-DsmtExecutingIdentity) }
+
+    if (-not [string]::IsNullOrWhiteSpace($Operator)) { return $Operator }
+    return (Get-DsmtExecutingIdentity)
 }
 
 function Test-DsmtMachineIdentity {
@@ -599,7 +638,11 @@ function Test-DsmtMachineIdentity {
 
     if ($name -eq ($env:COMPUTERNAME + '$')) { return $true }
     # LocalSystem is spelled several ways depending on who is asking.
-    $wellKnown = @('SYSTEM', 'LOCALSYSTEM', 'NT AUTHORITY\SYSTEM')
+    # NETWORK SERVICE authenticates to the domain as DOMAIN\COMPUTER$ exactly
+    # as LocalSystem does, so it is the same situation this guard exists for.
+    $wellKnown = @('SYSTEM', 'LOCALSYSTEM', 'NT AUTHORITY\SYSTEM',
+                   'NETWORK SERVICE', 'NT AUTHORITY\NETWORK SERVICE',
+                   'LOCAL SERVICE', 'NT AUTHORITY\LOCAL SERVICE')
     if ($wellKnown -contains $Account.ToUpper()) { return $true }
     if ($wellKnown -contains $name.ToUpper()) { return $true }
 

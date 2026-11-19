@@ -43,8 +43,24 @@
     directory without being granted broad read rights. NOTE: in hybrid mode
     every operator can see every object the service account can see.
 
-    Writes stay on the operator in both modes, so the DC's own security log
-    always names the person who made the change.
+    service - reads AND writes both run as the account this server runs
+    under. One domain account is granted the directory rights, operators need
+    none of their own, and the role model decides who may ask for what.
+
+    READ THIS BEFORE USING service. Two consequences:
+      1. The DC's security log names the SERVICE ACCOUNT for every change,
+         not the person. DSMT's audit log becomes the only record tying a
+         change to a human, and carries both (Operator and ExecutedAs).
+      2. Active Directory stops being the backstop. In operator and hybrid
+         mode a hole in DSMT's permission gate is still refused by the DC,
+         because the operator genuinely lacks the right. In service mode the
+         service account holds every right, so a missing gate is a real
+         privilege escalation.
+    It is refused at startup, and the mode forced back to operator, if DSMT
+    runs as the machine account or if no roles are configured.
+
+    In operator and hybrid mode writes stay on the operator, so the DC's own
+    security log names the person who made the change.
 .PARAMETER SqlServer
     SQL Server instance that holds the DSMT database, e.g. 'SQL01' or
     'SQL01\LAB'. The database and its tables are created on first start if
@@ -368,6 +384,36 @@ Write-Host ''
 Write-Host ('  Listening on ' + $prefix) -ForegroundColor Cyan
 Write-Host ('  Open ' + $browseUrl) -ForegroundColor Cyan
 Write-Host ('  Managing ' + $cfg.Domain + ' - operators sign in with their own domain account') -ForegroundColor DarkGray
+# The HTTP route refuses these combinations, but the mode can also arrive from
+# the command line or straight from the registry, which the operators of this
+# console all have local admin for. A refusal that only one of the two paths
+# enforces is not a refusal. Downgrading to 'operator' rather than refusing to
+# start is the same call made for a bad certificate in 1.26.0: the failure that
+# matters is the domain administration console being dead, and 'operator' is
+# always a safe mode to run in.
+if ($cfg.IdentityMode -eq 'service') {
+    $svcWho    = Get-DsmtExecutingIdentity
+    $svcReason = ''
+    if (Test-DsmtMachineIdentity -Account $svcWho) {
+        $svcReason = 'DSMT is running as ' + $svcWho + ', which is the machine account'
+    } elseif (@(Get-DsmtRoleAssignments).Count -eq 0) {
+        $svcReason = 'no roles are configured, so every operator would hold the full admin set ' +
+                     'with nothing in Active Directory left to refuse them'
+    }
+
+    if ($svcReason -ne '') {
+        $script:DsmtConfig.IdentityMode = 'operator'
+        Write-Host ''
+        Write-Host '  IDENTITY MODE FORCED BACK TO OPERATOR' -ForegroundColor Red
+        Write-Host ('  Service mode was configured, but ' + $svcReason + '.') -ForegroundColor Red
+        Write-Host '  Directory reads and writes will run as the signed-in operator until that is' -ForegroundColor Red
+        Write-Host '  fixed. Settings -> Identity says what to do.' -ForegroundColor Red
+        Write-Host ''
+        Write-DsmtLog -Level 'ERROR' -Message ('Service identity mode was refused at startup and the ' +
+                                               'mode was forced back to operator: ' + $svcReason + '.')
+    }
+}
+
 if ($cfg.IdentityMode -eq 'service') {
     $svcWho = Get-DsmtExecutingIdentity
     Write-Host ('  Identity mode: SERVICE - every read AND WRITE runs as ' + $svcWho + '.') -ForegroundColor Yellow

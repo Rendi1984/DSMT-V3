@@ -720,6 +720,18 @@ function buildNotifications() {
     });
   }
 
+  if (identity && identity.mode === 'service') {
+    list.push({
+      kind: 'warn',
+      title: 'Service identity mode is on',
+      body: 'Every directory read AND write runs as ' + (identity.serviceUser || 'the service account') +
+            '. Active Directory records that account as the author of every change, not the operator, ' +
+            'and these roles are the only limit on what an operator can do. The audit log records both.',
+      actionLabel: 'Open settings',
+      action: function () { closeBell(); actionSettings(); }
+    });
+  }
+
   if (identity && identity.mode === 'hybrid') {
     list.push({
       kind: 'info',
@@ -1572,9 +1584,10 @@ function renderAudit() {
       dc:       '<td data-label="Controller" class="cell-disabled">' + esc(r.dc) + '</td>',
       reason:   '<td data-label="Reason" class="cell-muted cell-wrap">' + esc(r.reason) + '</td>',
       result:   '<td data-label="Result" class="' + cls + '">' + esc(r.result) + '</td>',
-      // An empty executedAs means a record written before 1.31.0, when the
-      // field did not exist - not "nobody". Say so rather than showing a
-      // blank cell that reads as missing data.
+      // An empty executedAs means a record written before the field existed,
+      // not "nobody". Say so rather than showing a blank cell that reads as
+      // missing data. (No version number here on purpose - there is exactly
+      // one of those in this project and it is not in this file.)
       executedAs: '<td data-label="Executed as" class="cell-muted">' +
                   (r.executedAs ? esc(r.executedAs)
                                 : '<span class="cell-disabled" title="This record predates the field.">-</span>') +
@@ -2846,7 +2859,7 @@ function exportReport(res) {
      2  Permitted group   - DSMT creates it, as the operator.
      3  Computers in it   - DSMT manages them, as the operator.
      4  Install on host   - CANNOT run here: needs local administrator.
-     5  Point DSMT at it  - Settings -> Service account.
+     5  Point DSMT at it  - Settings -> Identity.
 
    Steps 4 and 5 produce commands rather than pretending. The alternative -
    a button that fails with an access error - teaches nothing.
@@ -3104,7 +3117,7 @@ function paintGmsa() {
     '<p class="dialog-note"><code>Test-ADServiceAccount</code> returning <strong>True</strong> is the ' +
     'only proof that any of this worked. If it returns False, the usual cause is that the host has ' +
     'not rebooted since it was added to the group.</p>' +
-    '<p class="dialog-note">Then point DSMT at it: <strong>Settings -> Service account</strong>, ' +
+    '<p class="dialog-note">Then point DSMT at it: <strong>Settings -> Identity</strong>, ' +
     'which builds the command that moves the service, the URL reservation, the data-folder ' +
     'permissions and the SQL login together.</p>';
 
@@ -4023,12 +4036,25 @@ function renderSettings() {
       '<em>through DSMT</em> - which actions are available, and which screens they can reach. ' +
       'Settings changes, which nothing in Active Directory governs, are decided here and nowhere ' +
       'else.</p>' +
-      '<p class="dialog-note"><strong>What it does not decide</strong> while the identity mode is ' +
-      '<code>' + esc(r.identityMode || 'operator') + '</code>: directory rights. Every user, group and ' +
-      'password change still runs as the signed-in operator, so Active Directory has the final say and ' +
-      'someone blocked here can still open ADUC and do whatever AD permits them. This is a control over ' +
-      'the console, not over the person - real, and worth having for process and for accidents, but not ' +
-      'a replacement for AD delegation.</p>' +
+      // This paragraph states whether Active Directory is still a backstop,
+      // which is the security-relevant sentence on this screen - and the
+      // answer is the opposite in service mode. It was written when only
+      // operator and hybrid existed and asserted the operator case flatly;
+      // left alone it would have told the reader that AD has the final say on
+      // the one configuration where it does not.
+      ((r.identityMode === 'service')
+        ? '<p class="dialog-note"><strong>In this configuration these roles are the whole of the ' +
+          'control.</strong> The identity mode is <code>service</code>, so every user, group and ' +
+          'password change runs as the service account, which holds the rights. Active Directory ' +
+          'will not refuse an operator on its own account - what they may do here is decided here ' +
+          'and nowhere else, and the audit log records both who asked and which account performed ' +
+          'it. A role is no longer only a control over the console.</p>'
+        : '<p class="dialog-note"><strong>What it does not decide</strong> while the identity mode is ' +
+          '<code>' + esc(r.identityMode || 'operator') + '</code>: directory rights. Every user, group and ' +
+          'password change still runs as the signed-in operator, so Active Directory has the final say and ' +
+          'someone blocked here can still open ADUC and do whatever AD permits them. This is a control over ' +
+          'the console, not over the person - real, and worth having for process and for accidents, but not ' +
+          'a replacement for AD delegation.</p>') +
 
       '<h3 class="set-h">What each role means</h3>' + roleKey +
 
@@ -4221,6 +4247,8 @@ function renderSettings() {
         settingsRow('Registered account', s.serviceAccount) +
         settingsRow('Account type', accountKindLabel(s.accountKind)) +
       '</dl>' +
+      '<p class="dialog-note">Move DSMT onto a dedicated account, a group managed service account ' +
+      '(gMSA) or the machine account. Pick the target below and DSMT builds the exact command.</p>' +
       (s.accountKind === 'machine'
         ? '<p class="dialog-note"><strong>This is the machine account.</strong> On the network it ' +
           'presents as the computer, not as a service account - which is why a SQL login for it ' +
@@ -4235,7 +4263,7 @@ function renderSettings() {
           '<option value="machine">LocalSystem - the machine account, no password</option>' +
         '</select></div>' +
         '<div class="field" id="acctNameField"><label for="setAcctName">Account name</label>' +
-        '<input class="input" id="setAcctName" placeholder="LAB\\svc-dsmt" autocomplete="off"></div>' +
+        '<input class="input" id="setAcctName" placeholder="LAB\\gmsa-dsmt$" autocomplete="off"></div>' +
       '</div>' +
       '<p class="dialog-note" id="acctHint"></p>' +
       '<label class="set-cmd-label" for="acctCmd">Run this on the DSMT host, in an elevated PowerShell:</label>' +
@@ -4274,8 +4302,8 @@ function renderSettings() {
       'actually performed it.</p>' +
       '<p class="dialog-note">It also removes a backstop. In Operator and Hybrid mode an operator ' +
       'who should not be able to do something is refused by Active Directory even if DSMT lets them ' +
-      'ask. In Service mode the service account holds every right, so <strong>the roles above are ' +
-      'the only thing deciding what an operator can do.</strong></p>' +
+      'ask. In Service mode the service account holds every right, so <strong>the roles under ' +
+      'Settings -&gt; Roles are the only thing deciding what an operator can do.</strong></p>' +
       '<p class="dialog-note" id="identityWarning"></p>' +
       '<div class="set-actions">' +
         '<button class="btn btn-secondary" type="button" id="applyIdentity">Apply identity mode</button>' +

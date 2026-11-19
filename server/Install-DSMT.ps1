@@ -60,7 +60,10 @@
 .PARAMETER IdentityMode
     'operator' (default) - every directory read and write runs as the
     signed-in operator. 'hybrid' - reads run as the service account, writes
-    still run as the operator. See Start-DSMT.ps1 for the full explanation.
+    still run as the operator. 'service' - reads AND writes both run as the
+    service account, so Active Directory records that account rather than the
+    person and the role model becomes the only limit on what an operator can
+    do. See Start-DSMT.ps1 for the full explanation before choosing it.
 .PARAMETER SqlServer
     SQL Server instance to use, e.g. 'SQL01' or 'SQL01\LAB'. Supplying this
     turns SQL on - see -UseSql for what happens when you do not.
@@ -176,7 +179,7 @@ param(
     [ValidateSet('localhost', 'any')][string] $ListenAddress = 'any',
     [string] $ServiceAccount = '',
     [string] $ChangeServiceAccount = '',
-    [ValidateSet('operator', 'hybrid')][string] $IdentityMode = 'operator',
+    [ValidateSet('operator', 'hybrid', 'service')][string] $IdentityMode = 'operator',
     [string] $SqlServer = '',
     [string] $SqlDatabase = 'DSMT',
     [switch] $UseSql,
@@ -272,6 +275,65 @@ function Wait-DsmtConsole {
         Start-Sleep -Milliseconds 800
     }
     return $false
+}
+
+function Test-DsmtAccountFormat {
+    <#
+    .SYNOPSIS
+        Validates a service account typed by a person, before anything is
+        built on it.
+    .DESCRIPTION
+        The account name reaches sc.exe, the URL reservation, an ACL and a SQL
+        login. A typo in it does not fail here - it fails at the fourth of
+        those, hours later, as an error that names something else. Checking
+        the shape once, at the point it is entered, is the only cheap moment.
+
+        Accepted: DOMAIN\username, DOMAIN\name$ (gMSA), and UPN user@domain.
+        Rejected: a bare name with no domain, because which domain it means
+        is then decided by whatever resolves it first.
+    #>
+    param([string]$Account = '')
+
+    $out = @{ Ok = $false; Account = ''; Message = '' }
+
+    $value = ''
+    if ($null -ne $Account) { $value = ([string]$Account).Trim() }
+
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        $out.Message = 'No account was given.'
+        return $out
+    }
+
+    if ($value -match '[/\[\]:;|=,+*?<>"]') {
+        $out.Message = ('"' + $value + '" contains a character that is not valid in an account name.')
+        return $out
+    }
+
+    if ($value.Contains('@')) {
+        if ($value -match '^[^@\s]+@[^@\s]+\.[^@\s]+$') {
+            $out.Ok = $true; $out.Account = $value
+            return $out
+        }
+        $out.Message = ('"' + $value + '" looks like a UPN but is not a complete one.')
+        return $out
+    }
+
+    if (-not $value.Contains('\')) {
+        $out.Message = ('"' + $value + '" has no domain. Use DOMAIN\username so there is no doubt ' +
+                        'which directory the account is in - a bare name is resolved by whatever ' +
+                        'answers first, which may not be the domain you mean.')
+        return $out
+    }
+
+    $parts = $value.Split('\')
+    if ($parts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($parts[0]) -or [string]::IsNullOrWhiteSpace($parts[1])) {
+        $out.Message = ('"' + $value + '" is not in the form DOMAIN\username.')
+        return $out
+    }
+
+    $out.Ok = $true
+    $out.Account = $value
+    return $out
 }
 
 function Get-DsmtAccountKind {
@@ -1046,11 +1108,53 @@ $runAccount = $ServiceAccount
 $accountWasChosen = $true
 if ([string]::IsNullOrWhiteSpace($runAccount)) {
     $accountWasChosen = $false
+
+    # ASK, rather than default silently. Defaulting to LocalSystem is a real
+    # choice with consequences that surface far from here: on the network the
+    # service presents as DOMAIN\COMPUTERNAME$, which authenticates fine and
+    # then holds no rights anyone granted - the first symptom is usually a SQL
+    # login failure naming an account that ends in a dollar sign, which reads
+    # as a DSMT fault. It is also the one account that cannot be used for the
+    # 'service' identity mode. Asking costs one line and prevents all of it.
+    $interactive = $false
+    try { $interactive = [Environment]::UserInteractive -and -not $NoAutoStart } catch { $interactive = $false }
+
+    if ($interactive) {
+        Write-Host ''
+        Write-Host '  Which account should DSMT run as?' -ForegroundColor White
+        Write-Host '    - A domain account, as DOMAIN\username (you will be asked for its password)' -ForegroundColor Gray
+        Write-Host '    - A gMSA, as DOMAIN\name$ (no password)' -ForegroundColor Gray
+        Write-Host '    - Leave blank for LocalSystem, which reaches AD and SQL as ' -ForegroundColor Gray -NoNewline
+        Write-Host ($env:COMPUTERNAME + '$') -ForegroundColor Yellow
+        $typed = ''
+        try { $typed = [string](Read-Host '  Account') } catch { $typed = '' }
+        $typed = $typed.Trim()
+
+        if (-not [string]::IsNullOrWhiteSpace($typed)) {
+            $fmt = Test-DsmtAccountFormat -Account $typed
+            if (-not $fmt.Ok) {
+                Write-Fail $fmt.Message 'Re-run the installer, or pass -ServiceAccount "DOMAIN\username".'
+                exit 1
+            }
+            $runAccount = $fmt.Account
+            $accountWasChosen = $true
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($runAccount)) {
     if ($NoAutoStart) {
         $runAccount = $env:USERDOMAIN + '\' + $env:USERNAME
     } else {
         $runAccount = 'LocalSystem'
     }
+} elseif ($accountWasChosen -and $runAccount -ne 'LocalSystem') {
+    $fmtChk = Test-DsmtAccountFormat -Account $runAccount
+    if (-not $fmtChk.Ok) {
+        Write-Fail $fmtChk.Message 'Use the form DOMAIN\username, or DOMAIN\name$ for a gMSA.'
+        exit 1
+    }
+    $runAccount = $fmtChk.Account
 }
 
 $runAccountKind = Get-DsmtAccountKind -Account $runAccount

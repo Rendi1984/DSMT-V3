@@ -156,6 +156,34 @@ a version bump.
    g. `Test-DsmtRouteNeedsAdmin` and `Get-DsmtRoleGroups` are now dead code (no
       callers outside their module). Harmless, so left alone.
 
+0b. **Outstanding from the 1.31.0 pre-merge review (2026-11-19).** The two
+   reviewer agents returned 21 findings on the service-identity diff; most
+   were fixed in 1.31.0 itself. These were not:
+
+   a. **`DsmtAdHealth.ps1` and `DsmtGmsa.ps1` bypass `Get-DsmtAdParams`.**
+      They pass `-Credential $Credential` to AD cmdlets directly
+      (`DsmtAdHealth.ps1:207,325,398`, `DsmtGmsa.ps1:279`), so `Get-DsmtAdParams`
+      is the single decision point for `DsmtDirectory.ps1` only. In `service`
+      mode those two tools still run as the signed-in operator - who, per that
+      mode's own promise ("operators need none of their own" rights), may have
+      none, and gets access-denied from exactly the two tools the role
+      catalogue grants them. It fails closed, so it is a contradiction rather
+      than a hole. Fixing it means routing both modules through
+      `Get-DsmtAdParams`, which is mechanical but touches every call site and
+      cannot be tested here.
+   b. **A failed settings save leaves the live process and the store
+      disagreeing about the identity mode.** `$script:DsmtConfig.IdentityMode`
+      is assigned before `Save-DsmtSavedSettings`, and a failure is reported
+      only as `persisted = $false` in the response body. A non-elevated
+      hand-started server cannot write HKLM, so it would switch every
+      directory write to the service account while the stored mode stays what
+      it was, and silently revert on the next restart. Pre-existing shape; the
+      stakes changed, because the two states now differ in **who performs
+      writes** rather than in a display string.
+   c. The audit log's free-text search covers `ExecutedAs` only when the
+      column exists; on a least-privilege SQL login it silently does not.
+      Correct, but worth knowing before concluding an account "did nothing".
+
 1. **[FIXED IN 1.7.5 - NEEDS CONFIRMING ON THE LAB MACHINE] No overlay in the
    console was visible.** Reported 2026-07-31 from the first real install.
 

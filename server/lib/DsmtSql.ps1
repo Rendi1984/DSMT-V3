@@ -28,6 +28,14 @@
 
 $script:DsmtSql = @{
     Enabled          = $false
+    # Whether dbo.AuditLog actually has the ExecutedAs column. It is NOT
+    # assumed: sql/schema.sql documents the DSMT principal as db_datareader +
+    # db_datawriter, and every other statement in Install-DsmtSqlSchema is
+    # guarded by IF OBJECT_ID ... IS NULL, so until 1.31.0 no DDL right was
+    # ever needed on an existing database. An ALTER that throws there would
+    # otherwise abort SQL initialisation and silently move the whole audit log
+    # to the JSONL fallback.
+    HasExecutedAs    = $false
     Server           = ''
     Database         = 'DSMT'
     ConnectionString = ''
@@ -226,6 +234,22 @@ function Initialize-DsmtSql {
         $result.TablesCreated = $schema.Created
         $result.TablesFound   = $schema.Found
 
+        # Detected, never assumed - see HasExecutedAs above.
+        $script:DsmtSql.HasExecutedAs = $false
+        try {
+            $col = Invoke-DsmtSqlCommand -Mode 'Scalar' -Sql (
+                "SELECT COL_LENGTH(N'dbo.AuditLog', N'ExecutedAs');")
+            if ($null -ne $col -and $col -isnot [System.DBNull]) { $script:DsmtSql.HasExecutedAs = $true }
+        } catch {
+            $script:DsmtSql.HasExecutedAs = $false
+        }
+
+        if (-not $script:DsmtSql.HasExecutedAs) {
+            Write-Host ('  [warn] dbo.AuditLog has no ExecutedAs column and it could not be added ' +
+                        '(the DSMT login needs ALTER on that table). Audit records will be stored ' +
+                        'without the account that performed them.') -ForegroundColor Yellow
+        }
+
         $script:DsmtSql.Enabled   = $true
         $script:DsmtSql.LastError = ''
         $result.Ok = $true
@@ -340,7 +364,18 @@ CREATE TABLE dbo.AuditLog (
     # guarded ALTER, here, for ever.
     $statements += @'
 IF COL_LENGTH(N'dbo.AuditLog', N'ExecutedAs') IS NULL
-    ALTER TABLE dbo.AuditLog ADD ExecutedAs NVARCHAR(256) NULL;
+BEGIN
+    BEGIN TRY
+        ALTER TABLE dbo.AuditLog ADD ExecutedAs NVARCHAR(256) NULL;
+    END TRY
+    BEGIN CATCH
+        -- Swallowed on purpose. A least-privilege DSMT login (db_datareader +
+        -- db_datawriter, as sql/schema.sql documents) cannot ALTER, and losing
+        -- the whole audit log to SQL over one optional column is the worse
+        -- outcome by far. HasExecutedAs is detected afterwards and the INSERT
+        -- adapts, so the console keeps working with the column absent.
+    END CATCH
+END
 '@
 
     $statements += @'
@@ -480,13 +515,27 @@ function Write-DsmtSqlAudit {
 
     try {
         $cfg = Get-DsmtConfig
-        Invoke-DsmtSqlCommand -Mode 'NonQuery' -Parameters @{
+
+        # Built to match the table that is actually there. Naming a column the
+        # database does not have would fail EVERY audit insert from then on,
+        # and a least-privilege login cannot necessarily add it.
+        $params = @{
             t = $TimeUtc; a = $Action; g = $Target; o = $Operator; c = $Controller
-            r = $Reason; res = $Result; cat = $Category; d = $Detail; x = $ExecutedAs; v = $cfg.Version
-        } -Sql @'
-INSERT INTO dbo.AuditLog (TimeUtc, Action, Target, Operator, Controller, Reason, Result, Category, Detail, ExecutedAs, AppVersion)
-VALUES (@t, @a, @g, @o, @c, @r, @res, @cat, @d, @x, @v);
-'@ | Out-Null
+            r = $Reason; res = $Result; cat = $Category; d = $Detail; v = $cfg.Version
+        }
+        $sql = ''
+        if ($script:DsmtSql.HasExecutedAs) {
+            $params['x'] = $ExecutedAs
+            $sql = 'INSERT INTO dbo.AuditLog (TimeUtc, Action, Target, Operator, Controller, Reason, ' +
+                   'Result, Category, Detail, ExecutedAs, AppVersion) ' +
+                   'VALUES (@t, @a, @g, @o, @c, @r, @res, @cat, @d, @x, @v);'
+        } else {
+            $sql = 'INSERT INTO dbo.AuditLog (TimeUtc, Action, Target, Operator, Controller, Reason, ' +
+                   'Result, Category, Detail, AppVersion) ' +
+                   'VALUES (@t, @a, @g, @o, @c, @r, @res, @cat, @d, @v);'
+        }
+
+        Invoke-DsmtSqlCommand -Mode 'NonQuery' -Parameters $params -Sql $sql | Out-Null
         return $true
     } catch {
         Write-DsmtLog -Level 'WARN' -Message ('Audit insert into SQL failed (the JSONL copy still holds it): ' + $_.Exception.Message)
@@ -551,7 +600,13 @@ function Get-DsmtSqlAudit {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($Query)) {
-        $where += '(Action LIKE @q OR Target LIKE @q OR Operator LIKE @q OR Controller LIKE @q OR Reason LIKE @q OR Result LIKE @q OR Detail LIKE @q)'
+        # ExecutedAs is searched too: once the column is on screen, typing the
+        # service account name and getting nothing back reads as "that account
+        # did nothing", which in service mode is the opposite of the truth.
+        $searchCols = 'Action LIKE @q OR Target LIKE @q OR Operator LIKE @q OR Controller LIKE @q ' +
+                      'OR Reason LIKE @q OR Result LIKE @q OR Detail LIKE @q'
+        if ($script:DsmtSql.HasExecutedAs) { $searchCols = $searchCols + ' OR ExecutedAs LIKE @q' }
+        $where += '(' + $searchCols + ')'
         $params['q'] = '%' + $Query.Trim() + '%'
     }
 
@@ -559,7 +614,8 @@ function Get-DsmtSqlAudit {
     if ($where.Count -gt 0) { $clause = ' WHERE ' + ($where -join ' AND ') }
 
     $rows = Invoke-DsmtSqlCommand -Mode 'Query' -Parameters $params -Sql (
-        'SELECT TOP (@limit) TimeUtc, Action, Target, Operator, Controller, Reason, Result, Category, Detail ' +
+        'SELECT TOP (@limit) TimeUtc, Action, Target, Operator, Controller, Reason, Result, Category, Detail' +
+        $(if ($script:DsmtSql.HasExecutedAs) { ', ExecutedAs' } else { '' }) + ' ' +
         'FROM dbo.AuditLog' + $clause + ' ORDER BY TimeUtc DESC, AuditId DESC;')
 
     $total = Invoke-DsmtSqlCommand -Mode 'Scalar' -Parameters $params -Sql (
@@ -577,6 +633,12 @@ function Get-DsmtSqlAudit {
             result   = [string]$r.Result
             category = [string]$r.Category
             detail   = [string]$r.Detail
+            # SQL is the record of truth whenever it is configured, so leaving
+            # this out of the SELECT made the whole Executed as column render
+            # as "no such field" on precisely the installs that have one - and
+            # service mode is the mode that should be running on SQL, because
+            # the audit log is then the only record naming the person.
+            executedAs = $(if ($script:DsmtSql.HasExecutedAs) { [string]$r.ExecutedAs } else { '' })
         }
     }
 
