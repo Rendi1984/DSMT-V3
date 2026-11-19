@@ -66,6 +66,40 @@ screen including sign-in.
 The original mock-up in `prototype/` was **removed in 1.20.0** — fabricated
 data, inert buttons, and it loaded React from a CDN. Nothing referenced it.
 
+### Review tooling in `.claude/` (added 2026-11-19)
+There is no way to run this project here - Linux, no PowerShell, no Windows, no
+domain, no browser - so every defect this project has ever shipped was found by
+reading code against the patterns in `CLAUDE.md`. Three files make that pass
+repeatable instead of a matter of whoever is reviewing remembering all of it:
+
+- **`.claude/agents/ps51-reviewer.md`** - read-only agent, `server/**`. The 5.1
+  constraints, the one-element collection trap, a cast that throws inside a
+  hashtable literal, output leakage, the code/state root split, an unregistered
+  structured setting, **a new route or action with no permission mapping**, a
+  multi-step write reported as one outcome, a read cap inherited from a UI, and
+  the constructed-attribute rules (`tokenGroups` base scope).
+- **`.claude/agents/web-reviewer.md`** - read-only agent, `web/**` + `_ds/**`.
+  CSS that degrades to nothing, Nocturne tokens (including a token that does
+  not exist), ES5 and the offline constraint, `asArray()`, field-name mapping,
+  permission gating on both halves, values read but never set, dead or doubled
+  wiring, escaping and double-escaping, timestamps that leave the screen, the
+  four breakpoints, version literals.
+- **`.claude/skills/pre-release-audit/SKILL.md`** - skill, not an agent, because
+  it ends in edits and needs the session's own context: version single source of
+  truth, the CHANGELOG entry **and** its glance row, documentation against
+  actual behaviour, this file, the static checks, what to deploy, and an
+  explicit statement of what the audit cannot verify.
+
+**Both agents are deliberately denied `Edit`/`Write`.** A reviewer that can fix
+things fixes them quietly and the finding is lost - and an agent has no
+conversation context, so it would "fix" decisions that are deliberate. Two it
+would reach for immediately: the operator `PSCredential` held in process memory,
+and the known false positive where the paren check reports `Install-DSMT.ps1` as
+-2. Both are listed in the agent files as not-defects for that reason.
+
+These files are repository tooling, not application code, so adding them is not
+a version bump.
+
 ---
 
 ## Open tasks
