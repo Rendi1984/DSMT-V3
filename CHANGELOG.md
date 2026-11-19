@@ -21,6 +21,7 @@ where what changed is written down.
 
 | Version | Date | What changed | To deploy |
 | --- | --- | --- | --- |
+| **1.30.1** | 2026-11-19 | **Security:** roles that could not be read granted full Administrator to everyone. Acknowledging an alert was ungated. The detail pane never disabled anything, and the browser treated "no permissions" as "all permissions" | Restart + refresh |
 | **1.30.0** | 2026-10-14 | **Roles**: four presets mapped to AD groups, enforced at one choke point on the server. Phase one of the permission model — it governs the console, not Active Directory | Restart + refresh |
 | **1.29.1** | 2026-10-14 | **Security:** SQL database enumeration was ungated. Overview no longer reads the directory just because you arrived, and its Refresh button was never wired. Documentation caught up with the registry move | Restart + refresh |
 | **1.29.0** | 2026-08-08 | **Overview** is the new landing screen - live tiles that link to the rows behind them; **live sessions** with sign-out; a required-permissions document | Restart + refresh |
@@ -87,6 +88,103 @@ in the browser (Ctrl+F5); *Docs only* = no runtime impact.
 is a request to the operator.
 
 ---
+
+## 1.30.1 — 2026-11-19
+
+Five defects in the 1.30.0 permission model, found by reviewing the diff before
+it was merged rather than in the lab. 1.30.0 was never merged to `main`, so this
+is the first release of the model that behaves as its own documentation claims.
+
+### A role list that could not be read granted everything
+
+`Resolve-DsmtOperatorRole` decided "are roles configured" by asking whether it
+had any usable assignment rows. Zero rows was read as "nothing is configured",
+which is the deliberately open default: full Administrator for every operator
+who can sign in.
+
+Three paths reach zero rows on an install that **is** configured:
+
+- the settings key could not be read, so `Get-DsmtSavedSettings` returned
+  `$null` after printing a `[warn]` line to the server console
+- the `RoleAssignments` value is not valid JSON, so the same function dropped
+  the property and warned - the warning even says that a structured setting
+  which silently vanishes "looks exactly like a feature that was never
+  configured", which is precisely how the role code then read it
+- every stored row names a role key that no longer exists, so all of them were
+  skipped by the guard whose comment says an unknown key "grants NOTHING"
+
+In all three the only evidence was a yellow line in a log nobody reads.
+
+`Get-DsmtSettingValueState` in `DsmtCommon.ps1` now answers the question that
+was actually being asked: is the value PRESENT, whether or not it parses, and
+was the key readable at all. Present-but-unusable, and unreadable, both fail
+closed with the reason on screen and an ERROR in the log. Only a genuinely
+absent configuration takes the open default.
+
+**Any caller whose default is more permissive than its configured state must
+ask that function first.** `Get-DsmtSavedSettings` answers `$null` for three
+different situations and cannot be used to tell them apart.
+
+### Acknowledging an alert was ungated
+
+`POST /api/alerts/ack` had no entry in `$script:DsmtRoutePermissions`, and the
+table's own header states that a path with no entry needs nothing beyond a
+valid session. Acknowledging silences the health bell for **every** operator on
+the install, so Read only and Auditor could both do it - against a role summary
+that reads "Sees everything, changes nothing." Now `tools.adhealth`, POST only.
+
+### Two tool reads were gated, so "sees everything" met an error box
+
+`GET /api/tools/adhealth` and `GET /api/tools/gmsa/state` required
+`tools.adhealth` / `tools.gmsa`, which neither Read only nor Auditor holds -
+while both roles are given the `tools` module. The last-opened sub-tool is
+remembered in `localStorage`, so those operators could land directly on an
+error box under a nav item that promised a tool.
+
+The catalogue's own note says reads are deliberately not in it, because gating
+a read means showing an empty grid to someone who is allowed to be there. Both
+patterns are now **POST only**; the writes they guard are unchanged.
+
+### The browser treated "no permissions" as "all permissions"
+
+`can()` and `canSee()` returned `true` for an empty list, to stay usable against
+an older server that sends no role data. But empty is what the new server sends
+to a real operator who holds nothing - Read only, Auditor, anyone in no mapped
+group, and anyone whose group membership could not be read. Every action button
+was enabled for exactly the populations the release exists to constrain; the
+server refused correctly, so the operator typed a mandatory reason and then met
+a 403, once per attempt, each one a `Denied` audit record.
+
+The server already sends `roleConfigured` on every payload that carries a role
+and on none that does not, so its **presence** now decides this, not the length
+of the permission list. An older server still gets the open behaviour.
+
+### The detail pane disabled nothing
+
+`renderDetail()` builds the main action surface - Reset password, Unlock,
+Enable/Disable, Move OU, Add to group, Add members, Delete, and the per-member
+Remove link - and none of it was gated. Only the profile dialog's parallel set
+in `wireProfile()` was. Both now use the same `canAction()` + hint pattern.
+
+Two renderers of one action set, one gated and one not, is also how this drifts
+apart again; they are now identical in form.
+
+### Also
+
+- The landing tab loaded twice for any role whose first tab is filtered out
+  (Auditor has no Overview): `applyModuleVisibility()` called `setTab` and
+  `enterApp()` called it again on the next line, putting two requests for the
+  same tab in flight with the later response winning. It now corrects the tab
+  and lets `enterApp()` load it once.
+
+### Still outstanding - see PROGRESS.md
+
+Known and deliberately not changed here: a `title` on a `disabled` button may
+not produce a tooltip in Chromium, which would make "disabled with the reason
+on hover" silently become "disabled with no explanation"; the Settings forms
+and the gMSA tool's buttons remain ungated in the browser; and a single
+`tokenGroups` failure now revokes every permission for the session and is
+cached until sign-out.
 
 ## 1.30.0 — 2026-10-14
 

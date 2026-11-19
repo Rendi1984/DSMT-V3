@@ -160,8 +160,20 @@ $script:DsmtRoutePermissions = @(
     @{ Pattern = '^/api/reports$';               Methods = @('GET');    Permission = 'reports.run' },
     @{ Pattern = '^/api/reports/[a-z]+$';        Methods = @('GET');    Permission = 'reports.run' },
 
-    @{ Pattern = '^/api/tools/adhealth$';        Methods = @('GET', 'POST'); Permission = 'tools.adhealth' },
-    @{ Pattern = '^/api/tools/gmsa/';            Methods = @('GET', 'POST'); Permission = 'tools.gmsa' }
+    # Gated on the WRITE method only. The catalogue holds no read permissions
+    # on purpose (see its own note): gating a read means a role whose summary
+    # says "sees everything" meets an error box where the nav item promised a
+    # tool. Both of these are reachable by readonly and auditor, which hold the
+    # tools module and neither tools permission - so gating the GET contradicts
+    # the role description shipped on screen. The POSTs are what change state.
+    @{ Pattern = '^/api/tools/adhealth$';        Methods = @('POST');   Permission = 'tools.adhealth' },
+    @{ Pattern = '^/api/tools/gmsa/';            Methods = @('POST');   Permission = 'tools.gmsa' },
+
+    # Acknowledging an alert silences the bell for EVERY operator on the
+    # install, so it is a write, not a read. It had no entry at all, and the
+    # header above means exactly what it says: a path with no entry was open
+    # to any valid session, readonly and auditor included.
+    @{ Pattern = '^/api/alerts/ack$';            Methods = @('POST');   Permission = 'tools.adhealth' }
 )
 
 # The bulk-action route carries one verb per directory operation, so the path
@@ -489,6 +501,43 @@ function Resolve-DsmtOperatorRole {
     $assignments = @(Get-DsmtRoleAssignments)
 
     if ($assignments.Count -eq 0) {
+        # Zero usable rows is NOT the same question as "are roles configured".
+        # Three ways to reach zero rows on an install that IS configured: the
+        # settings key could not be read, the RoleAssignments value is not
+        # valid JSON and was dropped with only a console warning, or every row
+        # names a role key that no longer exists. Treating any of those as
+        # "not configured" hands the full Administrator permission set to every
+        # operator who can sign in, with a yellow line in a log nobody reads as
+        # the only evidence. So ask the registry what is actually there before
+        # taking the open default.
+        $cfgState = Get-DsmtSettingValueState -Name @($script:DsmtAssignmentSettingName,
+                                                      $script:DsmtRoleSettingName)
+
+        if (-not $cfgState.Ok -or $cfgState.Present) {
+            $why = ''
+            if (-not $cfgState.Ok) {
+                $why = 'The DSMT settings could not be read (' + $cfgState.Error + ').'
+            } else {
+                $why = 'A role configuration exists but no usable assignment could be read from it. ' +
+                       'The stored value may not be valid JSON, or every entry may name a role that no ' +
+                       'longer exists.'
+            }
+
+            Write-DsmtLog -Level 'ERROR' -Message ('Roles are configured but unreadable, so no permissions ' +
+                                                   'were granted to ' + $SamAccountName + '. ' + $why)
+
+            return @{
+                IsAdmin     = $false
+                Configured  = $true
+                Roles       = @()
+                Permissions = @()
+                Modules     = @()
+                Reason      = $why + ' No permissions were granted for this session. An administrator can ' +
+                              'repair the role list under ' + (Get-DsmtSettingsKeyPath) + '.'
+                Error       = $why
+            }
+        }
+
         return @{
             IsAdmin     = $true
             Configured  = $false

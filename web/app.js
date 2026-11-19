@@ -42,10 +42,13 @@ var state = {
   isAdmin: false,
   roleReason: '',
   // The permission keys this operator holds, and the tabs they may reach.
-  // Empty means "the server did not say", which is treated as allow - see
-  // can() for why.
+  // EMPTY IS A REAL ANSWER - it means this operator holds nothing. Whether
+  // the server answered at all is roleKnown, not the length of these.
   permissions: [],
   modules: [],
+  // True once a server has sent role data. Only a server that sends none at
+  // all is treated as "no roles, allow everything"; see can().
+  roleKnown: false,
   // True once the CSV import dialog has shown a dry-run result for exactly
   // the CSV and OU currently in the form. Reset on open and on any edit.
   csvPreviewed: false,
@@ -396,19 +399,29 @@ function applyRole(data) {
   state.roleReason = data.roleReason || '';
   state.permissions = asArray(data.permissions);
   state.modules = asArray(data.modules);
+  // roleConfigured is sent by every payload that carries a role, and by no
+  // payload that does not, so its PRESENCE - not its value - is what says
+  // whether this server knows about roles at all.
+  state.roleKnown = (typeof data.roleConfigured !== 'undefined' && data.roleConfigured !== null);
 }
 
 function can(permission) {
-  // No permission list at all means an older server that does not send one.
-  // Allow, rather than disabling the whole console against a server that
-  // never had roles - the gate there is what refuses anyway.
-  if (!state.permissions || !state.permissions.length) { return true; }
-  return state.permissions.indexOf(permission) !== -1;
+  // An empty list from a server that sends roles is a real answer: this
+  // operator holds nothing. That is the normal state for Read only, for
+  // Auditor, for an operator in no mapped group, and for one whose group
+  // membership could not be read - which is to say, for every population
+  // this release exists to constrain. Reading empty as "allow" would enable
+  // every button for exactly those operators and leave the 403 to explain it.
+  //
+  // Only a server that sends no role data at all is treated as allow, so that
+  // a newer front end against an older server is not a dead console.
+  if (!state.roleKnown) { return true; }
+  return !!state.permissions && state.permissions.indexOf(permission) !== -1;
 }
 
 function canSee(module) {
-  if (!state.modules || !state.modules.length) { return true; }
-  return state.modules.indexOf(module) !== -1;
+  if (!state.roleKnown) { return true; }
+  return !!state.modules && state.modules.indexOf(module) !== -1;
 }
 
 // Which permission each directory verb needs. The SAME mapping as
@@ -460,7 +473,11 @@ function applyModuleVisibility() {
     if (ok) { any = true; }
   });
 
-  if (any && !canSee(state.tab)) { setTab(first, true); }
+  // Correct the tab WITHOUT loading it - enterApp() loads it immediately
+  // after. Calling setTab here as well put two requests for the same tab in
+  // flight for any role whose landing tab is filtered out (Auditor has no
+  // overview), and the later response won.
+  if (any && !canSee(state.tab)) { state.tab = first; }
 }
 
 function applyInsecureBar(data) {
@@ -1319,7 +1336,11 @@ function renderDetail() {
     memberHtml = '<p class="muted-sm">' + (isGroup ? 'This group has no members.' : 'This account is in no groups.') + '</p>';
   } else {
     memberHtml = '<ul class="member-list">' + members.map(function (m) {
-      var remove = '<button class="member-remove" type="button" data-member="' + esc(m.dn) + '">Remove</button>';
+      // Posts /api/actions/group-remove, which needs group.members.
+      var mayRemove = can('group.members');
+      var remove = '<button class="member-remove" type="button" data-member="' + esc(m.dn) + '"' +
+                   (mayRemove ? '' : ' disabled title="' + esc(permissionHint('group.members')) + '"') +
+                   '>Remove</button>';
       return '<li><span class="member-dot"></span>' +
              '<span class="member-name" title="' + esc(m.dn) + '">' + esc(m.name) + '</span>' +
              '<span class="member-meta">' + esc(m.meta) + '</span>' + remove + '</li>';
@@ -1352,10 +1373,20 @@ function renderDetail() {
         '<span class="detail-section-label">' + esc(memberLabel) + '</span>' + memberHtml +
       '</div>' +
       '<div class="detail-actions">' +
+        // Gated the same way as the profile dialog's parallel set in
+        // wireProfile(). It was not: this pane is the main action surface, so
+        // a Read-only operator saw every button live, typed the mandatory
+        // reason, and only then met a 403 - with a Denied audit record for
+        // each attempt.
         actions.map(function (a) {
-          return '<button class="btn btn-secondary" type="button" data-action="' + a[0] + '">' + esc(a[1]) + '</button>';
+          var allowed = canAction(a[0]);
+          return '<button class="btn btn-secondary" type="button" data-action="' + a[0] + '"' +
+                 (allowed ? '' : ' disabled title="' + esc(permissionHint(ACTION_PERMISSION[a[0]])) + '"') +
+                 '>' + esc(a[1]) + '</button>';
         }).join('') +
-        '<button class="btn btn-ghost bulk-danger" type="button" data-action="delete">Delete</button>' +
+        '<button class="btn btn-ghost bulk-danger" type="button" data-action="delete"' +
+        (canAction('delete') ? '' : ' disabled title="' + esc(permissionHint('users.delete')) + '"') +
+        '>Delete</button>' +
       '</div>' +
     '</div>';
 }

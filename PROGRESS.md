@@ -5,7 +5,7 @@ file and continue immediately. Update it at the end of every session that
 changes the project.
 
 ## Current version
-`1.30.0` — matches the top entry of `CHANGELOG.md` and
+`1.30.1` — matches the top entry of `CHANGELOG.md` and
 `$script:DsmtVersion` in `server/lib/DsmtCommon.ps1`.
 
 Setup is now automated: `server/Install-DSMT.ps1`
@@ -69,6 +69,58 @@ data, inert buttons, and it loaded React from a CDN. Nothing referenced it.
 ---
 
 ## Open tasks
+
+0. **Outstanding from the 1.30.0 pre-merge review (2026-11-19).** Thirteen
+   findings came out of running `ps51-reviewer` and `web-reviewer` on the 1.30.0
+   diff before merging; six were fixed in 1.30.1. These were deliberately NOT
+   fixed, and each says why:
+
+   a. **A `title` on a `disabled` button may not show a tooltip in Chromium.**
+      This is the mechanism behind the release's core promise - "every action is
+      disabled, with the reason on hover" - at four sites now, including the ones
+      1.30.1 added. If the tooltip does not appear, the promise silently becomes
+      "disabled with no explanation", which is the "an absent button teaches
+      nothing" problem one step removed. **This cannot be settled here: there is
+      no browser in the container.** It is the first thing to check in the lab.
+      If it fails, the usual remedy is a non-disabled wrapper element carrying
+      the `title`, which changes the flex layout of `.detail-actions` and
+      `#profileActions` - a change to make once with the answer in hand, not
+      blind.
+   b. **The Settings screen's forms and Save buttons are not gated.**
+      `renderSettings()` prints "You cannot change DSMT settings" directly above
+      editable forms, a live **Save roles**, a live Add, a live Export settings
+      and a live SQL database lister. The server refuses all of them, so this is
+      a UX contradiction rather than a hole - but it is the one screen where the
+      state box already says no and then offers the control anyway.
+   c. **The gMSA tool's buttons are not gated**, and `operator` no longer holds
+      `tools.gmsa` at all, where before 1.30.0 only `POST /api/tools/gmsa/kds`
+      was admin-gated and state/group/members/account were open to any operator.
+      That tightening may be intended - but it is a silent reduction that a
+      1.30.0 upgrade delivers to operators who use the tool, so it needs a
+      decision rather than a patch.
+   d. **One `tokenGroups` failure now revokes every permission for the session**,
+      where before it only set `IsAdmin = $false` and directory work continued.
+      It is resolved once at sign-in and cached for the session lifetime, so the
+      operator must sign out and back in to retry, and a persistent cause
+      reduces every operator on the install to read-only with no console-side
+      recovery. Failing closed on an authorisation read is right; caching that
+      failure for the session, and widening it from "no settings" to "nothing at
+      all", is the part to reconsider. This interacts with `hybrid` identity
+      mode, where `Get-DsmtAdParams -Intent 'read'` drops `-Credential`, so the
+      read runs as the service account against another principal's object -
+      **whether a service account can retrieve `tokenGroups` on an arbitrary
+      user needs one live test**, and if it cannot, every hybrid-mode sign-in
+      lands in this branch.
+   e. **`PERMISSION_LABELS` is only filled by `renderSettings()`**, so until an
+      operator opens Settings every disabled-button hint reads
+      `...does not include "password.reset"` instead of "Reset passwords" - and
+      for Auditor, which cannot see Settings, never. The hint also points at a
+      screen that role cannot reach.
+   f. **`renderSessionsCard()` still gates End session on `state.isAdmin`** while
+      the route is gated on `sessions.end`. They coincide today only because
+      `isAdmin` means "holds settings.write" and one role holds both.
+   g. `Test-DsmtRouteNeedsAdmin` and `Get-DsmtRoleGroups` are now dead code (no
+      callers outside their module). Harmless, so left alone.
 
 1. **[FIXED IN 1.7.5 - NEEDS CONFIRMING ON THE LAB MACHINE] No overlay in the
    console was visible.** Reported 2026-07-31 from the first real install.
@@ -1075,6 +1127,43 @@ Durable copy of the section in `CLAUDE.md`. Three shapes to watch for:
    the pattern itself, not just each instance.
 
 ### Recorded instances
+- **[Shape 3] A default more permissive than the configured state, selected by
+  a value that means two different things.** Found 2026-11-19, reviewing 1.30.0
+  before merge. `Resolve-DsmtOperatorRole` asked "are roles configured?" by
+  counting usable assignment rows. Zero rows took the deliberately open default
+  - full Administrator for every operator who can sign in - but zero rows is
+  also what an install produces when the registry key cannot be read, when the
+  stored JSON is invalid, or when every row names a role key that no longer
+  exists. `Get-DsmtSavedSettings` answers `$null` for three distinct situations
+  and omits a value that will not parse, warning as it goes that "a structured
+  setting that silently vanishes looks exactly like a feature that was never
+  configured" - which is exactly how the role code read it, one module away.
+  **The pattern: when the open and closed branches are chosen by one value, the
+  question that value answers must be the question being asked.** "I have no
+  rows" is not "nothing is configured". The rules for new code:
+    - any caller whose empty-case default is MORE permissive than its configured
+      case must establish presence separately - `Get-DsmtSettingValueState`
+      answers whether a value exists whether or not it parses, and whether the
+      key was readable at all;
+    - a survivable failure must still be distinguishable from a success, on
+      screen or in a record someone reads - a `[warn]` on a server console is
+      not evidence anyone receives;
+    - the same shape bit the client in the same release: `can()` returned `true`
+      for an empty permission list to stay compatible with an older server, and
+      empty is precisely what the new server sends to an operator who holds
+      nothing. The fix was to key the decision on whether the server ANSWERED
+      (`roleConfigured` is present) rather than on the length of the answer.
+- **[Shape 3] A permission table is the complete statement, so an omission is
+  not a weak gate - it is no gate.** `$script:DsmtRoutePermissions` carries the
+  header "a path with no entry here needs no permission beyond a valid session",
+  and `POST /api/alerts/ack` had no entry: Read only and Auditor could both
+  silence the health bell for every operator on the install. Same shape as the
+  ungated `/api/settings/sql/databases` found in 1.29.1.
+  **The pattern: adding a route is two edits, and the second one has no
+  compiler.** Any new route in `DsmtHttp.ps1`, and any new verb under
+  `/api/actions/`, needs its table entry in the same change. The `ps51-reviewer`
+  agent enumerates the handler switch and diffs it against the table for exactly
+  this reason - that is the check that found this one.
 - **[Shape 1] A value read in one place and set in none.** Found 2026-10-14.
   `state.isAdmin` was consulted to decide what the session list drew, and
   nothing ever assigned it - so the decision ran on `undefined` and the role
